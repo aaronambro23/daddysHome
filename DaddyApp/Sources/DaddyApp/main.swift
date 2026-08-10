@@ -14,6 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusUpdateTimer: Timer?
     var projectsUpdateTimer: Timer?
     var lastNotifiedStates: [String: AgentState] = [:]
+    var hexWatcher: HEXWatcher?
+    var commandParser = CommandParser()
 
     var projectsViewController: ProjectsViewController?
     var dashboardViewController: DashboardViewController?
@@ -24,6 +26,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupMenuBar()
         setupMainWindow()
         startStatusUpdates()
+        setupHEXIntegration()
+    }
+
+    private func setupHEXIntegration() {
+        hexWatcher = HEXWatcher()
+        if hexWatcher != nil {
+            print("✓ HEX integration active (listening for voice commands)")
+            hexWatcher?.onNewTranscription = { [weak self] transcript in
+                self?.handleVoiceTranscript(transcript)
+            }
+        } else {
+            print("⚠ HEX not available (file not found)")
+        }
+    }
+
+    private func handleVoiceTranscript(_ transcript: String) {
+        let command = commandParser.parse(transcript)
+
+        guard let agent = command.agent else {
+            print("No agent specified in: \(transcript)")
+            return
+        }
+
+        guard let sessionManager = sessionManager else { return }
+
+        let projectURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+
+        do {
+            let modelRef = command.model.flatMap { ModelRef(agent: agent, rawValue: $0) }
+            let intentStr: String
+            switch command.intent {
+            case .work: intentStr = "work"
+            case .stop: intentStr = "stop"
+            case .resume: intentStr = "resume"
+            case .interrupt: intentStr = "interrupt"
+            case .review: intentStr = "review"
+            case .handoff: intentStr = "handoff"
+            case .status: intentStr = "status"
+            case .runTests: intentStr = "run_tests"
+            case .switchModel: intentStr = "switch_model"
+            case .unknown(let val): intentStr = val
+            }
+
+            let session = try sessionManager.createSession(
+                projectID: projectURL.lastPathComponent,
+                workUnitID: intentStr,
+                agent: agent,
+                model: modelRef,
+                cwd: projectURL
+            )
+
+            try sessionManager.launchSession(session)
+            print("✓ Spawned \(agent.rawValue) for: \(intentStr)")
+
+            if let prompt = command.prompt, !prompt.isEmpty {
+                try sessionManager.sendPrompt(prompt, to: session.id)
+            }
+        } catch {
+            print("✗ Error spawning agent: \(error)")
+        }
+
+        DispatchQueue.main.async {
+            self.dashboardViewController?.refresh()
+        }
     }
 
     private func requestNotificationPermissions() {
