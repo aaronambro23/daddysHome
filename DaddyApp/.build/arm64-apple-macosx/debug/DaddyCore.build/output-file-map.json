@@ -23,6 +23,13 @@
     "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.swiftdeps",
     "diagnostics": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.dia"
   },
+  "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/HEXWatcher.swift": {
+    "dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/HEXWatcher.d",
+    "object": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/HEXWatcher.swift.o",
+    "swiftmodule": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/HEXWatcher~partial.swiftmodule",
+    "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/HEXWatcher.swiftdeps",
+    "diagnostics": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/HEXWatcher.dia"
+  },
   "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/MarkdownWriter.swift": {
     "dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/MarkdownWriter.d",
     "object": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/MarkdownWriter.swift.o",

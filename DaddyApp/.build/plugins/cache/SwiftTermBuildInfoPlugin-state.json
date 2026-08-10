@@ -69,7 +69,7 @@
     "LSCOLORS" : "Gxfxcxdxbxegedabagacad",
     "MANPATH" : "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk/usr/share/man:/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/usr/share/man:/Applications/Xcode.app/Contents/Developer/usr/share/man:/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/share/man:",
     "NoDefaultCurrentDirectoryInExePath" : "1",
-    "OLDPWD" : "/Users/aaronambrosi/Documents/daddy",
+    "OLDPWD" : "/Users/aaronambrosi/Documents/daddy/DaddyApp",
     "OSLogRateLimit" : "64",
     "PAGER" : "less",
     "PATH" : "/Users/aaronambrosi/.opencode/bin:/opt/homebrew/opt/python@3.11/libexec/bin:/Users/aaronambrosi/.local/bin:/opt/homebrew/share/google-cloud-sdk/bin:/opt/homebrew/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/Users/aaronambrosi/.lmstudio/bin:/Users/aaronambrosi/Library/Android/sdk/platform-tools:/Users/aaronambrosi/Library/Android/sdk/cmdline-tools/latest/bin:/Users/aaronambrosi/Library/Android/sdk/emulator:/Users/aaronambrosi/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin",
@@ -86,7 +86,7 @@
     "__CFBundleIdentifier" : "com.apple.Terminal",
     "__CF_USER_TEXT_ENCODING" : "0x1F5:0x0:0x0"
   },
-  "inputHash" : "ed9d8ab46c7e115f1dd4d81babb720a6704d5170085b49b991a0e3a684dfb168",
+  "inputHash" : "fece187ec6ca7351d8952f32ff4d102949d42c2d8f49c958ac8b15359b44cb86",
   "output" : "",
   "result" : {
     "exit" : {

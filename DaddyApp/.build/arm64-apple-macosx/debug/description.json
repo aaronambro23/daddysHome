@@ -25,8 +25,8 @@
   },
   "generatedSourceTargetSet" : [
     "GenerateDoccReference",
-    "GenerateManual",
-    "SwiftTermBuildInfoPlugin"
+    "SwiftTermBuildInfoPlugin",
+    "GenerateManual"
   ],
   "pluginDescriptions" : [
     {
@@ -1743,6 +1743,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/HEXWatcher.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/MarkdownWriter.swift"
         },
         {
@@ -1781,6 +1785,7 @@
         "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/AgentAdapter.swift.o",
         "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/CommandParser.swift.o",
         "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.swift.o",
+        "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/HEXWatcher.swift.o",
         "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/MarkdownWriter.swift.o",
         "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/Models.swift.o",
         "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/PTYProcess.swift.o",
@@ -1858,6 +1863,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/HEXWatcher.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/MarkdownWriter.swift.o"
         },
         {
@@ -1886,6 +1895,7 @@
         "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/AgentAdapter.swift",
         "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/CommandParser.swift",
         "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/DaddyCore.swift",
+        "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/HEXWatcher.swift",
         "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/MarkdownWriter.swift",
         "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/Models.swift",
         "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/PTYProcess.swift",
@@ -4533,6 +4543,7 @@
       "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/AgentAdapter.swift",
       "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/CommandParser.swift",
       "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/DaddyCore.swift",
+      "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/HEXWatcher.swift",
       "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/MarkdownWriter.swift",
       "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/Models.swift",
       "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/PTYProcess.swift",
@@ -5690,6 +5701,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/HEXWatcher.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/MarkdownWriter.swift.o"
         },
         {
@@ -6031,6 +6046,10 @@
         {
           "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/DaddyCore.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/HEXWatcher.swift"
         },
         {
           "kind" : "file",
@@ -6829,6 +6848,10 @@
         {
           "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/HEXWatcher.swift.o"
         },
         {
           "kind" : "file",
