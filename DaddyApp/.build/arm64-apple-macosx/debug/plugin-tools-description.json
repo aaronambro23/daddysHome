@@ -24,8 +24,8 @@
     }
   },
   "generatedSourceTargetSet" : [
-    "GenerateDoccReference",
     "SwiftTermBuildInfoPlugin",
+    "GenerateDoccReference",
     "GenerateManual"
   ],
   "pluginDescriptions" : [
@@ -1532,6 +1532,10 @@
         {
           "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/Modules/DaddyCore.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/Modules/SwiftTerm.swiftmodule"
         },
         {
           "kind" : "file",
