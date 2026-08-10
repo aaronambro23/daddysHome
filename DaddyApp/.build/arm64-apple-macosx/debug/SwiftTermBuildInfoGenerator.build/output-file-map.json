@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/SwiftTermBuildInfoGenerator.build/master.swiftdeps"
+  },
+  "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/checkouts/SwiftTerm/Sources/SwiftTermBuildInfoGenerator/BuildInfoGenerator.swift": {
+    "dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/SwiftTermBuildInfoGenerator.build/BuildInfoGenerator.d",
+    "object": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/SwiftTermBuildInfoGenerator.build/BuildInfoGenerator.swift.o",
+    "swiftmodule": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/SwiftTermBuildInfoGenerator.build/BuildInfoGenerator~partial.swiftmodule",
+    "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/SwiftTermBuildInfoGenerator.build/BuildInfoGenerator.swiftdeps",
+    "diagnostics": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/SwiftTermBuildInfoGenerator.build/BuildInfoGenerator.dia"
+  }
+}

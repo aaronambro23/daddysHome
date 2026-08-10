@@ -1,0 +1,40 @@
+{
+  "": {
+    "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/master.swiftdeps"
+  },
+  "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/AgentAdapter.swift": {
+    "dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/AgentAdapter.d",
+    "object": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/AgentAdapter.swift.o",
+    "swiftmodule": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/AgentAdapter~partial.swiftmodule",
+    "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/AgentAdapter.swiftdeps",
+    "diagnostics": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/AgentAdapter.dia"
+  },
+  "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/DaddyCore.swift": {
+    "dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.d",
+    "object": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.swift.o",
+    "swiftmodule": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore~partial.swiftmodule",
+    "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.swiftdeps",
+    "diagnostics": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.dia"
+  },
+  "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/Models.swift": {
+    "dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/Models.d",
+    "object": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/Models.swift.o",
+    "swiftmodule": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/Models~partial.swiftmodule",
+    "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/Models.swiftdeps",
+    "diagnostics": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/Models.dia"
+  },
+  "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/PTYProcess.swift": {
+    "dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/PTYProcess.d",
+    "object": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/PTYProcess.swift.o",
+    "swiftmodule": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/PTYProcess~partial.swiftmodule",
+    "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/PTYProcess.swiftdeps",
+    "diagnostics": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/PTYProcess.dia"
+  },
+  "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/SessionManager.swift": {
+    "dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/SessionManager.d",
+    "object": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/SessionManager.swift.o",
+    "swiftmodule": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/SessionManager~partial.swiftmodule",
+    "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/SessionManager.swiftdeps",
+    "diagnostics": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/SessionManager.dia"
+  }
+}

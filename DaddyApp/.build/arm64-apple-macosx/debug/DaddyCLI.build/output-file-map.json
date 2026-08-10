@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCLI.build/master.swiftdeps"
+  },
+  "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCLI/main.swift": {
+    "dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCLI.build/main.d",
+    "object": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCLI.build/main.swift.o",
+    "swiftmodule": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCLI.build/main~partial.swiftmodule",
+    "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCLI.build/main.swiftdeps",
+    "diagnostics": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCLI.build/main.dia"
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "object" : {
+    "artifacts" : [
+
+    ],
+    "dependencies" : [
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "daddycore-spm",
+          "kind" : "fileSystem",
+          "location" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm",
+          "name" : "DaddyCore"
+        },
+        "state" : {
+          "name" : "fileSystem",
+          "path" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm"
+        },
+        "subpath" : "daddycore-spm"
+      },
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "swift-argument-parser",
+          "kind" : "remoteSourceControl",
+          "location" : "https://github.com/apple/swift-argument-parser",
+          "name" : "swift-argument-parser"
+        },
+        "state" : {
+          "checkoutState" : {
+            "revision" : "6a52f3251125d74daf04fcbd5e6f08a75d074382",
+            "version" : "1.8.2"
+          },
+          "name" : "sourceControlCheckout"
+        },
+        "subpath" : "swift-argument-parser"
+      },
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "swiftterm",
+          "kind" : "remoteSourceControl",
+          "location" : "https://github.com/migueldeicaza/SwiftTerm.git",
+          "name" : "SwiftTerm"
+        },
+        "state" : {
+          "checkoutState" : {
+            "branch" : "main",
+            "revision" : "c590a52ef866c163cdc157d07312cb5118f3c9b2"
+          },
+          "name" : "sourceControlCheckout"
+        },
+        "subpath" : "SwiftTerm"
+      }
+    ],
+    "prebuilts" : [
+
+    ]
+  },
+  "version" : 7
+}
