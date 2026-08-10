@@ -1,9 +1,12 @@
 /Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyApp.build/main.swift.o
 /Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/AgentAdapter.swift.o
+/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/CommandParser.swift.o
 /Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.swift.o
+/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/MarkdownWriter.swift.o
 /Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/Models.swift.o
 /Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/PTYProcess.swift.o
 /Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/SessionManager.swift.o
+/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/WorkflowState.swift.o
 /Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/SwiftTerm.build/AppleTerminalView.swift.o
 /Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/SwiftTerm.build/ArabicShapingData.swift.o
 /Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/SwiftTerm.build/BellStyle.swift.o

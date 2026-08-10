@@ -156,6 +156,12 @@ public final class SessionManager {
 
     }
 
+    public func getActiveSessions() -> [Session] {
+        lock.lock()
+        defer { lock.unlock() }
+        return Array(sessions.values)
+    }
+
     public enum SessionError: LocalizedError {
         case sessionNotFound(String)
         case unknownAgent(AgentKind)

@@ -8,10 +8,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow?
     var sessionManager: SessionManager?
     var terminalView: LocalProcessTerminalView?
+    var statusItem: NSStatusItem?
+    var statusUpdateTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         sessionManager = SessionManager()
+        setupMenuBar()
+        setupMainWindow()
+        startStatusUpdates()
+    }
 
+    private func setupMenuBar() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        updateStatusItem()
+
+        let menu = NSMenu()
+
+        let statusMenuItem = NSMenuItem(title: "Status", action: nil, keyEquivalent: "")
+        statusMenuItem.isEnabled = false
+        menu.addItem(statusMenuItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let showWindowItem = NSMenuItem(
+            title: "Show Window",
+            action: #selector(showWindowClicked),
+            keyEquivalent: ""
+        )
+        showWindowItem.target = self
+        menu.addItem(showWindowItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let quitItem = NSMenuItem(
+            title: "Quit Daddy",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        menu.addItem(quitItem)
+
+        statusItem?.menu = menu
+    }
+
+    private func updateStatusItem() {
+        guard let statusItem = statusItem, let sessionManager = sessionManager else { return }
+
+        let sessions = sessionManager.getActiveSessions()
+        let activeSessions = sessions.count
+        let rateLimited = sessions.filter { $0.state == .rateLimited }.count
+
+        if activeSessions == 0 {
+            statusItem.button?.title = "◇"
+        } else if rateLimited > 0 {
+            statusItem.button?.title = "⚠ \(activeSessions)"
+        } else {
+            statusItem.button?.title = "● \(activeSessions)"
+        }
+    }
+
+    private func startStatusUpdates() {
+        statusUpdateTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.updateStatusItem()
+            }
+        }
+    }
+
+    @objc func showWindowClicked() {
+        window?.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    private func setupMainWindow() {
         let window = NSWindow(
             contentRect: NSRect(x: 100, y: 100, width: 1000, height: 700),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -163,6 +231,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        return true
+        return false
     }
 }

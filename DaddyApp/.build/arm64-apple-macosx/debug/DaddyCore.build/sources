@@ -1,5 +1,8 @@
 /Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/AgentAdapter.swift
+/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/CommandParser.swift
 /Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/DaddyCore.swift
+/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/MarkdownWriter.swift
 /Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/Models.swift
 /Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/PTYProcess.swift
 /Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/SessionManager.swift
+/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/WorkflowState.swift

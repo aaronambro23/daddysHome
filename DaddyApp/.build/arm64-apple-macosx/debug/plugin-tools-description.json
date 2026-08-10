@@ -25,8 +25,8 @@
   },
   "generatedSourceTargetSet" : [
     "SwiftTermBuildInfoPlugin",
-    "GenerateDoccReference",
-    "GenerateManual"
+    "GenerateManual",
+    "GenerateDoccReference"
   ],
   "pluginDescriptions" : [
     {
@@ -1735,7 +1735,15 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/CommandParser.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/DaddyCore.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/MarkdownWriter.swift"
         },
         {
           "kind" : "file",
@@ -1748,6 +1756,10 @@
         {
           "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/SessionManager.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/WorkflowState.swift"
         },
         {
           "kind" : "file",
@@ -1767,10 +1779,13 @@
       "moduleOutputPath" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/Modules/DaddyCore.swiftmodule",
       "objects" : [
         "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/AgentAdapter.swift.o",
+        "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/CommandParser.swift.o",
         "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.swift.o",
+        "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/MarkdownWriter.swift.o",
         "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/Models.swift.o",
         "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/PTYProcess.swift.o",
-        "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/SessionManager.swift.o"
+        "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/SessionManager.swift.o",
+        "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/WorkflowState.swift.o"
       ],
       "otherArguments" : [
         "-target",
@@ -1835,7 +1850,15 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/CommandParser.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/MarkdownWriter.swift.o"
         },
         {
           "kind" : "file",
@@ -1851,16 +1874,23 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/WorkflowState.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/Modules/DaddyCore.swiftmodule"
         }
       ],
       "prepareForIndexing" : false,
       "sources" : [
         "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/AgentAdapter.swift",
+        "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/CommandParser.swift",
         "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/DaddyCore.swift",
+        "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/MarkdownWriter.swift",
         "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/Models.swift",
         "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/PTYProcess.swift",
-        "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/SessionManager.swift"
+        "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/SessionManager.swift",
+        "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/WorkflowState.swift"
       ],
       "tempsPath" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build",
       "wholeModuleOptimization" : false
@@ -4491,10 +4521,13 @@
       "daddycore_spm",
       "-c",
       "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/AgentAdapter.swift",
+      "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/CommandParser.swift",
       "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/DaddyCore.swift",
+      "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/MarkdownWriter.swift",
       "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/Models.swift",
       "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/PTYProcess.swift",
       "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/SessionManager.swift",
+      "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/WorkflowState.swift",
       "-I",
       "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/Modules",
       "-target",
@@ -5638,7 +5671,15 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/CommandParser.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/MarkdownWriter.swift.o"
         },
         {
           "kind" : "file",
@@ -5651,6 +5692,10 @@
         {
           "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/SessionManager.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/WorkflowState.swift.o"
         },
         {
           "kind" : "file",
@@ -5966,7 +6011,15 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/CommandParser.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/DaddyCore.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/MarkdownWriter.swift"
         },
         {
           "kind" : "file",
@@ -5979,6 +6032,10 @@
         {
           "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/SessionManager.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/WorkflowState.swift"
         }
       ],
       "outputFilePath" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/sources"
@@ -6744,7 +6801,15 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/CommandParser.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/MarkdownWriter.swift.o"
         },
         {
           "kind" : "file",
@@ -6757,6 +6822,10 @@
         {
           "kind" : "file",
           "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/SessionManager.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/WorkflowState.swift.o"
         },
         {
           "kind" : "file",

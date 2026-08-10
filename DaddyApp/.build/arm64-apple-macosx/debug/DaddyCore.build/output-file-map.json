@@ -9,12 +9,26 @@
     "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/AgentAdapter.swiftdeps",
     "diagnostics": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/AgentAdapter.dia"
   },
+  "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/CommandParser.swift": {
+    "dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/CommandParser.d",
+    "object": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/CommandParser.swift.o",
+    "swiftmodule": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/CommandParser~partial.swiftmodule",
+    "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/CommandParser.swiftdeps",
+    "diagnostics": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/CommandParser.dia"
+  },
   "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/DaddyCore.swift": {
     "dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.d",
     "object": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.swift.o",
     "swiftmodule": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore~partial.swiftmodule",
     "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.swiftdeps",
     "diagnostics": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/DaddyCore.dia"
+  },
+  "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/MarkdownWriter.swift": {
+    "dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/MarkdownWriter.d",
+    "object": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/MarkdownWriter.swift.o",
+    "swiftmodule": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/MarkdownWriter~partial.swiftmodule",
+    "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/MarkdownWriter.swiftdeps",
+    "diagnostics": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/MarkdownWriter.dia"
   },
   "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/Models.swift": {
     "dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/Models.d",
@@ -36,5 +50,12 @@
     "swiftmodule": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/SessionManager~partial.swiftmodule",
     "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/SessionManager.swiftdeps",
     "diagnostics": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/SessionManager.dia"
+  },
+  "/Users/aaronambrosi/Documents/daddy/daddycore-spm/Sources/DaddyCore/WorkflowState.swift": {
+    "dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/WorkflowState.d",
+    "object": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/WorkflowState.swift.o",
+    "swiftmodule": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/WorkflowState~partial.swiftmodule",
+    "swift-dependencies": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/WorkflowState.swiftdeps",
+    "diagnostics": "/Users/aaronambrosi/Documents/daddy/DaddyApp/.build/arm64-apple-macosx/debug/DaddyCore.build/WorkflowState.dia"
   }
 }
