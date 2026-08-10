@@ -4,11 +4,12 @@
 
 Daddy is a local, voice-first macOS control plane for multi-agent AI coding workflows. Current implementation is Milestone 0-2 complete, with foundations ready for Milestone 3-6.
 
-**Status**: Core infrastructure working. PTY control proven. App shell in place with SwiftTerm integration.
+**Status**: Milestones 0-4 complete. Workflow state persistence, markdown system, project discovery working. Ready for voice command layer (Milestone 5).
 
 ## Built So Far
 
 ### Milestone 0: PTY Foundation ✅
+(Completed: PTY control, adapters, session management)
 - **DaddyCore**: Swift Package (SPM) with all core types
   - `Models.swift`: Project, WorkUnit, Session, AgentKind, AgentState, ModelRef, Focus
   - `PTYProcess.swift`: Thread-safe wrapper around subprocess+PTY control
@@ -28,6 +29,8 @@ Daddy is a local, voice-first macOS control plane for multi-agent AI coding work
 - Proves PTY mechanism works with real processes
 
 ### Milestone 2: macOS App + CLI ✅
+(Completed: AppKit UI, SwiftTerm integration, CLI terminal rendering)
+
 - **daddy-cli**: Command-line executable for testing SessionManager
   - `launch <agent> <project-path> [model]`: Launches a session
   - `help`: Displays usage
