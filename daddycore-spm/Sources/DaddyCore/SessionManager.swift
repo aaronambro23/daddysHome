@@ -166,6 +166,12 @@ public final class SessionManager {
         return Array(sessions.values)
     }
 
+    public func getPTYProcess(for sessionID: String) -> PTYProcess? {
+        lock.lock()
+        defer { lock.unlock() }
+        return ptyProcesses[sessionID]
+    }
+
     public func recordSessionError(_ sessionID: String, error: String) {
         lock.lock()
         defer { lock.unlock() }
