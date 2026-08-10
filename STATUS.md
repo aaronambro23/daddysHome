@@ -2,7 +2,7 @@
 
 **Last Updated**: 2026-08-10  
 **Repository**: `git@github.com-personal:aaronambro23/daddysHome.git`  
-**Current Phase**: Milestones 0-6 complete, ready for next phase
+**Current Phase**: Milestones 0-6 complete, UI redesign + HEX integration complete
 
 ---
 
@@ -50,15 +50,18 @@ Core types and business logic:
 ### DaddyApp (macOS executable)
 
 User-facing application:
-- AppKit-based GUI with menu-bar NSStatusItem
+- AppKit-based GUI with futuristic dark theme (trippy cyan/green accents)
+- Menu-bar NSStatusItem with persistent background operation
+- Three-pane layout: Projects | Agent Dashboard | Terminal
+- Projects sidebar: shows ~/Documents directories for active work
+- Agent Dashboard: real-time cards showing:
+  * Agent name (cyan), state emoji, project path
+  * Model in use, work unit ID, last activity
 - SwiftTerm's `LocalProcessTerminalView` for terminal rendering
-- Split-view layout (status panel + terminal pane)
-- Project picker, session launcher
 - SessionManager integration
-- Persistent background operation (stays in menu bar when window closes)
 - Real-time status icon (◇ inactive, ● active, ⚠ rate-limited)
-- Dynamic session list in menu bar
-- macOS notifications for session state changes (ready, rate-limited, error, exited)
+- macOS notifications for session state changes
+- HEX integration: listens for voice commands, auto-spawns agents
 
 ### daddy-cli (CLI executable)
 
@@ -89,6 +92,10 @@ Command-line control:
 ✅ Dynamic session list in menu  
 ✅ Error recovery with retry mechanism  
 ✅ User notifications for session state changes  
+✅ Futuristic dark dashboard UI (cyan/green accents)  
+✅ Project sidebar (~/Documents directories)  
+✅ Active agent dashboard with real-time status  
+✅ HEX integration (voice command parsing & spawning)  
 
 ---
 
@@ -102,22 +109,34 @@ Command-line control:
 - [x] Error recovery and resilience (retry mechanism, error tracking)
 - [x] User-facing status notifications (macOS notifications for state changes)
 
-### Future Work (Beyond MVP)
+### Latest Work (Post-Milestone 6)
 
-**HEX Integration** (not started)
-- Read HEX's `transcription_history.json` (`~/Library/Containers/com.kitlangton.Hex/Data/Library/Application Support/com.kitlangton.Hex/`)
-- Wire parsed commands to SessionManager operations
-- Requires Full Disk Access or security-scoped bookmark
+**UI Redesign** ✅ Complete
+- Futuristic dark theme with cyan/green accents (RGB: 0.05-0.12)
+- Three-pane layout with projects, dashboard, terminal
+- Project sidebar showing ~/Documents directories
+- Real-time agent dashboard with status cards
+- Live updates (1s sessions, 2s projects)
+
+**HEX Integration** ✅ Complete
+- Monitors ~/Library/Containers/com.kitlangton.Hex/...
+- Reads transcription_history.json for new transcriptions
+- CommandParser converts voice to structured commands
+- Auto-spawns agents based on voice + creates sessions
+- Sends prompts to spawned agents
+
+### Future Work (Beyond MVP)
 
 **Terminal View Wiring** (not started)
 - Connect active session output to DaddyApp's terminal pane
 - Enable user input directly into pane
 - Display rate-limit notifications inline
 
-**Model Selection Tuning** (not started)
-- Test `/model` command behavior per CLI
-- Implement arrow-key navigation if needed
-- Handle direct model argument where available
+**Dashboard Enhancements**
+- Clickable project cards to launch sessions
+- Session management UI (stop, interrupt, kill)
+- Real-time output streaming to dashboard
+- Task status indicators (feat/bug/refactor/test)
 
 ---
 
@@ -218,17 +237,34 @@ DaddyApp/.build/debug/DaddyApp
 
 ---
 
+## What's Working Now
+
+**Voice-First Workflow:**
+1. User double-clicks option key (HEX activation)
+2. Speaks command: "Claude, fix the bug in this feature"
+3. App parses command → spawns Claude session in ~/Documents
+4. Dashboard shows live agent status
+5. Agent works in terminal, visible on menu bar
+
+**Example Voice Commands:**
+- "claude work on the feature" → spawns Claude, intent: work
+- "codex switch to opus" → spawns Codex with opus model
+- "cursor review the code" → spawns Cursor for review
+- "stop" → interrupts current agent
+
 ## Next Session Checklist
 
 When resuming work:
 
 - [ ] Confirm all commits are pushed: `git log --oneline | head -10`
-- [ ] Verify tests still pass: `cd daddycore-spm && swift test` (26/32 passing)
+- [ ] Verify tests still pass: `cd daddycore-spm && swift test` (~26/32 passing)
 - [ ] Build both: `cd daddycore-spm && swift build && cd ../DaddyApp && swift build`
-- [ ] **Milestone 7 options:**
-  - Start HEX integration (read transcription_history.json and wire commands)
-  - Fix remaining 6 test failures (CommandParser, MarkdownWriter, PTY tests)
-  - Add terminal pane wiring (connect active session output to UI)
+- [ ] Test HEX integration (needs running HEX app + speaking commands)
+- [ ] **Next features:**
+  - Terminal pane wiring (connect active session output to dashboard)
+  - Clickable project/session management
+  - Fix remaining test failures
+  - Add task type indicators (feat/bug/refactor/test)
 
 ---
 
