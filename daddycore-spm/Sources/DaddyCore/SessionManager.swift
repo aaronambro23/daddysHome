@@ -4,7 +4,11 @@ public final class SessionManager {
     private var sessions: [String: Session] = [:]
     private var ptyProcesses: [String: PTYProcess] = [:]
     private var adapters: [AgentKind: AgentAdapter] = [:]
+    private var sessionErrors: [String: (error: String, count: Int, lastAt: Date)] = [:]
+    private var retryAttempts: [String: Int] = [:]
     private let lock = NSLock()
+    private let maxRetries = 3
+    private let errorThresholdCount = 5
 
     public init() {
         self.adapters = [
@@ -160,6 +164,52 @@ public final class SessionManager {
         lock.lock()
         defer { lock.unlock() }
         return Array(sessions.values)
+    }
+
+    public func recordSessionError(_ sessionID: String, error: String) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if let existing = sessionErrors[sessionID] {
+            sessionErrors[sessionID] = (error, existing.count + 1, Date())
+        } else {
+            sessionErrors[sessionID] = (error, 1, Date())
+        }
+    }
+
+    public func getSessionError(_ sessionID: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return sessionErrors[sessionID]?.error
+    }
+
+    public func sessionHasCriticalErrors(_ sessionID: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return (sessionErrors[sessionID]?.count ?? 0) >= errorThresholdCount
+    }
+
+    public func recoverSession(_ sessionID: String) throws {
+        lock.lock()
+        guard let session = sessions[sessionID] else {
+            lock.unlock()
+            throw SessionError.sessionNotFound(sessionID)
+        }
+        lock.unlock()
+
+        let attempts = (retryAttempts[sessionID] ?? 0) + 1
+        guard attempts <= maxRetries else {
+            throw SessionError.sessionNotFound("Max retries exceeded for \(sessionID)")
+        }
+
+        retryAttempts[sessionID] = attempts
+
+        lock.lock()
+        ptyProcesses[sessionID] = nil
+        sessionErrors[sessionID] = nil
+        lock.unlock()
+
+        try launchSession(session)
     }
 
     public enum SessionError: LocalizedError {

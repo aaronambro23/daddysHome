@@ -76,19 +76,25 @@ public final class ClaudeAdapter: AgentAdapter {
     public func detectState(fromRecentOutput buffer: String) -> AgentState {
         let lower = buffer.lowercased()
 
-        if lower.contains("rate limited") || lower.contains("rate-limited") {
+        // Rate limit detection (word boundary)
+        if lower.contains("rate-limit") || lower.range(of: "\\brate\\s+limit", options: .regularExpression) != nil {
             return .rateLimited
         }
 
-        if lower.contains("error") || lower.contains("exception") {
+        // Error detection (avoid false positives)
+        if lower.range(of: "\\berror\\b", options: .regularExpression) != nil
+            || lower.range(of: "\\bexception\\b", options: .regularExpression) != nil
+            || lower.range(of: "failed", options: .regularExpression) != nil {
             return .error("Detected error in output")
         }
 
+        // Ready detection (prompt appears)
         if lower.contains(">>>") || lower.contains("claude >") {
             return .ready
         }
 
-        if lower.contains("thinking") || lower.contains("processing") {
+        // Working detection
+        if lower.range(of: "\\b(thinking|processing|working|analyzing)\\b", options: .regularExpression) != nil {
             return .working
         }
 
@@ -143,11 +149,11 @@ public final class CodexAdapter: AgentAdapter {
     public func detectState(fromRecentOutput buffer: String) -> AgentState {
         let lower = buffer.lowercased()
 
-        if lower.contains("rate limited") || lower.contains("rate-limited") {
+        if lower.contains("rate-limit") || lower.range(of: "\\brate\\s+limit", options: .regularExpression) != nil {
             return .rateLimited
         }
 
-        if lower.contains("error") {
+        if lower.range(of: "\\berror\\b", options: .regularExpression) != nil {
             return .error("Detected error in output")
         }
 
@@ -201,11 +207,11 @@ public final class CursorAdapter: AgentAdapter {
     public func detectState(fromRecentOutput buffer: String) -> AgentState {
         let lower = buffer.lowercased()
 
-        if lower.contains("rate limited") || lower.contains("rate-limited") {
+        if lower.contains("rate-limit") || lower.range(of: "\\brate\\s+limit", options: .regularExpression) != nil {
             return .rateLimited
         }
 
-        if lower.contains("error") {
+        if lower.range(of: "\\berror\\b", options: .regularExpression) != nil {
             return .error("Detected error in output")
         }
 
@@ -255,11 +261,11 @@ public final class OpenCodeAdapter: AgentAdapter {
     public func detectState(fromRecentOutput buffer: String) -> AgentState {
         let lower = buffer.lowercased()
 
-        if lower.contains("rate limited") || lower.contains("rate-limited") {
+        if lower.contains("rate-limit") || lower.range(of: "\\brate\\s+limit", options: .regularExpression) != nil {
             return .rateLimited
         }
 
-        if lower.contains("error") {
+        if lower.range(of: "\\berror\\b", options: .regularExpression) != nil {
             return .error("Detected error in output")
         }
 
