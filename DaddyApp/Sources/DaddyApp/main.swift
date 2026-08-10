@@ -19,6 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     var projectsViewController: ProjectsViewController?
     var dashboardViewController: DashboardViewController?
+    var terminalViewController: TerminalViewController?
+    var activeSessionID: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         sessionManager = SessionManager()
@@ -295,6 +297,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         dashboardViewController = DashboardViewController(sessionManager: sessionManager)
         if let controller = dashboardViewController {
+            controller.onSessionSelected = { [weak self] sessionID in
+                self?.selectSession(sessionID)
+            }
             middlePanel.addSubview(controller.view)
             controller.view.frame = middlePanel.bounds
             controller.view.autoresizingMask = [.width, .height]
@@ -305,10 +310,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         terminalPanel.wantsLayer = true
         terminalPanel.layer?.backgroundColor = NSColor.black.cgColor
 
-        let terminalView = LocalProcessTerminalView(frame: terminalPanel.bounds)
-        terminalView.autoresizingMask = [.width, .height]
-        terminalPanel.addSubview(terminalView)
-        self.terminalView = terminalView
+        terminalViewController = TerminalViewController(sessionManager: sessionManager)
+        if let controller = terminalViewController {
+            terminalPanel.addSubview(controller.view)
+            controller.view.frame = terminalPanel.bounds
+            controller.view.autoresizingMask = [.width, .height]
+        }
 
         splitView.addArrangedSubview(terminalPanel)
 
@@ -357,6 +364,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
+    }
+
+    @objc func selectSession(_ sessionID: String) {
+        activeSessionID = sessionID
+        terminalViewController?.displaySession(sessionID)
     }
 }
 
@@ -453,6 +465,10 @@ extension ProjectsViewController: NSTableViewDelegate, NSTableViewDataSource {
 class DashboardViewController: NSViewController {
     var sessionManager: SessionManager?
     var scrollView: NSScrollView?
+    var onSessionSelected: ((String) -> Void)?
+    var selectedSessionID: String?
+    var sessionIDByTag: [Int: String] = [:]
+    var tagCounter = 0
 
     init(sessionManager: SessionManager?) {
         super.init(nibName: nil, bundle: nil)
@@ -493,7 +509,10 @@ class DashboardViewController: NSViewController {
         let contentView = NSView()
         contentView.wantsLayer = true
 
-        var yOffset: CGFloat = CGFloat(sessions.count) * 120
+        tagCounter = 0
+        sessionIDByTag.removeAll()
+
+        let yOffset: CGFloat = CGFloat(sessions.count) * 120
 
         if sessions.isEmpty {
             let emptyLabel = NSTextField(frame: NSRect(x: 20, y: scrollView.frame.height / 2 - 30, width: 300, height: 60))
@@ -517,12 +536,32 @@ class DashboardViewController: NSViewController {
     }
 
     private func createSessionCard(session: Session, y: CGFloat) -> NSView {
-        let card = NSView(frame: NSRect(x: 15, y: y, width: 380, height: 110))
+        let card = SessionCardView(session: session, frame: NSRect(x: 15, y: y, width: 380, height: 110))
         card.wantsLayer = true
-        card.layer?.backgroundColor = NSColor(red: 0.12, green: 0.15, blue: 0.25, alpha: 0.8).cgColor
-        card.layer?.borderColor = NSColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 0.4).cgColor
-        card.layer?.borderWidth = 1
+
+        let isSelected = selectedSessionID == session.id
+        let bgColor = isSelected
+            ? NSColor(red: 0.2, green: 0.3, blue: 0.5, alpha: 1.0)
+            : NSColor(red: 0.12, green: 0.15, blue: 0.25, alpha: 0.8)
+        let borderColor = isSelected
+            ? NSColor(red: 0.2, green: 0.8, blue: 1.0, alpha: 0.8)
+            : NSColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 0.4)
+
+        card.layer?.backgroundColor = bgColor.cgColor
+        card.layer?.borderColor = borderColor.cgColor
+        card.layer?.borderWidth = isSelected ? 2 : 1
         card.layer?.cornerRadius = 8
+
+        let button = NSButton(frame: card.bounds)
+        button.bezelStyle = .recessed
+        button.isBordered = false
+        button.title = ""
+        button.target = self
+        button.action = #selector(cardClicked(_:))
+        button.tag = tagCounter
+        sessionIDByTag[tagCounter] = session.id
+        tagCounter += 1
+        card.addSubview(button)
 
         let agentLabel = NSTextField(frame: NSRect(x: 15, y: 85, width: 200, height: 18))
         agentLabel.stringValue = "▸ \(session.agent.rawValue.uppercased())"
@@ -610,6 +649,94 @@ class DashboardViewController: NSViewController {
             return "\(Int(elapsed / 3600))h"
         } else {
             return "\(Int(elapsed / 86400))d"
+        }
+    }
+
+    @objc func cardClicked(_ sender: NSButton) {
+        if let sessionID = sessionIDByTag[sender.tag] {
+            selectedSessionID = sessionID
+            onSessionSelected?(sessionID)
+            refresh()
+        }
+    }
+}
+
+class SessionCardView: NSView {
+    let session: Session
+
+    init(session: Session, frame: NSRect) {
+        self.session = session
+        super.init(frame: frame)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
+class TerminalViewController: NSViewController {
+    var sessionManager: SessionManager?
+    var outputTextView: NSTextView?
+    var currentSessionID: String?
+
+    init(sessionManager: SessionManager?) {
+        super.init(nibName: nil, bundle: nil)
+        self.sessionManager = sessionManager
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func loadView() {
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.black.cgColor
+
+        let headerLabel = NSTextField(frame: NSRect(x: 15, y: container.frame.height - 35, width: 300, height: 25))
+        headerLabel.stringValue = "📺 Live Output"
+        headerLabel.isEditable = false
+        headerLabel.isBordered = false
+        headerLabel.backgroundColor = NSColor.clear
+        headerLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        headerLabel.textColor = NSColor(red: 0.3, green: 1.0, blue: 0.8, alpha: 1)
+        container.addSubview(headerLabel)
+
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: container.frame.width, height: container.frame.height - 40))
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+
+        outputTextView = NSTextView(frame: scrollView.bounds)
+        outputTextView?.backgroundColor = NSColor.black
+        outputTextView?.textColor = NSColor(red: 0.0, green: 1.0, blue: 0.5, alpha: 1)
+        outputTextView?.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+        outputTextView?.isEditable = false
+        outputTextView?.isSelectable = true
+
+        scrollView.documentView = outputTextView
+        container.addSubview(scrollView)
+
+        self.view = container
+    }
+
+    func displaySession(_ sessionID: String) {
+        guard let sessionManager = sessionManager else { return }
+
+        currentSessionID = sessionID
+        outputTextView?.string = ""
+
+        guard let pty = sessionManager.getPTYProcess(for: sessionID) else {
+            outputTextView?.string = "Session not found or PTY not available"
+            return
+        }
+
+        pty.registerOutputCallback { [weak self] output in
+            DispatchQueue.main.async {
+                guard let self = self, self.currentSessionID == sessionID else { return }
+                let currentText = self.outputTextView?.string ?? ""
+                self.outputTextView?.string = currentText + output
+                self.outputTextView?.scrollRangeToVisible(NSRange(location: (self.outputTextView?.string.count ?? 0) - 1, length: 1))
+            }
         }
     }
 }
