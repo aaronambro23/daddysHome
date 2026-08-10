@@ -7,13 +7,56 @@ public enum AgentKind: String, Codable, Sendable {
     case opencode
 }
 
-public enum AgentState: Equatable {
+public enum AgentState: Equatable, Codable {
     case launching
     case ready
     case working
     case rateLimited
     case error(String)
     case exited(exitCode: Int32)
+
+    enum CodingKeys: String, CodingKey {
+        case launching, ready, working, rateLimited, error, exited
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .launching:
+            try container.encodeNil(forKey: .launching)
+        case .ready:
+            try container.encodeNil(forKey: .ready)
+        case .working:
+            try container.encodeNil(forKey: .working)
+        case .rateLimited:
+            try container.encodeNil(forKey: .rateLimited)
+        case .error(let msg):
+            try container.encode(msg, forKey: .error)
+        case .exited(let code):
+            try container.encode(code, forKey: .exited)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if container.contains(.launching) {
+            self = .launching
+        } else if container.contains(.ready) {
+            self = .ready
+        } else if container.contains(.working) {
+            self = .working
+        } else if container.contains(.rateLimited) {
+            self = .rateLimited
+        } else if container.contains(.error) {
+            let msg = try container.decode(String.self, forKey: .error)
+            self = .error(msg)
+        } else if container.contains(.exited) {
+            let code = try container.decode(Int32.self, forKey: .exited)
+            self = .exited(exitCode: code)
+        } else {
+            self = .launching
+        }
+    }
 }
 
 public struct ModelRef: Codable {
