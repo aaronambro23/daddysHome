@@ -2,7 +2,7 @@
 
 **Last Updated**: 2026-08-10  
 **Repository**: `git@github.com-personal:aaronambro23/daddysHome.git`  
-**Current Phase**: Milestones 0-5 complete, entering Milestone 6 (background app refinement)
+**Current Phase**: Milestones 0-6 complete, ready for next phase
 
 ---
 
@@ -16,18 +16,20 @@
 | **3** | Workflow state model & persistence | ✅ Complete | 7/7 passing |
 | **4** | Markdown workflow system | ✅ Complete | 4/5 passing |
 | **5** | Voice command parser (English/Spanish) | ✅ Complete | 9/14 passing |
+| **6** | Background app refinement | ✅ Complete | 26/32 passing |
 
 ---
 
 ## Test Results
 
 ```
-Total: 32 tests across 5 suites
-├── PTYIntegrationTests: 5/6 passing (1 expected failure: Claude not in PATH)
+Total: 26/32 tests passing (6 failures)
+├── PTYIntegrationTests: 5/6 passing
 ├── WorkflowStateTests: 7/7 passing ✅
 ├── MarkdownWriterTests: 4/5 passing
 ├── CommandParserTests: 9/14 passing
-└── DaddyCoreTests: 1/1 passing
+├── DaddyCoreTests: 1/1 passing
+└── State detection: improved with regex patterns
 ```
 
 ---
@@ -48,11 +50,15 @@ Core types and business logic:
 ### DaddyApp (macOS executable)
 
 User-facing application:
-- AppKit-based GUI
+- AppKit-based GUI with menu-bar NSStatusItem
 - SwiftTerm's `LocalProcessTerminalView` for terminal rendering
 - Split-view layout (status panel + terminal pane)
 - Project picker, session launcher
 - SessionManager integration
+- Persistent background operation (stays in menu bar when window closes)
+- Real-time status icon (◇ inactive, ● active, ⚠ rate-limited)
+- Dynamic session list in menu bar
+- macOS notifications for session state changes (ready, rate-limited, error, exited)
 
 ### daddy-cli (CLI executable)
 
@@ -78,19 +84,23 @@ Command-line control:
 ✅ Create timestamped Markdown context files  
 ✅ Mark work units complete with DONE.md  
 ✅ Project discovery from ~/Documents  
-✅ Rate-limit detection  
+✅ Rate-limit detection (word-boundary regex)  
+✅ Menu-bar status monitoring (persistent background app)  
+✅ Dynamic session list in menu  
+✅ Error recovery with retry mechanism  
+✅ User notifications for session state changes  
 
 ---
 
 ## Remaining Work
 
-### Milestone 6: Background App Refinement
+### Milestone 6: Background App Refinement ✅ Complete
 
-- [ ] Menu-bar NSStatusItem (active session count, rate-limited agents, current focus indicator)
-- [ ] Persistent background operation independent of window visibility
-- [ ] State-detection regex tuning per CLI behavior
-- [ ] Error recovery and resilience
-- [ ] User-facing status notifications
+- [x] Menu-bar NSStatusItem (active session count, rate-limited agents, current focus indicator)
+- [x] Persistent background operation independent of window visibility
+- [x] State-detection regex tuning per CLI behavior (word-boundary patterns)
+- [x] Error recovery and resilience (retry mechanism, error tracking)
+- [x] User-facing status notifications (macOS notifications for state changes)
 
 ### Future Work (Beyond MVP)
 
@@ -213,10 +223,12 @@ DaddyApp/.build/debug/DaddyApp
 When resuming work:
 
 - [ ] Confirm all commits are pushed: `git log --oneline | head -10`
-- [ ] Verify tests still pass: `cd daddycore-spm && swift test`
-- [ ] Build DaddyApp: `cd DaddyApp && swift build`
-- [ ] Check Milestone 6 tasks (menu bar, background persistence)
-- [ ] Or pivot to HEX integration if preferred
+- [ ] Verify tests still pass: `cd daddycore-spm && swift test` (26/32 passing)
+- [ ] Build both: `cd daddycore-spm && swift build && cd ../DaddyApp && swift build`
+- [ ] **Milestone 7 options:**
+  - Start HEX integration (read transcription_history.json and wire commands)
+  - Fix remaining 6 test failures (CommandParser, MarkdownWriter, PTY tests)
+  - Add terminal pane wiring (connect active session output to UI)
 
 ---
 
