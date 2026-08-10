@@ -1,6 +1,7 @@
 import Cocoa
 import DaddyCore
 import SwiftTerm
+import UserNotifications
 
 @main
 @MainActor
@@ -11,12 +12,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     var statusMenu: NSMenu?
     var statusUpdateTimer: Timer?
+    var lastNotifiedStates: [String: AgentState] = [:]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         sessionManager = SessionManager()
+        requestNotificationPermissions()
         setupMenuBar()
         setupMainWindow()
         startStatusUpdates()
+    }
+
+    private func requestNotificationPermissions() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            if granted {
+                DispatchQueue.main.async {
+                    NSApplication.shared.registerForRemoteNotifications()
+                }
+            }
+        }
     }
 
     private func setupMenuBar() {
@@ -40,6 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             statusItem.button?.title = "● \(activeSessions)"
         }
+
+        checkAndNotifyStateChanges(sessions: sessions)
 
         menu.removeAllItems()
         let headerItem = NSMenuItem(title: "Active Sessions: \(activeSessions)", action: nil, keyEquivalent: "")
@@ -75,6 +90,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: "q"
         )
         menu.addItem(quitItem)
+    }
+
+    private func checkAndNotifyStateChanges(sessions: [Session]) {
+        for session in sessions {
+            let lastState = lastNotifiedStates[session.id]
+
+            if lastState == nil || lastState != session.state {
+                notifyStateChange(session: session, oldState: lastState)
+                lastNotifiedStates[session.id] = session.state
+            }
+        }
+
+        for key in lastNotifiedStates.keys where !sessions.contains(where: { $0.id == key }) {
+            lastNotifiedStates.removeValue(forKey: key)
+        }
+    }
+
+    private func notifyStateChange(session: Session, oldState: AgentState?) {
+        guard shouldNotify(state: session.state) else { return }
+
+        let content = UNMutableNotificationContent()
+        content.sound = .default
+
+        switch session.state {
+        case .rateLimited:
+            content.title = "Rate Limited"
+            content.body = "\(session.agent.rawValue) is rate-limited in \(session.projectID)"
+        case .error(let msg):
+            content.title = "Session Error"
+            content.body = "\(session.agent.rawValue): \(msg)"
+        case .exited:
+            content.title = "Session Exited"
+            content.body = "\(session.agent.rawValue) exited in \(session.projectID)"
+        case .ready:
+            if oldState == .launching {
+                content.title = "Ready"
+                content.body = "\(session.agent.rawValue) is ready in \(session.projectID)"
+            }
+        default:
+            return
+        }
+
+        let request = UNNotificationRequest(identifier: session.id, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { _ in }
+    }
+
+    private func shouldNotify(state: AgentState) -> Bool {
+        switch state {
+        case .rateLimited, .error, .exited, .ready:
+            return true
+        default:
+            return false
+        }
     }
 
     private func stateEmoji(_ state: AgentState) -> String {
