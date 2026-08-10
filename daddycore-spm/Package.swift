@@ -13,6 +13,10 @@ let package = Package(
             name: "DaddyCore",
             targets: ["DaddyCore"]
         ),
+        .executable(
+            name: "daddy-cli",
+            targets: ["DaddyCLI"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", branch: "main"),
@@ -21,6 +25,10 @@ let package = Package(
         .target(
             name: "DaddyCore",
             dependencies: ["SwiftTerm"]
+        ),
+        .executableTarget(
+            name: "DaddyCLI",
+            dependencies: ["DaddyCore"]
         ),
         .testTarget(
             name: "DaddyCoreTests",

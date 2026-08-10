@@ -1,13 +1,13 @@
 import Foundation
 
-enum AgentKind: String, Codable {
+public enum AgentKind: String, Codable {
     case claude
     case codex
     case cursor
     case opencode
 }
 
-enum AgentState: Equatable {
+public enum AgentState: Equatable {
     case launching
     case ready
     case working
@@ -16,45 +16,50 @@ enum AgentState: Equatable {
     case exited(exitCode: Int32)
 }
 
-struct ModelRef: Codable {
-    let agent: AgentKind
-    let rawValue: String
+public struct ModelRef: Codable {
+    public let agent: AgentKind
+    public let rawValue: String
+
+    public init(agent: AgentKind, rawValue: String) {
+        self.agent = agent
+        self.rawValue = rawValue
+    }
 }
 
-struct Project: Identifiable, Codable {
-    let id: String
-    let name: String
-    let path: URL
+public struct Project: Identifiable, Codable {
+    public let id: String
+    public let name: String
+    public let path: URL
 }
 
-struct WorkUnit: Identifiable, Codable {
-    enum Status: String, Codable {
+public struct WorkUnit: Identifiable, Codable {
+    public enum Status: String, Codable {
         case active
         case idle
         case done
     }
 
-    let id: String
-    let projectID: String
-    let name: String
-    var status: Status
-    let markdownDir: URL
-    let createdAt: Date
-    var lastActivityAt: Date
+    public let id: String
+    public let projectID: String
+    public let name: String
+    public var status: Status
+    public let markdownDir: URL
+    public let createdAt: Date
+    public var lastActivityAt: Date
 }
 
-final class Session: Identifiable {
-    let id: String
-    let projectID: String
-    let workUnitID: String
-    let agent: AgentKind
-    var model: ModelRef?
-    let cwd: URL
-    var state: AgentState
-    let createdAt: Date
-    var lastOutputAt: Date
+public final class Session: Identifiable {
+    public let id: String
+    public let projectID: String
+    public let workUnitID: String
+    public let agent: AgentKind
+    public var model: ModelRef?
+    public let cwd: URL
+    public var state: AgentState
+    public let createdAt: Date
+    public var lastOutputAt: Date
 
-    init(
+    public init(
         id: String = UUID().uuidString,
         projectID: String,
         workUnitID: String,
@@ -74,12 +79,12 @@ final class Session: Identifiable {
     }
 }
 
-struct Focus {
-    var projectID: String?
-    var workUnitID: String?
-    var sessionID: String?
+public struct Focus {
+    public var projectID: String?
+    public var workUnitID: String?
+    public var sessionID: String?
 
-    var isEmpty: Bool {
+    public var isEmpty: Bool {
         projectID == nil && workUnitID == nil && sessionID == nil
     }
 }
