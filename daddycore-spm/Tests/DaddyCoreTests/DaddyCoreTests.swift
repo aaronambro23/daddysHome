@@ -1,6 +1,8 @@
-import Testing
-@testable import daddycore_spm
+import XCTest
+@testable import DaddyCore
 
-@Test func example() async throws {
-    // Write your test here and use APIs like `#expect(...)` to check expected conditions.
+final class DaddyCoreTests: XCTestCase {
+    func testExample() {
+        XCTAssertTrue(true)
+    }
 }
