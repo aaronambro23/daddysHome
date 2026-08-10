@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var sessionManager: SessionManager?
     var terminalView: LocalProcessTerminalView?
     var statusItem: NSStatusItem?
+    var statusMenu: NSMenu?
     var statusUpdateTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -20,13 +21,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusMenu = NSMenu()
+        statusItem?.menu = statusMenu
         updateStatusItem()
+    }
 
-        let menu = NSMenu()
+    private func updateStatusItem() {
+        guard let statusItem = statusItem, let sessionManager = sessionManager, let menu = statusMenu else { return }
 
-        let statusMenuItem = NSMenuItem(title: "Status", action: nil, keyEquivalent: "")
-        statusMenuItem.isEnabled = false
-        menu.addItem(statusMenuItem)
+        let sessions = sessionManager.getActiveSessions()
+        let activeSessions = sessions.count
+        let rateLimited = sessions.filter { $0.state == .rateLimited }.count
+
+        if activeSessions == 0 {
+            statusItem.button?.title = "◇"
+        } else if rateLimited > 0 {
+            statusItem.button?.title = "⚠ \(activeSessions)"
+        } else {
+            statusItem.button?.title = "● \(activeSessions)"
+        }
+
+        menu.removeAllItems()
+        let headerItem = NSMenuItem(title: "Active Sessions: \(activeSessions)", action: nil, keyEquivalent: "")
+        headerItem.isEnabled = false
+        menu.addItem(headerItem)
+
+        if activeSessions > 0 {
+            menu.addItem(NSMenuItem.separator())
+            for session in sessions {
+                let stateEmoji = stateEmoji(session.state)
+                let title = "\(stateEmoji) \(session.agent.rawValue) • \(session.projectID)"
+                let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                menu.addItem(item)
+            }
+        }
 
         menu.addItem(NSMenuItem.separator())
 
@@ -46,23 +75,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: "q"
         )
         menu.addItem(quitItem)
-
-        statusItem?.menu = menu
     }
 
-    private func updateStatusItem() {
-        guard let statusItem = statusItem, let sessionManager = sessionManager else { return }
-
-        let sessions = sessionManager.getActiveSessions()
-        let activeSessions = sessions.count
-        let rateLimited = sessions.filter { $0.state == .rateLimited }.count
-
-        if activeSessions == 0 {
-            statusItem.button?.title = "◇"
-        } else if rateLimited > 0 {
-            statusItem.button?.title = "⚠ \(activeSessions)"
-        } else {
-            statusItem.button?.title = "● \(activeSessions)"
+    private func stateEmoji(_ state: AgentState) -> String {
+        switch state {
+        case .launching:
+            return "⚙️"
+        case .ready:
+            return "✓"
+        case .working:
+            return "▶"
+        case .rateLimited:
+            return "⏸"
+        case .error:
+            return "✗"
+        case .exited:
+            return "⊗"
         }
     }
 

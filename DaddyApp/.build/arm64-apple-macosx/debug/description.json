@@ -24,9 +24,9 @@
     }
   },
   "generatedSourceTargetSet" : [
-    "GenerateManual",
     "GenerateDoccReference",
-    "SwiftTermBuildInfoPlugin"
+    "SwiftTermBuildInfoPlugin",
+    "GenerateManual"
   ],
   "pluginDescriptions" : [
     {
