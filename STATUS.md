@@ -96,6 +96,9 @@ Command-line control:
 ✅ Project sidebar (~/Documents directories)  
 ✅ Active agent dashboard with real-time status  
 ✅ HEX integration (voice command parsing & spawning)  
+✅ Clickable session cards with live terminal output  
+✅ Real-time PTY streaming to terminal pane  
+✅ Session selection with visual highlighting  
 
 ---
 
@@ -125,18 +128,32 @@ Command-line control:
 - Auto-spawns agents based on voice + creates sessions
 - Sends prompts to spawned agents
 
+**Terminal Wiring** ✅ Complete
+- Click agent cards to select and view live output
+- Selected card highlights (bright cyan, 2px border)
+- Terminal pane streams real-time PTY output
+- Green monospace terminal aesthetic
+- Auto-scrolls to latest output
+- Switch between agents by clicking cards
+
 ### Future Work (Beyond MVP)
 
-**Terminal View Wiring** (not started)
-- Connect active session output to DaddyApp's terminal pane
-- Enable user input directly into pane
-- Display rate-limit notifications inline
+**Terminal Input** (not started)
+- Accept user input in terminal pane (type into active agent)
+- Send keyboard input directly to PTY
+- Handle control characters (Ctrl+C, Ctrl+D, etc)
+
+**Session Management UI** (not started)
+- Stop/interrupt buttons on session cards
+- Session history and replay
+- Session output export/copy
+- Multi-select sessions
 
 **Dashboard Enhancements**
-- Clickable project cards to launch sessions
-- Session management UI (stop, interrupt, kill)
-- Real-time output streaming to dashboard
+- Clickable project cards to spawn new sessions
 - Task status indicators (feat/bug/refactor/test)
+- Session duration tracking
+- Agent performance metrics (time, tokens, etc)
 
 ---
 
@@ -243,14 +260,29 @@ DaddyApp/.build/debug/DaddyApp
 1. User double-clicks option key (HEX activation)
 2. Speaks command: "Claude, fix the bug in this feature"
 3. App parses command → spawns Claude session in ~/Documents
-4. Dashboard shows live agent status
-5. Agent works in terminal, visible on menu bar
+4. Dashboard shows live agent status (cyan card with state emoji)
+5. Click card to select agent → terminal pane streams live output
+6. Watch agent work in real-time with green terminal text
+7. Session state visible on menu bar (● active, ⚠ rate-limited, etc)
+8. Notifications alert on rate-limit, error, or completion
 
 **Example Voice Commands:**
 - "claude work on the feature" → spawns Claude, intent: work
 - "codex switch to opus" → spawns Codex with opus model
 - "cursor review the code" → spawns Cursor for review
 - "stop" → interrupts current agent
+
+## What's Ready to Ship
+
+✅ Full voice-first workflow (HEX → spawn agents)
+✅ Real-time agent monitoring dashboard
+✅ Live terminal output from selected agents
+✅ Menu bar persistent background app
+✅ State notifications (ready, rate-limited, error, exited)
+✅ Error recovery with auto-retry
+✅ Project discovery from ~/Documents
+✅ Agent switching via dashboard clicks
+✅ Dark futuristic UI with cyan/green accents
 
 ## Next Session Checklist
 
@@ -259,12 +291,12 @@ When resuming work:
 - [ ] Confirm all commits are pushed: `git log --oneline | head -10`
 - [ ] Verify tests still pass: `cd daddycore-spm && swift test` (~26/32 passing)
 - [ ] Build both: `cd daddycore-spm && swift build && cd ../DaddyApp && swift build`
-- [ ] Test HEX integration (needs running HEX app + speaking commands)
-- [ ] **Next features:**
-  - Terminal pane wiring (connect active session output to dashboard)
-  - Clickable project/session management
-  - Fix remaining test failures
-  - Add task type indicators (feat/bug/refactor/test)
+- [ ] **Next priorities:**
+  - Terminal input (accept typing in terminal pane → agent)
+  - Session management buttons (stop, interrupt, kill)
+  - Fix remaining 6 test failures
+  - Add task type tags to dashboard
+  - Session history/replay
 
 ---
 
