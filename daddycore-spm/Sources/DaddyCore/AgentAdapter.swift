@@ -1,11 +1,11 @@
 import Foundation
 
-enum ApprovalPolicy: String {
+public enum ApprovalPolicy: String {
     case safeAuto = "safe-auto"
     case fullBypass = "full-bypass"
 }
 
-protocol AgentAdapter: AnyObject {
+public protocol AgentAdapter: AnyObject {
     static var kind: AgentKind { get }
     static var executablePath: String { get }
 
@@ -26,9 +26,9 @@ protocol AgentAdapter: AnyObject {
     func detectState(fromRecentOutput buffer: String) -> AgentState
 }
 
-final class ClaudeAdapter: AgentAdapter {
-    static let kind = AgentKind.claude
-    static let executablePath = "claude"
+public final class ClaudeAdapter: AgentAdapter {
+    public static let kind = AgentKind.claude
+    public static let executablePath = "claude"
 
     func launchArgs(
         cwd: URL,
@@ -94,7 +94,7 @@ final class ClaudeAdapter: AgentAdapter {
     }
 }
 
-final class CodexAdapter: AgentAdapter {
+public final class CodexAdapter: AgentAdapter {
     static let kind = AgentKind.codex
     static let executablePath = "codex"
 
@@ -155,7 +155,7 @@ final class CodexAdapter: AgentAdapter {
     }
 }
 
-final class CursorAdapter: AgentAdapter {
+public final class CursorAdapter: AgentAdapter {
     static let kind = AgentKind.cursor
     static let executablePath = "agent"
 
@@ -207,7 +207,7 @@ final class CursorAdapter: AgentAdapter {
     }
 }
 
-final class OpenCodeAdapter: AgentAdapter {
+public final class OpenCodeAdapter: AgentAdapter {
     static let kind = AgentKind.opencode
     static let executablePath = "opencode"
 

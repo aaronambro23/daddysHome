@@ -1,12 +1,12 @@
 import Foundation
 
-final class SessionManager {
+public final class SessionManager {
     private var sessions: [String: Session] = [:]
     private var ptyProcesses: [String: PTYProcess] = [:]
     private var adapters: [AgentKind: AgentAdapter] = [:]
     private let lock = NSLock()
 
-    init() {
+    public init() {
         self.adapters = [
             .claude: ClaudeAdapter(),
             .codex: CodexAdapter(),
@@ -15,7 +15,7 @@ final class SessionManager {
         ]
     }
 
-    func createSession(
+    public func createSession(
         projectID: String,
         workUnitID: String,
         agent: AgentKind,
@@ -36,7 +36,7 @@ final class SessionManager {
         return session
     }
 
-    func launchSession(_ session: Session, approvalPolicy: ApprovalPolicy = .safeAuto) throws {
+    public func launchSession(_ session: Session, approvalPolicy: ApprovalPolicy = .safeAuto) throws {
         guard let adapter = adapters[session.agent] else {
             throw SessionError.unknownAgent(session.agent)
         }
@@ -59,7 +59,7 @@ final class SessionManager {
         captureSessionOutput(sessionID: session.id)
     }
 
-    func sendPrompt(_ prompt: String, to sessionID: String) throws {
+    public func sendPrompt(_ prompt: String, to sessionID: String) throws {
         lock.lock()
         guard let ptyProcess = ptyProcesses[sessionID],
               let session = sessions[sessionID],
@@ -78,7 +78,7 @@ final class SessionManager {
         }
     }
 
-    func interruptSession(_ sessionID: String) throws {
+    public func interruptSession(_ sessionID: String) throws {
         lock.lock()
         guard let ptyProcess = ptyProcesses[sessionID],
               let session = sessions[sessionID],
@@ -91,7 +91,7 @@ final class SessionManager {
         try adapter.interrupt(ptyProcess)
     }
 
-    func terminateSession(_ sessionID: String) throws {
+    public func terminateSession(_ sessionID: String) throws {
         lock.lock()
         guard let ptyProcess = ptyProcesses[sessionID] else {
             lock.unlock()
@@ -111,13 +111,13 @@ final class SessionManager {
         }
     }
 
-    func session(_ sessionID: String) -> Session? {
+    public func session(_ sessionID: String) -> Session? {
         lock.lock()
         defer { lock.unlock() }
         return sessions[sessionID]
     }
 
-    func allSessions() -> [Session] {
+    public func allSessions() -> [Session] {
         lock.lock()
         defer { lock.unlock() }
         return Array(sessions.values)
@@ -156,11 +156,11 @@ final class SessionManager {
 
     }
 
-    enum SessionError: LocalizedError {
+    public enum SessionError: LocalizedError {
         case sessionNotFound(String)
         case unknownAgent(AgentKind)
 
-        var errorDescription: String? {
+        public var errorDescription: String? {
             switch self {
             case .sessionNotFound(let id):
                 return "Session not found: \(id)"
