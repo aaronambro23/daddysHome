@@ -30,7 +30,9 @@ public final class ClaudeAdapter: AgentAdapter {
     public static let kind = AgentKind.claude
     public static let executablePath = "claude"
 
-    func launchArgs(
+    public init() {}
+
+    public func launchArgs(
         cwd: URL,
         model: ModelRef?,
         approvalPolicy: ApprovalPolicy
@@ -45,7 +47,7 @@ public final class ClaudeAdapter: AgentAdapter {
         return args
     }
 
-    func modelFlagValue(for humanName: String) -> String? {
+    public func modelFlagValue(for humanName: String) -> String? {
         let normalized = humanName.lowercased().trimmingCharacters(in: .whitespaces)
 
         let aliases: [String: String] = [
@@ -58,20 +60,20 @@ public final class ClaudeAdapter: AgentAdapter {
         return aliases[normalized]
     }
 
-    func sendPrompt(_ text: String, to pty: PTYProcess) throws {
+    public func sendPrompt(_ text: String, to pty: PTYProcess) throws {
         try pty.write(text + "\n")
     }
 
-    func selectModel(_ model: ModelRef, on pty: PTYProcess) throws {
+    public func selectModel(_ model: ModelRef, on pty: PTYProcess) throws {
         try pty.write("/model " + model.rawValue + "\r")
         Thread.sleep(forTimeInterval: 0.5)
     }
 
-    func interrupt(_ pty: PTYProcess) throws {
+    public func interrupt(_ pty: PTYProcess) throws {
         try pty.write("\u{1b}")
     }
 
-    func detectState(fromRecentOutput buffer: String) -> AgentState {
+    public func detectState(fromRecentOutput buffer: String) -> AgentState {
         let lower = buffer.lowercased()
 
         if lower.contains("rate limited") || lower.contains("rate-limited") {
@@ -95,10 +97,12 @@ public final class ClaudeAdapter: AgentAdapter {
 }
 
 public final class CodexAdapter: AgentAdapter {
-    static let kind = AgentKind.codex
-    static let executablePath = "codex"
+    public static let kind = AgentKind.codex
+    public static let executablePath = "codex"
 
-    func launchArgs(
+    public init() {}
+
+    public func launchArgs(
         cwd: URL,
         model: ModelRef?,
         approvalPolicy: ApprovalPolicy
@@ -118,25 +122,25 @@ public final class CodexAdapter: AgentAdapter {
         return args
     }
 
-    func modelFlagValue(for humanName: String) -> String? {
+    public func modelFlagValue(for humanName: String) -> String? {
         let normalized = humanName.lowercased().trimmingCharacters(in: .whitespaces)
         return normalized
     }
 
-    func sendPrompt(_ text: String, to pty: PTYProcess) throws {
+    public func sendPrompt(_ text: String, to pty: PTYProcess) throws {
         try pty.write(text + "\n")
     }
 
-    func selectModel(_ model: ModelRef, on pty: PTYProcess) throws {
+    public func selectModel(_ model: ModelRef, on pty: PTYProcess) throws {
         try pty.write("/model " + model.rawValue + "\r")
         Thread.sleep(forTimeInterval: 0.5)
     }
 
-    func interrupt(_ pty: PTYProcess) throws {
+    public func interrupt(_ pty: PTYProcess) throws {
         try pty.write("\u{03}")
     }
 
-    func detectState(fromRecentOutput buffer: String) -> AgentState {
+    public func detectState(fromRecentOutput buffer: String) -> AgentState {
         let lower = buffer.lowercased()
 
         if lower.contains("rate limited") || lower.contains("rate-limited") {
@@ -156,10 +160,12 @@ public final class CodexAdapter: AgentAdapter {
 }
 
 public final class CursorAdapter: AgentAdapter {
-    static let kind = AgentKind.cursor
-    static let executablePath = "agent"
+    public static let kind = AgentKind.cursor
+    public static let executablePath = "agent"
 
-    func launchArgs(
+    public init() {}
+
+    public func launchArgs(
         cwd: URL,
         model: ModelRef?,
         approvalPolicy: ApprovalPolicy
@@ -174,25 +180,25 @@ public final class CursorAdapter: AgentAdapter {
         return args
     }
 
-    func modelFlagValue(for humanName: String) -> String? {
+    public func modelFlagValue(for humanName: String) -> String? {
         let normalized = humanName.lowercased().trimmingCharacters(in: .whitespaces)
         return normalized
     }
 
-    func sendPrompt(_ text: String, to pty: PTYProcess) throws {
+    public func sendPrompt(_ text: String, to pty: PTYProcess) throws {
         try pty.write(text + "\n")
     }
 
-    func selectModel(_ model: ModelRef, on pty: PTYProcess) throws {
+    public func selectModel(_ model: ModelRef, on pty: PTYProcess) throws {
         try pty.write("/model " + model.rawValue + "\r")
         Thread.sleep(forTimeInterval: 0.5)
     }
 
-    func interrupt(_ pty: PTYProcess) throws {
+    public func interrupt(_ pty: PTYProcess) throws {
         try pty.write("\u{1b}")
     }
 
-    func detectState(fromRecentOutput buffer: String) -> AgentState {
+    public func detectState(fromRecentOutput buffer: String) -> AgentState {
         let lower = buffer.lowercased()
 
         if lower.contains("rate limited") || lower.contains("rate-limited") {
@@ -208,10 +214,12 @@ public final class CursorAdapter: AgentAdapter {
 }
 
 public final class OpenCodeAdapter: AgentAdapter {
-    static let kind = AgentKind.opencode
-    static let executablePath = "opencode"
+    public static let kind = AgentKind.opencode
+    public static let executablePath = "opencode"
 
-    func launchArgs(
+    public init() {}
+
+    public func launchArgs(
         cwd: URL,
         model: ModelRef?,
         approvalPolicy: ApprovalPolicy
@@ -226,25 +234,25 @@ public final class OpenCodeAdapter: AgentAdapter {
         return args
     }
 
-    func modelFlagValue(for humanName: String) -> String? {
+    public func modelFlagValue(for humanName: String) -> String? {
         let normalized = humanName.lowercased().trimmingCharacters(in: .whitespaces)
         return normalized
     }
 
-    func sendPrompt(_ text: String, to pty: PTYProcess) throws {
+    public func sendPrompt(_ text: String, to pty: PTYProcess) throws {
         try pty.write(text + "\n")
     }
 
-    func selectModel(_ model: ModelRef, on pty: PTYProcess) throws {
+    public func selectModel(_ model: ModelRef, on pty: PTYProcess) throws {
         try pty.write("/model " + model.rawValue + "\r")
         Thread.sleep(forTimeInterval: 0.5)
     }
 
-    func interrupt(_ pty: PTYProcess) throws {
+    public func interrupt(_ pty: PTYProcess) throws {
         try pty.write("\u{03}")
     }
 
-    func detectState(fromRecentOutput buffer: String) -> AgentState {
+    public func detectState(fromRecentOutput buffer: String) -> AgentState {
         let lower = buffer.lowercased()
 
         if lower.contains("rate limited") || lower.contains("rate-limited") {

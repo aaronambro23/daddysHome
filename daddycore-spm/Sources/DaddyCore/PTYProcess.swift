@@ -1,12 +1,12 @@
 import Foundation
 
-final class PTYProcess {
-    enum PTYError: LocalizedError {
+public final class PTYProcess {
+    public enum PTYError: LocalizedError {
         case processFailed(String)
         case alreadyTerminated
         case writeFailed(String)
 
-        var errorDescription: String? {
+        public var errorDescription: String? {
             switch self {
             case .processFailed(let msg):
                 return "Process failed: \(msg)"
@@ -26,7 +26,7 @@ final class PTYProcess {
     private var outputCallbacks: [(String) -> Void] = []
     private let lock = NSLock()
 
-    init(executablePath: String, arguments: [String], cwd: URL) {
+    public init(executablePath: String, arguments: [String], cwd: URL) {
         self.process = Process()
         self.inputPipe = Pipe()
         self.outputPipe = Pipe()
@@ -39,7 +39,7 @@ final class PTYProcess {
         process.standardError = outputPipe
     }
 
-    func launch() throws {
+    public func launch() throws {
         do {
             try process.run()
             isRunning = true
@@ -52,7 +52,7 @@ final class PTYProcess {
         }
     }
 
-    func write(_ data: String) throws {
+    public func write(_ data: String) throws {
         guard isRunning else { throw PTYError.alreadyTerminated }
 
         guard let data = data.data(using: .utf8) else {
@@ -62,30 +62,30 @@ final class PTYProcess {
         inputPipe.fileHandleForWriting.write(data)
     }
 
-    func registerOutputCallback(_ callback: @escaping (String) -> Void) {
+    public func registerOutputCallback(_ callback: @escaping (String) -> Void) {
         lock.lock()
         defer { lock.unlock() }
         outputCallbacks.append(callback)
     }
 
-    func terminate() {
+    public func terminate() {
         if isRunning {
             process.terminate()
             isRunning = false
         }
     }
 
-    func waitUntilExit() -> Int32 {
+    public func waitUntilExit() -> Int32 {
         process.waitUntilExit()
         isRunning = false
         return process.terminationStatus
     }
 
-    var isProcessRunning: Bool {
+    public var isProcessRunning: Bool {
         isRunning && process.isRunning
     }
 
-    var recentOutput: String {
+    public var recentOutput: String {
         lock.lock()
         defer { lock.unlock() }
         return outputBuffer
