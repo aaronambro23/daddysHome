@@ -121,12 +121,11 @@ Command-line control:
 - Real-time agent dashboard with status cards
 - Live updates (1s sessions, 2s projects)
 
-**HEX Integration** ✅ Complete
-- Monitors ~/Library/Containers/com.kitlangton.Hex/...
-- Reads transcription_history.json for new transcriptions
-- CommandParser converts voice to structured commands
-- Auto-spawns agents based on voice + creates sessions
-- Sends prompts to spawned agents
+**HEX Integration** ⚠️ Not wired — see "HEX Voice Intake" under Future Work
+- `HEXWatcher.swift` and `CommandParser.swift` both exist and are unit-tested
+- But nothing constructs `HEXWatcher` anywhere in the app, and `CommandParser`
+  is referenced only by its own tests. The pieces are in isolation; no voice
+  command has ever reached a session.
 
 **Terminal Wiring** ✅ Complete
 - Click agent cards to select and view live output
@@ -171,6 +170,53 @@ Command-line control:
 - [ ] Clickable project cards to spawn new sessions
 
 ### Future Work (Beyond MVP)
+
+**HEX Voice Intake** (not started — components exist, nothing is connected)
+
+*What HEX is:* a third-party system-wide dictation app (`/Applications/Hex.app`,
+bundle `com.kitlangton.Hex`). Daddy does **not** implement speech recognition and
+never needs microphone permission. HEX keeps its own global hotkey (hold left ⌥,
+double-tap to lock) and stays useful across every other app on the machine.
+
+*What exists today:*
+- `DaddyCore/HEXWatcher.swift` — `DispatchSource` file watcher over
+  `~/Library/Containers/com.kitlangton.Hex/Data/Library/Application Support/com.kitlangton.Hex/transcription_history.json`,
+  exposing `onNewTranscription: ((String) -> Void)`. Never instantiated.
+- `DaddyCore/CommandParser.swift` — parses English/Spanish phrases into
+  structured intents. 9/14 tests passing. Referenced only by its tests.
+
+*The missing link:* `HEXWatcher.onNewTranscription` → `CommandParser.parse()` →
+`SessionManager` action.
+
+*Design decision — addressing (how Daddy knows a transcription is for it):*
+HEX pastes into whatever field has focus. Its settings confirm there is no
+silent mode (`copyToClipboard: false`, `useClipboardPaste: true`). So a global
+wake word would type the command into Slack/notes/whatever is focused.
+
+Decision: **consume voice only while Daddy is frontmost.** The paste then lands
+in Daddy's own composer — harmless, and it shows what was heard before it runs.
+This also means the frontmost path can read its own `TextField` directly and
+skip `HEXWatcher` entirely: no Full Disk Access, no file watching.
+
+Optional later: a global wake-word mode ("daddy, …") for across-the-room
+control, keeping `HEXWatcher` for that path only, accepting that it pastes into
+the focused app. Note the tradeoff against PRD principle 4.1 (voice-first):
+frontmost-only means clicking into Daddy first, which weakens hands-off use.
+
+*Known bugs to fix before this ships:*
+- `HEXWatcher.swift:74-76` — dedup is broken. It compares
+  `UInt64(text.utf8.count)` (the transcription's character length) against a
+  variable named `lastReadPosition`, so a transcription only fires if its text
+  is longer than the longest seen so far. "start codex on test coverage"
+  followed by "stop" drops the second. Key off transcription `id`/`timestamp`.
+- `HEXWatcher.init?()` returns nil and never retries if the JSON file is absent,
+  so if HEX hasn't run since boot the watcher is dead for the whole session.
+
+*External dependencies:*
+- HEX setting `saveTranscriptionHistory: true` — if the user turns this off, the
+  file-watcher path goes deaf silently.
+- Full Disk Access, required to read another app's container (file-watcher path
+  only; the frontmost path avoids it).
 
 **Terminal Input** (not started)
 - Accept user input in terminal pane (type into active agent)
