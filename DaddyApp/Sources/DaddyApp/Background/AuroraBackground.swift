@@ -2,16 +2,40 @@ import SwiftUI
 
 // MARK: - Backdrop
 //
-// Glass needs LIGHT behind it, not COLOR. The previous version pumped
-// saturated blue/purple/teal back there, which the glass then blurred and
-// reflected until every panel looked like flat dark paint.
+// Glass needs LIGHT behind it, not COLOR — and specifically it needs *local
+// contrast*. A lens only visibly bends something when there is a boundary to
+// bend: a bright region hard against a dark one, passing under a panel edge.
 //
-// So: a cool charcoal base with large, soft, near-white light pools and a
-// couple of pale bands drifting across. Big luminance range, almost no hue.
-// The panels sit over the bright pools and their edges catch the light, which
-// is what actually makes glass legible.
+// The previous pass was too uniform to show any of that: near-white pools at
+// 0.30 alpha, then blurred another 26pt on top of an already-soft radial
+// falloff. Everything averaged out to flat charcoal, so the panels had
+// nothing to refract and read as dark grey cards.
+//
+// This version keeps the palette neutral but pushes the luminance range hard:
+// bright, tight, near-white pools and thin sharp streaks over a mid-dark
+// base. Big range, almost no hue.
+//
+// Every number worth touching lives in `Tuning`.
 
 struct AuroraBackground: View {
+    private enum Tuning {
+        // Base gradient — lifted off near-black so the bright pools have
+        // something to sit against without the darks crushing.
+        static let baseTop = Color(hex: "#20242c")
+        static let baseMid = Color(hex: "#2b313b")
+        static let baseBottom = Color(hex: "#1b1e24")
+
+        // Light pools. Bright and comparatively tight: a defined core with a
+        // fast falloff, not a wash.
+        static let poolBlur: CGFloat = 10
+        static let poolOpacities: [Double] = [0.85, 0.62, 0.48]
+
+        // Streaks. Thin and sharp — these are what actually reveal the lens
+        // as they pass under a panel edge.
+        static let streakBlur: CGFloat = 4
+        static let streakOpacity: Double = 0.55
+    }
+
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
@@ -24,40 +48,57 @@ struct AuroraBackground: View {
                 ZStack {
                     LinearGradient(
                         stops: [
-                            .init(color: Color(hex: "#141619"), location: 0.0),
-                            .init(color: Color(hex: "#1d2027"), location: 0.5),
-                            .init(color: Color(hex: "#15171c"), location: 1.0),
+                            .init(color: Tuning.baseTop, location: 0.0),
+                            .init(color: Tuning.baseMid, location: 0.5),
+                            .init(color: Tuning.baseBottom, location: 1.0),
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
 
-                    // Light pools. Near-white — the faint hue differences read
-                    // as light temperature, not as colour.
+                    // Bright pools. Faint hue differences read as light
+                    // temperature rather than as colour.
                     pool(
-                        color: Color(hex: "#dce6f5"), size: m * 1.15, opacity: 0.30,
+                        color: Color(hex: "#e8f0ff"), size: m * 1.05,
+                        opacity: Tuning.poolOpacities[0],
                         x: w * 0.26 + drift(t, 21, w * 0.05),
-                        y: h * 0.24 + drift(t, 26, h * 0.06, phase: 1.1)
+                        y: h * 0.20 + drift(t, 26, h * 0.06, phase: 1.1)
                     )
                     pool(
-                        color: Color(hex: "#f2ece2"), size: m * 1.0, opacity: 0.22,
-                        x: w * 0.80 + drift(t, 29, w * 0.06, phase: 2.2),
-                        y: h * 0.74 + drift(t, 33, h * 0.06)
+                        color: Color(hex: "#fff4e6"), size: m * 0.92,
+                        opacity: Tuning.poolOpacities[1],
+                        x: w * 0.84 + drift(t, 29, w * 0.06, phase: 2.2),
+                        y: h * 0.80 + drift(t, 33, h * 0.06)
                     )
                     pool(
-                        color: Color(hex: "#e3e9f2"), size: m * 0.9, opacity: 0.16,
-                        x: w * 0.56 + drift(t, 37, w * 0.07, phase: 0.6),
-                        y: h * 0.48 + drift(t, 31, h * 0.08, phase: 1.8)
+                        color: Color(hex: "#eaf2ff"), size: m * 0.80,
+                        opacity: Tuning.poolOpacities[2],
+                        x: w * 0.62 + drift(t, 37, w * 0.07, phase: 0.6),
+                        y: h * 0.44 + drift(t, 31, h * 0.08, phase: 1.8)
+                    )
+                    // Upper-right — lights the top of the OUTPUT panel, which
+                    // was the last dead zone.
+                    pool(
+                        color: Color(hex: "#f0f6ff"), size: m * 0.72,
+                        opacity: 0.52,
+                        x: w * 0.88 + drift(t, 43, w * 0.05, phase: 1.4),
+                        y: h * 0.16 + drift(t, 39, h * 0.05, phase: 2.6)
                     )
 
-                    // Pale bands sweeping across where the panels sit, so the
-                    // glass edges have moving structure to refract.
-                    band(w: w, h: h, t: t, period: 44, angle: -22,
-                         thickness: h * 0.13, opacity: 0.20, blur: 14)
-                    band(w: w, h: h, t: t, period: 61, angle: -22,
-                         thickness: h * 0.05, opacity: 0.16, blur: 8, phase: 0.45)
-                    band(w: w, h: h, t: t, period: 79, angle: -15,
-                         thickness: h * 0.22, opacity: 0.10, blur: 24, phase: 0.8)
+                    // Broad soft band for gentle gradation across the panels.
+                    band(w: w, h: h, t: t, period: 47, angle: -22,
+                         thickness: h * 0.20, opacity: 0.20, blur: 18)
+
+                    // Thin sharp streaks — the ones that show the refraction.
+                    band(w: w, h: h, t: t, period: 34, angle: -22,
+                         thickness: h * 0.018, opacity: Tuning.streakOpacity,
+                         blur: Tuning.streakBlur, phase: 0.15)
+                    band(w: w, h: h, t: t, period: 41, angle: -22,
+                         thickness: h * 0.010, opacity: Tuning.streakOpacity * 0.8,
+                         blur: Tuning.streakBlur * 0.7, phase: 0.55)
+                    band(w: w, h: h, t: t, period: 58, angle: -16,
+                         thickness: h * 0.035, opacity: 0.30,
+                         blur: 8, phase: 0.82)
                 }
             }
         }
@@ -72,14 +113,19 @@ struct AuroraBackground: View {
         Circle()
             .fill(
                 RadialGradient(
-                    colors: [color.opacity(opacity), color.opacity(0)],
+                    stops: [
+                        .init(color: color.opacity(opacity), location: 0.0),
+                        .init(color: color.opacity(opacity * 0.70), location: 0.28),
+                        .init(color: color.opacity(opacity * 0.20), location: 0.60),
+                        .init(color: color.opacity(0), location: 1.0),
+                    ],
                     center: .center,
-                    startRadius: size * 0.03,
+                    startRadius: 0,
                     endRadius: size * 0.5
                 )
             )
             .frame(width: size, height: size)
-            .blur(radius: 26)
+            .blur(radius: Tuning.poolBlur)
             .position(x: x, y: y)
             .blendMode(.plusLighter)
     }
@@ -98,9 +144,9 @@ struct AuroraBackground: View {
                 LinearGradient(
                     stops: [
                         .init(color: .white.opacity(0), location: 0.0),
-                        .init(color: .white.opacity(opacity * 0.5), location: 0.35),
+                        .init(color: .white.opacity(opacity * 0.65), location: 0.30),
                         .init(color: .white.opacity(opacity), location: 0.5),
-                        .init(color: .white.opacity(opacity * 0.5), location: 0.65),
+                        .init(color: .white.opacity(opacity * 0.65), location: 0.70),
                         .init(color: .white.opacity(0), location: 1.0),
                     ],
                     startPoint: .top,
