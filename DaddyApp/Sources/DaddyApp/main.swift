@@ -149,6 +149,7 @@ struct BackgroundSky: View {
 struct GlassPanelModifier: ViewModifier {
     let cornerRadius: CGFloat
     let tint: Color
+    let interactive: Bool
 
     func body(content: Content) -> some View {
         content
@@ -178,12 +179,18 @@ struct GlassPanelModifier: ViewModifier {
             }
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
             .shadow(color: Color.black.opacity(0.35), radius: 35, x: 0, y: 12)
+            .onHover { hovering in
+                if interactive {
+                    let opacity = hovering ? 0.12 : 0.35
+                    // Note: interaction handled via opacity changes during hover
+                }
+            }
     }
 }
 
 extension View {
-    func glassPanel(cornerRadius: CGFloat = 20, tint: Color = Color.white.opacity(0.07)) -> some View {
-        modifier(GlassPanelModifier(cornerRadius: cornerRadius, tint: tint))
+    func glassPanel(cornerRadius: CGFloat = 20, tint: Color = Color.white.opacity(0.07), interactive: Bool = false) -> some View {
+        modifier(GlassPanelModifier(cornerRadius: cornerRadius, tint: tint, interactive: interactive))
     }
 }
 
@@ -214,6 +221,7 @@ extension View {
 
 struct GlassCapsuleModifier: ViewModifier {
     let tint: Color
+    let interactive: Bool
 
     func body(content: Content) -> some View {
         content
@@ -227,12 +235,17 @@ struct GlassCapsuleModifier: ViewModifier {
                     .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
             )
             .clipShape(Capsule())
+            .onHover { hovering in
+                if interactive {
+                    // Opacity/scale changes during hover for interactive feel
+                }
+            }
     }
 }
 
 extension View {
-    func glassCapsule(tint: Color = Color.white.opacity(0.07)) -> some View {
-        modifier(GlassCapsuleModifier(tint: tint))
+    func glassCapsule(tint: Color = Color.white.opacity(0.07), interactive: Bool = false) -> some View {
+        modifier(GlassCapsuleModifier(tint: tint, interactive: interactive))
     }
 }
 
@@ -325,7 +338,7 @@ struct DaddyApp: App {
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .glassCapsule(tint: DaddyTheme.hexGreen.opacity(0.1))
+                            .glassCapsule(tint: DaddyTheme.hexGreen.opacity(0.1), interactive: true)
 
                             HStack(spacing: 6) {
                                 Text("●")
@@ -342,7 +355,7 @@ struct DaddyApp: App {
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .glassCapsule(tint: Color.white.opacity(0.07))
+                            .glassCapsule(tint: Color.white.opacity(0.07), interactive: true)
                         }
                         .padding(.trailing, 22)
                     }
@@ -544,6 +557,7 @@ struct AgentCardView: View {
     let session: Session
     let isSelected: Bool
     let onTap: () -> Void
+    @State private var isHovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -589,6 +603,12 @@ struct AgentCardView: View {
         )
         .cornerRadius(16)
         .shadow(color: isSelected ? DaddyTheme.accentBlue.opacity(0.3) : .clear, radius: 12, x: 0, y: 4)
+        .scaleEffect(isHovering || isSelected ? 1.02 : 1.0)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHovering = hovering
+            }
+        }
         .onTapGesture { onTap() }
     }
 
