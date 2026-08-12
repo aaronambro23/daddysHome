@@ -71,6 +71,12 @@ final class MockStore {
     private var tickCount: Int = 0
     private var streamCursor: [String: Int] = [:]
 
+    /// Owns every real pty. Seeded demo agents do not touch this.
+    @ObservationIgnored let sessionManager = SessionManager()
+
+    /// Surfaced in the UI when a launch fails (missing binary, bad cwd).
+    var launchError: String?
+
     init() {
         seed()
         selectedProjectID = projects.first?.id
@@ -133,7 +139,83 @@ final class MockStore {
 
     // MARK: - Actions
 
+    // MARK: - Real sessions
+
+    /// Which agent kinds actually have a binary on this machine. Used to grey
+    /// out launch options rather than let them fail silently.
+    func isInstalled(_ kind: AgentKind) -> Bool {
+        ExecutableResolver.resolve(Self.executableName(for: kind)) != nil
+    }
+
+    static func executableName(for kind: AgentKind) -> String {
+        switch kind {
+        case .claude: return "claude"
+        case .codex: return "codex"
+        case .cursor: return "agent"
+        case .opencode: return "opencode"
+        }
+    }
+
+    /// Spawns a real CLI in a real pty and adds a card backed by it.
+    func launchReal(_ kind: AgentKind, in project: MockProject) {
+        launchError = nil
+
+        let cwd = URL(fileURLWithPath: (project.path as NSString).expandingTildeInPath)
+        let workUnitID = "live-\(Int(Date().timeIntervalSince1970) % 10_000)"
+
+        do {
+            let session = try sessionManager.createSession(
+                projectID: project.id,
+                workUnitID: workUnitID,
+                agent: kind,
+                cwd: cwd
+            )
+            try sessionManager.launchSession(session, approvalPolicy: approvalPolicy)
+
+            let card = MockAgent(
+                id: session.id,
+                projectID: project.id,
+                agent: kind,
+                workUnitID: workUnitID,
+                model: Self.defaultModel(for: kind),
+                state: .working,
+                startedAt: Date(),
+                lastOutputAt: Date(),
+                sessionID: session.id
+            )
+            agents.append(card)
+            selectedProjectID = project.id
+            selectedAgentID = card.id
+        } catch {
+            launchError = "\(kind.rawValue): \(error.localizedDescription)"
+        }
+    }
+
+    /// The live pty behind an agent card, if it has one.
+    func pty(for agent: MockAgent) -> PTYProcess? {
+        guard let sessionID = agent.sessionID else { return nil }
+        return sessionManager.getPTYProcess(for: sessionID)
+    }
+
+    /// Terminate every real session. Called on app teardown so agents and
+    /// their descendants do not outlive the window.
+    func shutdownAllRealSessions() {
+        for agent in agents where agent.isRealSession {
+            if let id = agent.sessionID {
+                try? sessionManager.terminateSession(id)
+            }
+        }
+    }
+
+    // MARK: - Actions
+
     func interrupt(_ agentID: String) {
+        if let agent = agents.first(where: { $0.id == agentID }), let id = agent.sessionID {
+            try? sessionManager.interruptSession(id)
+            mutate(agentID) { $0.lastOutputAt = Date() }
+            return
+        }
+
         mutate(agentID) { agent in
             agent.state = .ready
             agent.lastOutputAt = Date()
@@ -142,6 +224,15 @@ final class MockStore {
     }
 
     func stop(_ agentID: String) {
+        if let agent = agents.first(where: { $0.id == agentID }), let id = agent.sessionID {
+            try? sessionManager.terminateSession(id)
+            mutate(agentID) { agent in
+                agent.state = .exited(exitCode: 0)
+                agent.lastOutputAt = Date()
+            }
+            return
+        }
+
         mutate(agentID) { agent in
             agent.state = .exited(exitCode: 0)
             agent.lastOutputAt = Date()
@@ -165,6 +256,16 @@ final class MockStore {
     func send(_ text: String, to agentID: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
+        // Real session: the text goes into the pty, and the agent's own output
+        // comes back through the terminal renderer. Nothing to fake.
+        if let agent = agents.first(where: { $0.id == agentID }), let id = agent.sessionID {
+            try? sessionManager.sendPrompt(trimmed, to: id)
+            mutate(agentID) { $0.lastOutputAt = Date() }
+            composeText = ""
+            return
+        }
+
         append(agentID, .command, "> \(trimmed)")
         mutate(agentID) { agent in
             agent.state = .working
@@ -233,15 +334,29 @@ final class MockStore {
             voiceLevel = 0.18
         }
 
-        // Stream output for whichever agents are working.
-        for agent in agents where agent.state == .working {
+        // Real sessions report their own state; never script over them.
+        for agent in agents where agent.isRealSession {
+            guard let sessionID = agent.sessionID else { continue }
+
+            if let live = sessionManager.session(sessionID) {
+                mutate(agent.id) { $0.state = live.state }
+            }
+
+            // The pty vanishing means the process died on its own.
+            if let pty = sessionManager.getPTYProcess(for: sessionID), !pty.isProcessRunning {
+                mutate(agent.id) { $0.state = .exited(exitCode: 0) }
+            }
+        }
+
+        // Stream scripted output for demo agents only.
+        for agent in agents where agent.state == .working && !agent.isRealSession {
             guard tickCount % 2 == 0 || agent.id == selectedAgentID else { continue }
             appendStreamLine(for: agent)
             mutate(agent.id) { $0.lastOutputAt = Date() }
         }
 
-        // Launching agents come up after a beat.
-        for agent in agents where agent.state == .launching {
+        // Launching demo agents come up after a beat.
+        for agent in agents where agent.state == .launching && !agent.isRealSession {
             mutate(agent.id) { $0.state = .working }
             append(agent.id, .output, "> ready · picking up \(agent.workUnitID)")
         }

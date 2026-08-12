@@ -37,8 +37,11 @@ Daddy is a local, voice-first macOS control plane for multi-agent AI coding work
   - Fully functional; tested successfully
 
 - **DaddyApp**: Native macOS application
-  - Built with AppKit (NSApplication)
-  - Integrated SwiftTerm for terminal rendering (LocalProcessTerminalView)
+  - Built with SwiftUI, targeting macOS 26 for the Liquid Glass APIs
+  - SwiftTerm's `TerminalView` for terminal rendering, wrapped by `TerminalSurface`
+    (`NSViewRepresentable`) as a **renderer only** — deliberately not
+    `LocalProcessTerminalView`, which owns its own child process and would bypass
+    DaddyCore
   - Split-view layout: status panel + terminal pane
   - Session creation buttons ("Launch Claude", "Open Project...")
   - SessionManager integration
@@ -49,9 +52,11 @@ Daddy is a local, voice-first macOS control plane for multi-agent AI coding work
 ```
 DaddyApp (macOS executable)
     ↓
-    +── LocalProcessTerminalView (SwiftTerm)
-    │        ↓
-    │    terminal rendering
+    +── TerminalSurface  →  SwiftTerm TerminalView   [renderer only]
+    │        ↑ feed(text:)          │ delegate.send / sizeChanged
+    │        │                      ↓
+    │        └──────────────── PTYProcess ───────────┘
+    │           (owned by SessionManager, never by the view)
     │
     +── SessionManager (DaddyCore)
          ↓
@@ -104,9 +109,32 @@ daddy/
 ## Key Technical Decisions
 
 ### PTY Control
-- Used SwiftTerm's `LocalProcessTerminalView` as the terminal emulator layer
-- `PTYProcess` wrapper avoids complexity of actor-based PTY handling; uses synchronous IO with background thread for capture
-- Callbacks for output changes allow SessionManager to monitor state transitions
+- `PTYProcess` is backed by SwiftTerm's `LocalProcess`, which uses `forkpty` — a **real
+  pseudo-terminal**. This matters: interactive CLIs call `isatty()`, and over a pipe they
+  disable colour, spinners and interactive approval prompts. (An earlier implementation
+  used `Process` + `Pipe`, which is why agent supervision never behaved correctly.)
+- `SessionManager` is the sole owner of every pty. The UI renders sessions but never
+  spawns them, so there is one process path for both the GUI and the CLI.
+- Two output callbacks: `registerChunkCallback` delivers only new text (used to feed the
+  terminal renderer), `registerOutputCallback` delivers the whole retained buffer (used
+  by state detection, which pattern-matches recent output).
+- **Shutdown kills the process group, not just the child.** Agents are Node processes
+  that spawn descendants (tool calls, MCP servers, ripgrep); signalling only the immediate
+  child orphans them. `shutdown()` sends SIGHUP + SIGTERM to `-pgid`, waits, then SIGKILLs,
+  and blocks until the group is confirmed gone. `terminate(graceSeconds:)` is the async
+  variant for UI use.
+- Incremental UTF-8 decoding: a pty read can split a multi-byte code point, so only the
+  valid prefix is decoded and the remainder carries into the next chunk.
+
+### Executable resolution
+- Adapters declare bare names (`claude`, `codex`, `agent`, `opencode`).
+- A GUI app launched from Finder inherits a minimal PATH (roughly
+  `/usr/bin:/bin:/usr/sbin:/sbin`) that does **not** include `~/.local/bin` or
+  `/opt/homebrew/bin`, where these CLIs actually live. `ExecutableResolver` resolves
+  against the login shell's PATH (`$SHELL -lc 'printf %s "$PATH"'`, cached) so launching
+  behaves identically from Terminal and from the Dock.
+- **The app must not be sandboxed.** SwiftTerm's own documentation notes that a sandboxed
+  host leaves the child shell without filesystem access. Relevant when bundling/notarizing.
 
 ### Agent Adapters
 - Each CLI (Claude, Codex, Cursor, OpenCode) has dedicated adapter
@@ -190,7 +218,10 @@ swift build
 4. **Markdown system**: Not yet implemented; directory structure planned
 5. **Voice commands**: Not yet implemented; parser architecture defined
 6. **Rate-limit detection**: Text-based heuristic; may need refinement based on real usage
-7. **UI**: Minimal for now; terminal pane is rendered but not yet wired to active sessions
+7. **UI**: The dashboard is driven by `MockStore` with seeded demo data. Real sessions
+   coexist — "Launch" spawns an actual CLI and its card renders a live `TerminalSurface`
+   — but the seeded agents are still scripted, and `SessionManager` is not yet the sole
+   source of what the UI displays.
 
 ## Build & Run
 
