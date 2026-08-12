@@ -20,11 +20,11 @@ aa039c3b8ed8044c39556555f2016aee76ddbba2	not-for-merge	branch 'io-measurement' o
 668d01f81abd3eff2f8f7e7ffacadcb3f90b2cde	not-for-merge	branch 'ios-onlyRedrawExposedRegion' of https://github.com/migueldeicaza/SwiftTerm
 d84d3eb4dd826ed3af77e47609833f5c5537e336	not-for-merge	branch 'kitty-gc' of https://github.com/migueldeicaza/SwiftTerm
 02056b59a2917ccd2eaee302f6a2cab5ba41cec4	not-for-merge	branch 'kitty-input' of https://github.com/migueldeicaza/SwiftTerm
-c590a52ef866c163cdc157d07312cb5118f3c9b2	not-for-merge	branch 'main' of https://github.com/migueldeicaza/SwiftTerm
+bf6aa3eb3fa113a3fc45bcc08f6d53e6013140ea	not-for-merge	branch 'main' of https://github.com/migueldeicaza/SwiftTerm
 7f8aef702ca0482d738abfd742349253280bbd4b	not-for-merge	branch 'master' of https://github.com/migueldeicaza/SwiftTerm
 a52e84d08a71da57e6ea756947d9bccf24bca390	not-for-merge	branch 'metal' of https://github.com/migueldeicaza/SwiftTerm
 df23452da93b358a9552f559ec24f7eb7f3d4d95	not-for-merge	branch 'metal-backend' of https://github.com/migueldeicaza/SwiftTerm
-03e64e19e8eb996c4e2323c17272173c8bc3b1a6	not-for-merge	branch 'new-io' of https://github.com/migueldeicaza/SwiftTerm
+6b51164b615df7d802d7c08ccdde11e6bf3ca0b3	not-for-merge	branch 'new-io' of https://github.com/migueldeicaza/SwiftTerm
 e2155ace50772505499017fd5acd67703e7ae8b1	not-for-merge	branch 'new-metal-foundation' of https://github.com/migueldeicaza/SwiftTerm
 f465b7e6049cb81f4de0af521654dd8bf195a926	not-for-merge	branch 'old-search' of https://github.com/migueldeicaza/SwiftTerm
 d90963ab7868d814c164d40b94d6fbe20487819d	not-for-merge	branch 'osc133' of https://github.com/migueldeicaza/SwiftTerm
@@ -277,7 +277,7 @@ a68843691c966448ec2fa858899fd178557befa4	not-for-merge	'refs/pull/589/head' of h
 ca17f3731efa761e4f32ecc0f3edab9e42463f41	not-for-merge	'refs/pull/590/head' of https://github.com/migueldeicaza/SwiftTerm
 cfc21d8ca9fa2c901416c2179b8a67ed1139db42	not-for-merge	'refs/pull/593/head' of https://github.com/migueldeicaza/SwiftTerm
 a108a1b32567af3fbbdc1e63a7d01818801c8b86	not-for-merge	'refs/pull/594/head' of https://github.com/migueldeicaza/SwiftTerm
-43fcd1db04ded656db7e7e236f7132f3340efd1f	not-for-merge	'refs/pull/594/merge' of https://github.com/migueldeicaza/SwiftTerm
+fdd052cfb7ea0ce86c2310b690ce44b47aae61f7	not-for-merge	'refs/pull/594/merge' of https://github.com/migueldeicaza/SwiftTerm
 dc92c1e736772c931be1f09a39e52863051f5167	not-for-merge	'refs/pull/595/head' of https://github.com/migueldeicaza/SwiftTerm
 63fc5c88c6572e319481f59733d8e6f85b7b6e73	not-for-merge	'refs/pull/598/head' of https://github.com/migueldeicaza/SwiftTerm
 25c62d8c5d3305dbb24b1dd31452ae49f2bf6f0f	not-for-merge	'refs/pull/599/head' of https://github.com/migueldeicaza/SwiftTerm
@@ -285,7 +285,7 @@ a47b356dc4b9bc82146d77c54b78014845dbbb03	not-for-merge	'refs/pull/600/head' of h
 2091ebbd871a87a364a07a78bd149216be3bab94	not-for-merge	'refs/pull/601/head' of https://github.com/migueldeicaza/SwiftTerm
 d90963ab7868d814c164d40b94d6fbe20487819d	not-for-merge	'refs/pull/602/head' of https://github.com/migueldeicaza/SwiftTerm
 8d586fce15571bba9cf570c66131e20ba4ec0bc5	not-for-merge	'refs/pull/603/head' of https://github.com/migueldeicaza/SwiftTerm
-c94c9f04aa0816824abe47cd34d490a4431df313	not-for-merge	'refs/pull/603/merge' of https://github.com/migueldeicaza/SwiftTerm
+744d9c25badb6fd4fd7aae3ddced53cb3c532edb	not-for-merge	'refs/pull/603/merge' of https://github.com/migueldeicaza/SwiftTerm
 6d3b51ce7c8b45fec670f5c072622c28a4208ecc	not-for-merge	'refs/pull/604/head' of https://github.com/migueldeicaza/SwiftTerm
 be3e8fa4baae4cc40ac74f4bb9004142ee885f18	not-for-merge	'refs/pull/605/head' of https://github.com/migueldeicaza/SwiftTerm
 75b153d9968e43dc756e578fb0ba95dfcf88d285	not-for-merge	'refs/pull/607/head' of https://github.com/migueldeicaza/SwiftTerm
@@ -297,7 +297,7 @@ f2273277a41bc12800ee955eaeef0d1c319374cd	not-for-merge	'refs/pull/611/head' of h
 f1706248f468008e4251307ace58889b73086411	not-for-merge	'refs/pull/612/head' of https://github.com/migueldeicaza/SwiftTerm
 67a7f865426c7b6a1ed6a6d49f10a491f56c83a5	not-for-merge	'refs/pull/613/head' of https://github.com/migueldeicaza/SwiftTerm
 a4a4585e07c0f713cb9bfe5ed48773b55af0e88f	not-for-merge	'refs/pull/614/head' of https://github.com/migueldeicaza/SwiftTerm
-ee3096f9a07a8c81e07da9c9c407c35928600c44	not-for-merge	'refs/pull/614/merge' of https://github.com/migueldeicaza/SwiftTerm
+580b4e151bdba26fbc3955848c51d5976fa73151	not-for-merge	'refs/pull/614/merge' of https://github.com/migueldeicaza/SwiftTerm
 96ad7809fd708b9011e22a545c785e0aedba248f	not-for-merge	'refs/pull/615/head' of https://github.com/migueldeicaza/SwiftTerm
 41095ddf3584cbdafa958808cad0b5cd8cdefbf5	not-for-merge	'refs/pull/616/head' of https://github.com/migueldeicaza/SwiftTerm
 e970a5799f1554a3b4f6282884c6b74c437dad49	not-for-merge	'refs/pull/617/head' of https://github.com/migueldeicaza/SwiftTerm
@@ -309,8 +309,10 @@ e970a5799f1554a3b4f6282884c6b74c437dad49	not-for-merge	'refs/pull/617/head' of h
 8f9184217449db226486bf822f6a97d019c2092f	not-for-merge	'refs/pull/622/head' of https://github.com/migueldeicaza/SwiftTerm
 61ce40fcc88adbafb42945837db76a341ce8c4d8	not-for-merge	'refs/pull/623/head' of https://github.com/migueldeicaza/SwiftTerm
 b4b78a380cffa1eee15bcc785f193c58d525529b	not-for-merge	'refs/pull/626/head' of https://github.com/migueldeicaza/SwiftTerm
-03e64e19e8eb996c4e2323c17272173c8bc3b1a6	not-for-merge	'refs/pull/627/head' of https://github.com/migueldeicaza/SwiftTerm
-e1563100dbccbe55f717b04322155cf9f8b8c1d9	not-for-merge	'refs/pull/627/merge' of https://github.com/migueldeicaza/SwiftTerm
+6b51164b615df7d802d7c08ccdde11e6bf3ca0b3	not-for-merge	'refs/pull/627/head' of https://github.com/migueldeicaza/SwiftTerm
+a963a17f16cf71756419d957ddd468afab86c835	not-for-merge	'refs/pull/627/merge' of https://github.com/migueldeicaza/SwiftTerm
+6d67ff3909c199381317855053e0349f94056845	not-for-merge	'refs/pull/629/head' of https://github.com/migueldeicaza/SwiftTerm
+a7ca5d5c0e29f1bf16f035a33517167b61d18cbb	not-for-merge	'refs/pull/629/merge' of https://github.com/migueldeicaza/SwiftTerm
 033e879c924de6f862cbc2fa52fc0ac698928071	not-for-merge	'refs/pull/64/head' of https://github.com/migueldeicaza/SwiftTerm
 12b1247f3c8ac823ba8f0b2d8dc99513d2857848	not-for-merge	'refs/pull/65/head' of https://github.com/migueldeicaza/SwiftTerm
 e629aa996d40e0d0e5f0debd1e5b7a0746658571	not-for-merge	'refs/pull/68/head' of https://github.com/migueldeicaza/SwiftTerm
