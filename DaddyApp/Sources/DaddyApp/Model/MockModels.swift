@@ -25,6 +25,14 @@ struct MockAgent: Identifiable {
     var startedAt: Date
     var lastOutputAt: Date
 
+    /// Non-nil when this card is backed by a real `SessionManager` session and
+    /// a live pty. Nil means it is seeded demo data with a scripted transcript.
+    var sessionID: String?
+
+    /// True when a real process is behind this card, as opposed to seeded
+    /// demo data. Distinct from `isRunning`, which is about agent state.
+    var isRealSession: Bool { sessionID != nil }
+
     var displayName: String { agent.rawValue.uppercased() }
 
     var uptime: String {

@@ -103,7 +103,10 @@ public final class SessionManager {
         }
         lock.unlock()
 
-        ptyProcess.terminate()
+        // Synchronous: the session is removed from the table on the next line,
+        // so this is the last chance to reach the process group. A fire-and-
+        // forget terminate would leak the agent and all of its descendants.
+        ptyProcess.shutdown()
 
         lock.lock()
         defer { lock.unlock() }

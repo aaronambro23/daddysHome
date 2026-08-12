@@ -23,14 +23,32 @@
 ## Test Results
 
 ```
-Total: 26/32 tests passing (6 failures)
-├── PTYIntegrationTests: 5/6 passing
-├── WorkflowStateTests: 7/7 passing ✅
-├── MarkdownWriterTests: 4/5 passing
-├── CommandParserTests: 9/14 passing
-├── DaddyCoreTests: 1/1 passing
-└── State detection: improved with regex patterns
+Total: 43/49 passing, 1 skipped (6 failures) — whole suite runs in ~4s
+├── PTYIntegrationTests:     5/5 passing ✅ (+1 skipped, opt-in live agent)
+├── ExecutableResolverTests: 6/6 passing ✅  new
+├── TerminalInputTests:      5/5 passing ✅  new
+├── UTF8ChunkDecodingTests:  5/5 passing ✅  new
+├── WorkflowStateTests:      7/7 passing ✅
+├── DaddyCoreTests:          1/1 passing ✅
+├── MarkdownWriterTests:     4/5 passing     (pre-existing failure)
+└── CommandParserTests:      9/14 passing    (pre-existing failures)
 ```
+
+All 6 remaining failures are pre-existing and confined to `CommandParserTests` and
+`MarkdownWriterTests`. Note `CommandParserTests` is mildly flaky — the failure count
+varies between 4 and 5 across runs.
+
+**Live agent tests are opt-in:**
+
+```bash
+DADDY_LIVE_AGENT_TESTS=1 swift test   # launches the real claude CLI
+```
+
+They are skipped by default because launching an interactive agent TUI inside XCTest is
+unreliable: the agent never exits on its own, and the runner can block at exit on the
+file descriptors it inherited. The pty layer is covered without it — `testSessionOutputCapture`
+exercises real `forkpty` output, and `testTerminateKillsDescendants` proves process-group
+shutdown reaps spawned children.
 
 ---
 
@@ -40,7 +58,14 @@ Total: 26/32 tests passing (6 failures)
 
 Core types and business logic:
 - **Models.swift**: `Project`, `WorkUnit`, `Session`, `AgentKind` (Sendable), `AgentState` (Codable), `ModelRef`, `Focus`
-- **PTYProcess.swift**: Thread-safe subprocess+PTY wrapper (use `LocalProcess` from SwiftTerm)
+- **PTYProcess.swift**: Real pseudo-terminal via SwiftTerm's `LocalProcess` (`forkpty`), so
+  agents see a TTY and keep colour/spinners/approval prompts. Process-group shutdown
+  (SIGHUP+SIGTERM → grace → SIGKILL) so Node descendants are not orphaned; incremental
+  UTF-8 decoding across chunk boundaries
+- **ExecutableResolver.swift**: Resolves bare CLI names against the login shell's PATH —
+  a GUI app's inherited PATH does not include `~/.local/bin` where the agents live
+- **TerminalInput.swift**: Typed input (control bytes, named keys, text) so an interrupt
+  is a real `0x03` and Enter is `\r`, not `\n`
 - **AgentAdapter.swift**: Protocol + 4 implementations (Claude, Codex, Cursor, OpenCode)
 - **SessionManager.swift**: Concurrent multi-session orchestration with NSLock
 - **WorkflowState.swift**: Project discovery, focus management, persistent JSON state
@@ -57,8 +82,9 @@ User-facing application:
 - Agent Dashboard: real-time cards showing:
   * Agent name (cyan), state emoji, project path
   * Model in use, work unit ID, last activity
-- SwiftTerm's `LocalProcessTerminalView` for terminal rendering
-- SessionManager integration
+- SwiftTerm's `TerminalView` for rendering, via `TerminalSurface` — a renderer only;
+  `SessionManager` owns the pty (not `LocalProcessTerminalView`, which would own its own)
+- SessionManager integration for real sessions launched from the dashboard
 - Real-time status icon (◇ inactive, ● active, ⚠ rate-limited)
 - macOS notifications for session state changes
 - HEX integration: listens for voice commands, auto-spawns agents
@@ -242,10 +268,10 @@ frontmost-only means clicking into Daddy first, which weakens hands-off use.
 ```
 DaddyApp (macOS executable)
     ↓
-    +── LocalProcessTerminalView (SwiftTerm)
-    │   └── terminal rendering
+    +── TerminalSurface → SwiftTerm TerminalView   [renderer only]
+    │   └── fed by PTYProcess; input/resize sent back to it
     │
-    +── SessionManager (DaddyCore)
+    +── SessionManager (DaddyCore)   [sole owner of every pty]
         ├── Session (per agent/project)
         │   ├── PTYProcess
         │   ├── AgentAdapter
