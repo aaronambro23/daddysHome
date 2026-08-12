@@ -1,8 +1,8 @@
 # Daddy — Project Status
 
-**Last Updated**: 2026-08-10  
+**Last Updated**: 2026-08-12  
 **Repository**: `git@github.com-personal:aaronambro23/daddysHome.git`  
-**Current Phase**: Milestones 0-6 complete, UI redesign + HEX integration complete
+**Current Phase**: Milestones 0-6 complete, UI redesign + HEX integration complete, Liquid Glass UI reskin in progress
 
 ---
 
@@ -135,6 +135,40 @@ Command-line control:
 - Green monospace terminal aesthetic
 - Auto-scrolls to latest output
 - Switch between agents by clicking cards
+
+**Liquid Glass UI Reskin** 🔄 In Progress (Step 1-5 Complete)
+- Dark gradient sky background (#0a1030 → #1a1046 → #07333f, 135°)
+- 3 drifting radial-gradient color orbs (blue, teal, purple) with soft 40-50px blur
+- Custom glass panel modifiers using .ultraThinMaterial + tint + border + highlight + shadow
+- Recolored all UI: accent blue (#33ccff), working green (#1aff99), amber, purple
+- Dark terminal pane with green text (#00ff80) and green-tinted border
+- Breathing dot animations for HEX-ready and working states
+- State-aware status badges (ready=neutral white, working=green+glow, rateLimited=amber, error=red)
+- Interactive enhancements: hover effects on pills (HEX ready, session count) and agent cards
+- Card scaling animation (1.02x) on hover/selection for tactile feedback
+- Header as flush glass strip with traffic-light clearance (78pt leading padding)
+
+**Liquid Glass Approach** (Current vs. Future):
+- **Current (macOS 13+)**: Custom `.ultraThinMaterial` glass modifiers with manual overlays
+  - Real blur effect via material background
+  - Manual tint layer, 1px stroke border, top edge highlight, drop shadow
+  - Hover-based interactivity (state tracking + scale effects)
+  - Works on current macOS version (no unreleased APIs)
+- **Deferred (macOS 26.0+)**: Apple's official Liquid Glass APIs (not yet available)
+  - `glassEffect()` modifier for automatic glass rendering
+  - `GlassEffectContainer` for intelligent shape blending
+  - `glassEffectID()` + morphing transitions for automatic card/shape morphing
+  - `.interactive()` for real-time pointer/touch responsiveness
+  - Better performance optimization via native framework
+
+**Next Steps (Step 6 & Beyond)**:
+- [ ] Terminal input (accept user typing in terminal pane → PTY)
+- [ ] Session management buttons (stop, interrupt on cards)
+- [ ] Full Liquid Glass morphing once macOS 26.0+ APIs available
+- [ ] Fix remaining 6 test failures
+- [ ] Session history/replay
+- [ ] Task status tags (feat/bug/refactor/test)
+- [ ] Clickable project cards to spawn new sessions
 
 ### Future Work (Beyond MVP)
 
