@@ -1,742 +1,794 @@
-import Cocoa
+import SwiftUI
 import DaddyCore
-import SwiftTerm
-import UserNotifications
 
-@main
-@MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    var window: NSWindow?
-    var sessionManager: SessionManager?
-    var terminalView: LocalProcessTerminalView?
-    var statusItem: NSStatusItem?
-    var statusMenu: NSMenu?
-    var statusUpdateTimer: Timer?
-    var projectsUpdateTimer: Timer?
-    var lastNotifiedStates: [String: AgentState] = [:]
-    var hexWatcher: HEXWatcher?
-    var commandParser = CommandParser()
+// MARK: - Color Hex Extension
 
-    var projectsViewController: ProjectsViewController?
-    var dashboardViewController: DashboardViewController?
-    var terminalViewController: TerminalViewController?
-    var activeSessionID: String?
+extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        let scanner = Scanner(string: hex)
+        var rgb: UInt64 = 0
+        _ = scanner.scanHexInt64(&rgb)
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        sessionManager = SessionManager()
-        requestNotificationPermissions()
-        setupMenuBar()
-        setupMainWindow()
-        startStatusUpdates()
-        setupHEXIntegration()
+        let r = Double((rgb >> 16) & 0xFF) / 255.0
+        let g = Double((rgb >> 8) & 0xFF) / 255.0
+        let b = Double(rgb & 0xFF) / 255.0
+
+        self.init(red: r, green: g, blue: b)
     }
+}
 
-    private func setupHEXIntegration() {
-        hexWatcher = HEXWatcher()
-        if hexWatcher != nil {
-            print("✓ HEX integration active (listening for voice commands)")
-            hexWatcher?.onNewTranscription = { [weak self] transcript in
-                self?.handleVoiceTranscript(transcript)
-            }
-        } else {
-            print("⚠ HEX not available (file not found)")
-        }
-    }
+// MARK: - Theme Namespace
 
-    private func handleVoiceTranscript(_ transcript: String) {
-        let command = commandParser.parse(transcript)
+enum DaddyTheme {
+    // Accent & Brand
+    static var accentBlue: Color { Color(hex: "#33ccff") }
 
-        guard let agent = command.agent else {
-            print("No agent specified in: \(transcript)")
-            return
-        }
+    // State Colors
+    static var workingGreen: Color { Color(hex: "#1aff99") }
+    static var hexGreen: Color { Color(hex: "#5affaa") }
+    static var amber: Color { Color(hex: "#ffc74d") }
+    static var purple: Color { Color(hex: "#cc99ff") }
+    static var errorRed: Color { Color(hex: "#ff7878") }
+    static var errorRedLight: Color { Color(hex: "#ffb3b3") }
 
-        guard let sessionManager = sessionManager else { return }
+    // UI Colors
+    static var tealLabel: Color { Color(hex: "#4de5cc") }
+    static var terminalGreen: Color { Color(hex: "#00ff80") }
+    static var terminalGreenDim: Color { Color(hex: "#8cffc8") }
+    static var readyCheckCyan: Color { Color(hex: "#9fe6ff") }
 
-        let projectURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    // Text Hierarchy
+    static var textPrimary: Color { Color.white.opacity(0.9) }
+    static var textSecondary: Color { Color.white.opacity(0.6) }
+    static var textTertiary: Color { Color.white.opacity(0.35) }
+    static var textMuted: Color { Color.white.opacity(0.3) }
+    static var textVeryDim: Color { Color.white.opacity(0.15) }
+}
 
-        do {
-            let modelRef = command.model.flatMap { ModelRef(agent: agent, rawValue: $0) }
-            let intentStr: String
-            switch command.intent {
-            case .work: intentStr = "work"
-            case .stop: intentStr = "stop"
-            case .resume: intentStr = "resume"
-            case .interrupt: intentStr = "interrupt"
-            case .review: intentStr = "review"
-            case .handoff: intentStr = "handoff"
-            case .status: intentStr = "status"
-            case .runTests: intentStr = "run_tests"
-            case .switchModel: intentStr = "switch_model"
-            case .unknown(let val): intentStr = val
-            }
+// MARK: - Background Sky
 
-            let session = try sessionManager.createSession(
-                projectID: projectURL.lastPathComponent,
-                workUnitID: intentStr,
-                agent: agent,
-                model: modelRef,
-                cwd: projectURL
+struct BackgroundSky: View {
+    @State private var orb1Offset = CGSize.zero
+    @State private var orb2Offset = CGSize.zero
+    @State private var orb3Offset = CGSize.zero
+    @State private var orb1Scale: CGFloat = 1.0
+    @State private var orb2Scale: CGFloat = 1.05
+    @State private var orb3Scale: CGFloat = 1.0
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                gradient: Gradient(stops: [
+                    .init(color: Color(hex: "#0a1030"), location: 0.0),
+                    .init(color: Color(hex: "#1a1046"), location: 0.45),
+                    .init(color: Color(hex: "#07333f"), location: 1.0),
+                ]),
+                startPoint: .init(x: 0, y: 0),
+                endPoint: .init(x: 1, y: 1)
             )
 
-            try sessionManager.launchSession(session)
-            print("✓ Spawned \(agent.rawValue) for: \(intentStr)")
+            // Orb 1: Blue top-left
+            Circle()
+                .fill(RadialGradient(
+                    gradient: Gradient(colors: [
+                        Color(red: 0.31, green: 0.47, blue: 1.0).opacity(0.55),
+                        Color(red: 0.31, green: 0.47, blue: 1.0).opacity(0.0)
+                    ]),
+                    center: .center,
+                    startRadius: 100,
+                    endRadius: 300
+                ))
+                .frame(width: 500, height: 500)
+                .blur(radius: 40)
+                .offset(orb1Offset)
+                .scaleEffect(orb1Scale)
 
-            if let prompt = command.prompt, !prompt.isEmpty {
-                try sessionManager.sendPrompt(prompt, to: session.id)
-            }
-        } catch {
-            print("✗ Error spawning agent: \(error)")
+            // Orb 2: Teal bottom-right
+            Circle()
+                .fill(RadialGradient(
+                    gradient: Gradient(colors: [
+                        Color(red: 0.0, green: 0.86, blue: 0.78).opacity(0.4),
+                        Color(red: 0.0, green: 0.86, blue: 0.78).opacity(0.0)
+                    ]),
+                    center: .center,
+                    startRadius: 80,
+                    endRadius: 350
+                ))
+                .frame(width: 600, height: 600)
+                .blur(radius: 50)
+                .offset(orb2Offset)
+                .scaleEffect(orb2Scale)
+
+            // Orb 3: Purple mid-canvas (optional, subtle)
+            Circle()
+                .fill(RadialGradient(
+                    gradient: Gradient(colors: [
+                        Color(red: 0.71, green: 0.31, blue: 1.0).opacity(0.38),
+                        Color(red: 0.71, green: 0.31, blue: 1.0).opacity(0.0)
+                    ]),
+                    center: .center,
+                    startRadius: 90,
+                    endRadius: 320
+                ))
+                .frame(width: 550, height: 550)
+                .blur(radius: 45)
+                .offset(orb3Offset)
+                .scaleEffect(orb3Scale)
         }
-
-        DispatchQueue.main.async {
-            self.dashboardViewController?.refresh()
+        .ignoresSafeArea()
+        .onAppear {
+            startOrbAnimation()
         }
     }
 
-    private func requestNotificationPermissions() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
-            if granted {
-                DispatchQueue.main.async {
-                    NSApplication.shared.registerForRemoteNotifications()
+    private func startOrbAnimation() {
+        withAnimation(.easeInOut(duration: 34).repeatForever(autoreverses: true)) {
+            orb1Offset = CGSize(width: -30, height: 25)
+            orb1Scale = 1.08
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            withAnimation(.easeInOut(duration: 46).repeatForever(autoreverses: true)) {
+                orb2Offset = CGSize(width: 35, height: -30)
+                orb2Scale = 1.0
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            withAnimation(.easeInOut(duration: 52).repeatForever(autoreverses: true)) {
+                orb3Offset = CGSize(width: -20, height: -20)
+                orb3Scale = 1.05
+            }
+        }
+    }
+}
+
+// MARK: - Glass Panel Modifier
+
+struct GlassPanelModifier: ViewModifier {
+    let cornerRadius: CGFloat
+    let tint: Color
+
+    func body(content: Content) -> some View {
+        content
+            .background(.ultraThinMaterial)
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(tint)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+            )
+            .overlay(alignment: .top) {
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(
+                        LinearGradient(
+                            gradient: Gradient(stops: [
+                                .init(color: Color.white.opacity(0.18), location: 0),
+                                .init(color: Color.white.opacity(0), location: 1)
+                            ]),
+                            startPoint: .topLeading,
+                            endPoint: .bottomLeading
+                        )
+                    )
+                    .frame(height: 1)
+                    .clipped()
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            .shadow(color: Color.black.opacity(0.35), radius: 35, x: 0, y: 12)
+    }
+}
+
+extension View {
+    func glassPanel(cornerRadius: CGFloat = 20, tint: Color = Color.white.opacity(0.07)) -> some View {
+        modifier(GlassPanelModifier(cornerRadius: cornerRadius, tint: tint))
+    }
+}
+
+// MARK: - Glass Strip (header variant, no rounding/shadow)
+
+struct GlassStripModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .background(.ultraThinMaterial)
+            .overlay(
+                Rectangle()
+                    .fill(Color.white.opacity(0.07))
+            )
+            .overlay(alignment: .bottom) {
+                Divider()
+                    .background(Color.white.opacity(0.14))
+            }
+    }
+}
+
+extension View {
+    func glassStrip() -> some View {
+        modifier(GlassStripModifier())
+    }
+}
+
+// MARK: - Glass Capsule/Pill
+
+struct GlassCapsuleModifier: ViewModifier {
+    let tint: Color
+
+    func body(content: Content) -> some View {
+        content
+            .background(.ultraThinMaterial)
+            .overlay(
+                Capsule()
+                    .fill(tint)
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+            )
+            .clipShape(Capsule())
+    }
+}
+
+extension View {
+    func glassCapsule(tint: Color = Color.white.opacity(0.07)) -> some View {
+        modifier(GlassCapsuleModifier(tint: tint))
+    }
+}
+
+// MARK: - Breathing Dot
+
+struct BreathingDot: View {
+    let color: Color
+    let glowRadius: CGFloat
+
+    @State private var isBreathing = false
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 6, height: 6)
+            .shadow(color: color.opacity(0.8), radius: isBreathing ? glowRadius : 0)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) {
+                    isBreathing = true
                 }
             }
-        }
     }
+}
 
-    private func setupMenuBar() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusMenu = NSMenu()
-        statusItem?.menu = statusMenu
-        updateStatusItem()
-    }
+// MARK: - State Badge Colors Helper
 
-    private func updateStatusItem() {
-        guard let statusItem = statusItem, let sessionManager = sessionManager, let menu = statusMenu else { return }
-
-        let sessions = sessionManager.getActiveSessions()
-        let activeSessions = sessions.count
-        let rateLimited = sessions.filter { $0.state == .rateLimited }.count
-
-        if activeSessions == 0 {
-            statusItem.button?.title = "◇"
-        } else if rateLimited > 0 {
-            statusItem.button?.title = "⚠ \(activeSessions)"
-        } else {
-            statusItem.button?.title = "● \(activeSessions)"
-        }
-
-        checkAndNotifyStateChanges(sessions: sessions)
-
-        menu.removeAllItems()
-        let headerItem = NSMenuItem(title: "Active Sessions: \(activeSessions)", action: nil, keyEquivalent: "")
-        headerItem.isEnabled = false
-        menu.addItem(headerItem)
-
-        if activeSessions > 0 {
-            menu.addItem(NSMenuItem.separator())
-            for session in sessions {
-                let stateEmoji = stateEmoji(session.state)
-                let title = "\(stateEmoji) \(session.agent.rawValue) • \(session.projectID)"
-                let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-                item.isEnabled = false
-                menu.addItem(item)
-            }
-        }
-
-        menu.addItem(NSMenuItem.separator())
-
-        let showWindowItem = NSMenuItem(
-            title: "Show Window",
-            action: #selector(showWindowClicked),
-            keyEquivalent: ""
-        )
-        showWindowItem.target = self
-        menu.addItem(showWindowItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let quitItem = NSMenuItem(
-            title: "Quit Daddy",
-            action: #selector(NSApplication.terminate(_:)),
-            keyEquivalent: "q"
-        )
-        menu.addItem(quitItem)
-    }
-
-    private func checkAndNotifyStateChanges(sessions: [Session]) {
-        for session in sessions {
-            let lastState = lastNotifiedStates[session.id]
-
-            if lastState == nil || lastState != session.state {
-                notifyStateChange(session: session, oldState: lastState)
-                lastNotifiedStates[session.id] = session.state
-            }
-        }
-
-        for key in lastNotifiedStates.keys where !sessions.contains(where: { $0.id == key }) {
-            lastNotifiedStates.removeValue(forKey: key)
-        }
-    }
-
-    private func notifyStateChange(session: Session, oldState: AgentState?) {
-        guard shouldNotify(state: session.state) else { return }
-
-        let content = UNMutableNotificationContent()
-        content.sound = .default
-
-        switch session.state {
-        case .rateLimited:
-            content.title = "Rate Limited"
-            content.body = "\(session.agent.rawValue) is rate-limited in \(session.projectID)"
-        case .error(let msg):
-            content.title = "Session Error"
-            content.body = "\(session.agent.rawValue): \(msg)"
-        case .exited:
-            content.title = "Session Exited"
-            content.body = "\(session.agent.rawValue) exited in \(session.projectID)"
-        case .ready:
-            if oldState == .launching {
-                content.title = "Ready"
-                content.body = "\(session.agent.rawValue) is ready in \(session.projectID)"
-            }
-        default:
-            return
-        }
-
-        let request = UNNotificationRequest(identifier: session.id, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request) { _ in }
-    }
-
-    private func shouldNotify(state: AgentState) -> Bool {
+struct StateColors {
+    static func badge(for state: AgentState) -> (bg: Color, border: Color, text: Color, dot: Color?) {
         switch state {
-        case .rateLimited, .error, .exited, .ready:
-            return true
-        default:
-            return false
-        }
-    }
-
-    private func stateEmoji(_ state: AgentState) -> String {
-        switch state {
-        case .launching:
-            return "⚙️"
-        case .ready:
-            return "✓"
         case .working:
-            return "▶"
+            return (bg: DaddyTheme.workingGreen.opacity(0.14), border: DaddyTheme.workingGreen.opacity(0.35), text: DaddyTheme.workingGreen, dot: DaddyTheme.workingGreen)
         case .rateLimited:
-            return "⏸"
-        case .error:
-            return "✗"
-        case .exited:
-            return "⊗"
-        }
-    }
-
-    private func startStatusUpdates() {
-        statusUpdateTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.updateStatusItem()
-                self?.dashboardViewController?.refresh()
-            }
-        }
-
-        projectsUpdateTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.projectsViewController?.refreshProjects()
-            }
-        }
-    }
-
-    @objc func showWindowClicked() {
-        window?.makeKeyAndOrderFront(nil)
-        NSApplication.shared.activate(ignoringOtherApps: true)
-    }
-
-    private func setupMainWindow() {
-        let window = NSWindow(
-            contentRect: NSRect(x: 100, y: 100, width: 1400, height: 900),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-
-        window.title = "Daddy — AI Command Center"
-        window.isReleasedWhenClosed = false
-        window.appearance = NSAppearance(named: .darkAqua)
-
-        let containerView = NSView(frame: window.contentView!.bounds)
-        containerView.wantsLayer = true
-        containerView.layer?.backgroundColor = NSColor(red: 0.05, green: 0.05, blue: 0.08, alpha: 1).cgColor
-
-        let headerView = createHeaderView(width: window.frame.width)
-        containerView.addSubview(headerView)
-
-        let splitView = NSSplitView(frame: NSRect(
-            x: 0, y: 0, width: window.frame.width, height: window.frame.height - 60
-        ))
-        splitView.isVertical = true
-        splitView.dividerStyle = .thin
-
-        let projectsPanel = NSView()
-        projectsPanel.wantsLayer = true
-        projectsPanel.layer?.backgroundColor = NSColor(red: 0.08, green: 0.08, blue: 0.12, alpha: 1).cgColor
-
-        projectsViewController = ProjectsViewController(sessionManager: sessionManager)
-        if let controller = projectsViewController {
-            projectsPanel.addSubview(controller.view)
-            controller.view.frame = projectsPanel.bounds
-            controller.view.autoresizingMask = [.width, .height]
-        }
-        splitView.addArrangedSubview(projectsPanel)
-
-        let middlePanel = NSView()
-        middlePanel.wantsLayer = true
-        middlePanel.layer?.backgroundColor = NSColor(red: 0.06, green: 0.06, blue: 0.1, alpha: 1).cgColor
-
-        dashboardViewController = DashboardViewController(sessionManager: sessionManager)
-        if let controller = dashboardViewController {
-            controller.onSessionSelected = { [weak self] sessionID in
-                self?.selectSession(sessionID)
-            }
-            middlePanel.addSubview(controller.view)
-            controller.view.frame = middlePanel.bounds
-            controller.view.autoresizingMask = [.width, .height]
-        }
-        splitView.addArrangedSubview(middlePanel)
-
-        let terminalPanel = NSView()
-        terminalPanel.wantsLayer = true
-        terminalPanel.layer?.backgroundColor = NSColor.black.cgColor
-
-        terminalViewController = TerminalViewController(sessionManager: sessionManager)
-        if let controller = terminalViewController {
-            terminalPanel.addSubview(controller.view)
-            controller.view.frame = terminalPanel.bounds
-            controller.view.autoresizingMask = [.width, .height]
-        }
-
-        splitView.addArrangedSubview(terminalPanel)
-
-        splitView.frame = NSRect(
-            x: 0, y: 0, width: window.frame.width, height: window.frame.height - 60
-        )
-        splitView.autoresizingMask = [.width, .height]
-        containerView.addSubview(splitView)
-
-        containerView.addSubview(headerView)
-        window.contentView = containerView
-        self.window = window
-        window.makeKeyAndOrderFront(nil)
-    }
-
-    private func createHeaderView(width: CGFloat) -> NSView {
-        let header = NSView(frame: NSRect(x: 0, y: window!.frame.height - 60, width: width, height: 60))
-        header.wantsLayer = true
-        header.layer?.backgroundColor = NSColor(red: 0.02, green: 0.02, blue: 0.05, alpha: 1).cgColor
-
-        let borderView = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 1))
-        borderView.wantsLayer = true
-        borderView.layer?.backgroundColor = NSColor(red: 0.2, green: 0.3, blue: 0.9, alpha: 0.3).cgColor
-        header.addSubview(borderView)
-
-        let titleLabel = NSTextField(frame: NSRect(x: 20, y: 25, width: 300, height: 25))
-        titleLabel.stringValue = "◆ DADDY — AI Command Center"
-        titleLabel.isEditable = false
-        titleLabel.isBordered = false
-        titleLabel.backgroundColor = NSColor.clear
-        titleLabel.font = NSFont.systemFont(ofSize: 16, weight: .bold)
-        titleLabel.textColor = NSColor(red: 0.2, green: 0.8, blue: 1.0, alpha: 1)
-        header.addSubview(titleLabel)
-
-        let hexLabel = NSTextField(frame: NSRect(x: width - 200, y: 25, width: 180, height: 20))
-        hexLabel.stringValue = "HEX: Ready (double-click option)"
-        hexLabel.isEditable = false
-        hexLabel.isBordered = false
-        hexLabel.backgroundColor = NSColor.clear
-        hexLabel.font = NSFont.systemFont(ofSize: 11)
-        hexLabel.textColor = NSColor(red: 0.5, green: 1.0, blue: 0.5, alpha: 0.7)
-        header.addSubview(hexLabel)
-
-        return header
-    }
-
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        return false
-    }
-
-    @objc func selectSession(_ sessionID: String) {
-        activeSessionID = sessionID
-        terminalViewController?.displaySession(sessionID)
-    }
-}
-
-class ProjectsViewController: NSViewController {
-    var sessionManager: SessionManager?
-    var projects: [URL] = []
-    var tableView: NSTableView?
-
-    init(sessionManager: SessionManager?) {
-        super.init(nibName: nil, bundle: nil)
-        self.sessionManager = sessionManager
-        loadProjects()
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func loadView() {
-        let container = NSView()
-        container.wantsLayer = true
-
-        let titleLabel = NSTextField(frame: NSRect(x: 15, y: container.frame.height - 40, width: 250, height: 25))
-        titleLabel.stringValue = "📁 Active Projects"
-        titleLabel.isEditable = false
-        titleLabel.isBordered = false
-        titleLabel.backgroundColor = NSColor.clear
-        titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.textColor = NSColor(red: 0.3, green: 0.9, blue: 0.8, alpha: 1)
-        container.addSubview(titleLabel)
-
-        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 280, height: container.frame.height - 50))
-        scrollView.hasVerticalScroller = true
-        scrollView.autohidesScrollers = true
-
-        tableView = NSTableView(frame: scrollView.bounds)
-        tableView?.delegate = self
-        tableView?.dataSource = self
-        tableView?.headerView = nil
-        tableView?.backgroundColor = NSColor.clear
-
-        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
-        column.width = 260
-        tableView?.addTableColumn(column)
-
-        scrollView.documentView = tableView
-        container.addSubview(scrollView)
-
-        self.view = container
-    }
-
-    func loadProjects() {
-        let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        do {
-            projects = try FileManager.default.contentsOfDirectory(
-                at: documentsURL,
-                includingPropertiesForKeys: nil,
-                options: .skipsHiddenFiles
-            ).filter { $0.hasDirectoryPath }
-            tableView?.reloadData()
-        } catch {
-            print("Error loading projects: \(error)")
-        }
-    }
-
-    func refreshProjects() {
-        loadProjects()
-    }
-}
-
-extension ProjectsViewController: NSTableViewDelegate, NSTableViewDataSource {
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        return projects.count
-    }
-
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let cell = NSTableCellView()
-        let textField = NSTextField(frame: NSRect(x: 10, y: 0, width: 250, height: 24))
-        textField.stringValue = projects[row].lastPathComponent
-        textField.isEditable = false
-        textField.isBordered = false
-        textField.backgroundColor = NSColor.clear
-        textField.font = NSFont.systemFont(ofSize: 12)
-        textField.textColor = NSColor(red: 0.7, green: 0.8, blue: 0.9, alpha: 1)
-        cell.addSubview(textField)
-        return cell
-    }
-
-    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        return 28
-    }
-}
-
-class DashboardViewController: NSViewController {
-    var sessionManager: SessionManager?
-    var scrollView: NSScrollView?
-    var onSessionSelected: ((String) -> Void)?
-    var selectedSessionID: String?
-    var sessionIDByTag: [Int: String] = [:]
-    var tagCounter = 0
-
-    init(sessionManager: SessionManager?) {
-        super.init(nibName: nil, bundle: nil)
-        self.sessionManager = sessionManager
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func loadView() {
-        let container = NSView()
-        container.wantsLayer = true
-
-        let titleLabel = NSTextField(frame: NSRect(x: 20, y: container.frame.height - 40, width: 300, height: 25))
-        titleLabel.stringValue = "⚡ Active Agents"
-        titleLabel.isEditable = false
-        titleLabel.isBordered = false
-        titleLabel.backgroundColor = NSColor.clear
-        titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.textColor = NSColor(red: 0.2, green: 1.0, blue: 0.8, alpha: 1)
-        container.addSubview(titleLabel)
-
-        scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: container.frame.width, height: container.frame.height - 50))
-        scrollView?.hasVerticalScroller = true
-        scrollView?.autohidesScrollers = true
-        container.addSubview(scrollView!)
-
-        self.view = container
-        refresh()
-    }
-
-    func refresh() {
-        guard let scrollView = scrollView, let sessionManager = sessionManager else { return }
-
-        let sessions = sessionManager.getActiveSessions()
-
-        let contentView = NSView()
-        contentView.wantsLayer = true
-
-        tagCounter = 0
-        sessionIDByTag.removeAll()
-
-        let yOffset: CGFloat = CGFloat(sessions.count) * 120
-
-        if sessions.isEmpty {
-            let emptyLabel = NSTextField(frame: NSRect(x: 20, y: scrollView.frame.height / 2 - 30, width: 300, height: 60))
-            emptyLabel.stringValue = "No active agents\n(speak to Daddy via HEX)"
-            emptyLabel.isEditable = false
-            emptyLabel.isBordered = false
-            emptyLabel.backgroundColor = NSColor.clear
-            emptyLabel.font = NSFont.systemFont(ofSize: 12)
-            emptyLabel.textColor = NSColor(red: 0.4, green: 0.4, blue: 0.5, alpha: 0.6)
-            emptyLabel.alignment = .center
-            contentView.addSubview(emptyLabel)
-        } else {
-            for (index, session) in sessions.enumerated() {
-                let card = createSessionCard(session: session, y: yOffset - CGFloat(index + 1) * 120)
-                contentView.addSubview(card)
-            }
-        }
-
-        contentView.frame = NSRect(x: 0, y: 0, width: scrollView.frame.width, height: yOffset)
-        scrollView.documentView = contentView
-    }
-
-    private func createSessionCard(session: Session, y: CGFloat) -> NSView {
-        let card = SessionCardView(session: session, frame: NSRect(x: 15, y: y, width: 380, height: 110))
-        card.wantsLayer = true
-
-        let isSelected = selectedSessionID == session.id
-        let bgColor = isSelected
-            ? NSColor(red: 0.2, green: 0.3, blue: 0.5, alpha: 1.0)
-            : NSColor(red: 0.12, green: 0.15, blue: 0.25, alpha: 0.8)
-        let borderColor = isSelected
-            ? NSColor(red: 0.2, green: 0.8, blue: 1.0, alpha: 0.8)
-            : NSColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 0.4)
-
-        card.layer?.backgroundColor = bgColor.cgColor
-        card.layer?.borderColor = borderColor.cgColor
-        card.layer?.borderWidth = isSelected ? 2 : 1
-        card.layer?.cornerRadius = 8
-
-        let button = NSButton(frame: card.bounds)
-        button.bezelStyle = .recessed
-        button.isBordered = false
-        button.title = ""
-        button.target = self
-        button.action = #selector(cardClicked(_:))
-        button.tag = tagCounter
-        sessionIDByTag[tagCounter] = session.id
-        tagCounter += 1
-        card.addSubview(button)
-
-        let agentLabel = NSTextField(frame: NSRect(x: 15, y: 85, width: 200, height: 18))
-        agentLabel.stringValue = "▸ \(session.agent.rawValue.uppercased())"
-        agentLabel.isEditable = false
-        agentLabel.isBordered = false
-        agentLabel.backgroundColor = NSColor.clear
-        agentLabel.font = NSFont.systemFont(ofSize: 13, weight: .bold)
-        agentLabel.textColor = NSColor(red: 0.1, green: 1.0, blue: 0.6, alpha: 1)
-        card.addSubview(agentLabel)
-
-        let stateEmoji = stateEmojiForCard(session.state)
-        let stateLabel = NSTextField(frame: NSRect(x: 320, y: 85, width: 50, height: 18))
-        stateLabel.stringValue = stateEmoji
-        stateLabel.isEditable = false
-        stateLabel.isBordered = false
-        stateLabel.backgroundColor = NSColor.clear
-        stateLabel.font = NSFont.systemFont(ofSize: 14)
-        card.addSubview(stateLabel)
-
-        let projectLabel = NSTextField(frame: NSRect(x: 15, y: 65, width: 360, height: 16))
-        projectLabel.stringValue = "📂 " + session.projectID
-        projectLabel.isEditable = false
-        projectLabel.isBordered = false
-        projectLabel.backgroundColor = NSColor.clear
-        projectLabel.font = NSFont.systemFont(ofSize: 11)
-        projectLabel.textColor = NSColor(red: 0.6, green: 0.7, blue: 0.8, alpha: 0.8)
-        card.addSubview(projectLabel)
-
-        let modelLabel = NSTextField(frame: NSRect(x: 15, y: 45, width: 360, height: 14))
-        let modelStr = session.model?.rawValue ?? "default"
-        modelLabel.stringValue = "Model: \(modelStr)"
-        modelLabel.isEditable = false
-        modelLabel.isBordered = false
-        modelLabel.backgroundColor = NSColor.clear
-        modelLabel.font = NSFont.systemFont(ofSize: 10)
-        modelLabel.textColor = NSColor(red: 0.5, green: 1.0, blue: 0.7, alpha: 0.7)
-        card.addSubview(modelLabel)
-
-        let workUnitLabel = NSTextField(frame: NSRect(x: 15, y: 25, width: 360, height: 14))
-        workUnitLabel.stringValue = "Work: \(session.workUnitID)"
-        workUnitLabel.isEditable = false
-        workUnitLabel.isBordered = false
-        workUnitLabel.backgroundColor = NSColor.clear
-        workUnitLabel.font = NSFont.systemFont(ofSize: 10)
-        workUnitLabel.textColor = NSColor(red: 0.8, green: 0.6, blue: 1.0, alpha: 0.7)
-        card.addSubview(workUnitLabel)
-
-        let timeLabel = NSTextField(frame: NSRect(x: 15, y: 8, width: 360, height: 12))
-        let timeAgo = formatTimeAgo(session.lastOutputAt)
-        timeLabel.stringValue = "Last: \(timeAgo)"
-        timeLabel.isEditable = false
-        timeLabel.isBordered = false
-        timeLabel.backgroundColor = NSColor.clear
-        timeLabel.font = NSFont.systemFont(ofSize: 9)
-        timeLabel.textColor = NSColor(red: 0.5, green: 0.5, blue: 0.6, alpha: 0.6)
-        card.addSubview(timeLabel)
-
-        return card
-    }
-
-    private func stateEmojiForCard(_ state: AgentState) -> String {
-        switch state {
-        case .launching:
-            return "⚙️"
+            return (bg: DaddyTheme.amber.opacity(0.12), border: DaddyTheme.amber.opacity(0.3), text: DaddyTheme.amber, dot: nil)
         case .ready:
-            return "✓"
-        case .working:
-            return "▶"
-        case .rateLimited:
-            return "⏸"
+            return (bg: Color.white.opacity(0.07), border: Color.white.opacity(0.18), text: Color.white.opacity(0.8), dot: nil)
         case .error:
-            return "✗"
+            return (bg: DaddyTheme.errorRed.opacity(0.15), border: DaddyTheme.errorRed.opacity(0.35), text: DaddyTheme.errorRed, dot: nil)
+        case .launching:
+            return (bg: DaddyTheme.accentBlue.opacity(0.15), border: DaddyTheme.accentBlue.opacity(0.35), text: DaddyTheme.accentBlue, dot: nil)
         case .exited:
-            return "⊗"
+            return (bg: Color.white.opacity(0.05), border: Color.white.opacity(0.1), text: Color.white.opacity(0.5), dot: nil)
         }
+    }
+}
+
+@main
+struct DaddyApp: App {
+    @State private var sessionManager = SessionManager()
+    @State private var sessions: [Session] = []
+    @State private var selectedSessionID: String?
+
+    var body: some Scene {
+        WindowGroup {
+            ZStack {
+                // BACKGROUND: Dark sky with drifting orbs
+                BackgroundSky()
+
+                VStack(spacing: 0) {
+                    // HEADER BAR - Glass strip
+                    HStack(spacing: 0) {
+                        HStack(spacing: 10) {
+                            Text("◆")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(DaddyTheme.accentBlue)
+
+                            Text("DADDY")
+                                .font(.system(size: 15, weight: .bold, design: .default))
+                                .tracking(0.5)
+                                .foregroundColor(DaddyTheme.accentBlue)
+
+                            Text("AI Command Center")
+                                .font(.system(size: 11, weight: .regular))
+                                .foregroundColor(DaddyTheme.textTertiary)
+                        }
+                        .padding(.leading, 78)
+
+                        Spacer()
+
+                        HStack(spacing: 12) {
+                            HStack(spacing: 6) {
+                                BreathingDot(color: DaddyTheme.hexGreen, glowRadius: 8)
+
+                                Text("HEX Ready")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundColor(DaddyTheme.hexGreen)
+
+                                Text("double-click ⌥")
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .foregroundColor(DaddyTheme.hexGreen.opacity(0.7))
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .glassCapsule(tint: DaddyTheme.hexGreen.opacity(0.1))
+
+                            HStack(spacing: 6) {
+                                Text("●")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(DaddyTheme.accentBlue)
+
+                                Text("\(sessions.count)")
+                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                    .foregroundColor(DaddyTheme.textPrimary)
+
+                                Text("sessions")
+                                    .font(.system(size: 10, weight: .regular))
+                                    .foregroundColor(DaddyTheme.textSecondary)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .glassCapsule(tint: Color.white.opacity(0.07))
+                        }
+                        .padding(.trailing, 22)
+                    }
+                    .padding(.vertical, 22)
+                    .glassStrip()
+
+                    // MAIN CONTENT
+                    HStack(spacing: 16) {
+                        ProjectsSidebar()
+                            .frame(width: 264)
+
+                        AgentDashboard(
+                            sessions: sessions,
+                            selectedSessionID: selectedSessionID,
+                            onSelectSession: { selectedSessionID = $0 }
+                        )
+
+                        TerminalPane(
+                            sessions: sessions,
+                            selectedSessionID: selectedSessionID
+                        )
+                        .frame(width: 496)
+                    }
+                    .padding(16)
+                }
+            }
+            .frame(minWidth: 1400, minHeight: 900)
+            .onAppear { refreshSessions() }
+            .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+                refreshSessions()
+            }
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentMinSize)
+    }
+
+    private func refreshSessions() {
+        sessions = sessionManager.getActiveSessions()
+    }
+}
+
+// MARK: - Projects Sidebar
+struct ProjectsSidebar: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("ACTIVE PROJECTS")
+                        .font(.system(size: 11, weight: .semibold, design: .default))
+                        .tracking(0.6)
+                        .foregroundColor(DaddyTheme.tealLabel)
+
+                    Spacer()
+
+                    Text("~/Documents")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(DaddyTheme.textSecondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
+
+                Divider()
+                    .background(DaddyTheme.textVeryDim)
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 3) {
+                    ProjectRow(name: "daddysHome", isActive: true, sessionCount: 2)
+                    ProjectRow(name: "hex-bridge", isActive: false, sessionCount: 1)
+                    ProjectRow(name: "daddycore-spm", isActive: false, sessionCount: nil)
+                    ProjectRow(name: "notes-sync", isActive: false, sessionCount: nil)
+                    ProjectRow(name: "portfolio-site", isActive: false, sessionCount: nil)
+                    ProjectRow(name: "tax-2026", isActive: false, sessionCount: nil)
+                }
+                .padding(8)
+            }
+
+            VStack(alignment: .leading, spacing: 0) {
+                Divider()
+                    .background(DaddyTheme.textVeryDim)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("FOCUS")
+                        .font(.system(size: 9, weight: .medium, design: .default))
+                        .tracking(0.6)
+                        .foregroundColor(DaddyTheme.textTertiary)
+
+                    Text("daddysHome › work")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(DaddyTheme.textMuted)
+                }
+                .padding(12)
+            }
+        }
+        .glassPanel(cornerRadius: 20)
+    }
+}
+
+struct ProjectRow: View {
+    let name: String
+    let isActive: Bool
+    let sessionCount: Int?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(isActive ? DaddyTheme.workingGreen : DaddyTheme.textVeryDim)
+                .frame(width: 6, height: 6)
+
+            Text(name)
+                .font(.system(size: 12.5, weight: isActive ? .medium : .regular))
+                .foregroundColor(isActive ? DaddyTheme.workingGreen : DaddyTheme.textSecondary)
+
+            Spacer()
+
+            if let count = sessionCount {
+                Text("\(count)")
+                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .foregroundColor(isActive ? DaddyTheme.workingGreen : DaddyTheme.textTertiary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(isActive ? DaddyTheme.workingGreen.opacity(0.15) : Color.white.opacity(0.06))
+                    .cornerRadius(6)
+            }
+        }
+        .padding(9)
+        .padding(.horizontal, 2)
+        .background(
+            isActive
+                ? DaddyTheme.workingGreen.opacity(0.08)
+                : Color.clear
+        )
+        .border(
+            isActive
+                ? DaddyTheme.workingGreen.opacity(0.25)
+                : Color.clear,
+            width: 1
+        )
+        .cornerRadius(12)
+    }
+}
+
+// MARK: - Agent Dashboard
+struct AgentDashboard: View {
+    let sessions: [Session]
+    let selectedSessionID: String?
+    let onSelectSession: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("ACTIVE AGENTS")
+                    .font(.system(size: 11, weight: .semibold, design: .default))
+                    .tracking(0.6)
+                    .foregroundColor(DaddyTheme.workingGreen)
+
+                Spacer()
+
+                Text("refresh 1s")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(DaddyTheme.textSecondary)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 16)
+            .border(DaddyTheme.textVeryDim, width: 0.5)
+
+            ScrollView {
+                VStack(spacing: 12) {
+                    if sessions.isEmpty {
+                        VStack(spacing: 8) {
+                            Text("No active sessions")
+                                .font(.system(size: 11, weight: .regular))
+                                .foregroundColor(DaddyTheme.textSecondary)
+
+                            Text("Speak to Daddy or launch an agent")
+                                .font(.system(size: 10, weight: .regular))
+                                .foregroundColor(DaddyTheme.textSecondary.opacity(0.8))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(40)
+                    } else {
+                        ForEach(sessions, id: \.id) { session in
+                            AgentCardView(
+                                session: session,
+                                isSelected: selectedSessionID == session.id,
+                                onTap: { onSelectSession(session.id) }
+                            )
+                        }
+                    }
+                }
+                .padding(16)
+            }
+        }
+        .glassPanel(cornerRadius: 20)
+    }
+}
+
+struct AgentCardView: View {
+    let session: Session
+    let isSelected: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 9) {
+                Text("▸")
+                    .font(.system(size: 10))
+                    .foregroundColor(DaddyTheme.workingGreen)
+
+                Text(session.agent.rawValue.uppercased())
+                    .font(.system(size: 13, weight: .bold, design: .default))
+                    .tracking(1.0)
+                    .foregroundColor(DaddyTheme.workingGreen)
+
+                Spacer()
+
+                StatusBadge(state: session.state)
+            }
+
+            VStack(alignment: .leading, spacing: 7) {
+                MetricRow(label: "project", value: session.projectID, color: .default)
+                MetricRow(label: "model", value: session.model?.rawValue ?? "default", color: .green)
+                MetricRow(label: "work", value: session.workUnitID, color: .purple)
+            }
+
+            HStack {
+                Spacer()
+                Text("last output · \(formatTimeAgo(session.lastOutputAt))")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(DaddyTheme.textTertiary)
+            }
+        }
+        .padding(15)
+        .background(
+            isSelected
+                ? DaddyTheme.accentBlue.opacity(0.12)
+                : Color.white.opacity(0.04)
+        )
+        .border(
+            isSelected
+                ? DaddyTheme.accentBlue.opacity(0.5)
+                : Color.white.opacity(0.10),
+            width: isSelected ? 2 : 1
+        )
+        .cornerRadius(16)
+        .shadow(color: isSelected ? DaddyTheme.accentBlue.opacity(0.3) : .clear, radius: 12, x: 0, y: 4)
+        .onTapGesture { onTap() }
     }
 
     private func formatTimeAgo(_ date: Date) -> String {
         let elapsed = Date().timeIntervalSince(date)
-        if elapsed < 60 {
-            return "now"
-        } else if elapsed < 3600 {
-            return "\(Int(elapsed / 60))m"
-        } else if elapsed < 86400 {
-            return "\(Int(elapsed / 3600))h"
-        } else {
-            return "\(Int(elapsed / 86400))d"
+        if elapsed < 60 { return "now" }
+        else if elapsed < 3600 { return "\(Int(elapsed / 60))m" }
+        else { return "\(Int(elapsed / 3600))h" }
+    }
+}
+
+struct StatusBadge: View {
+    let state: AgentState
+
+    var body: some View {
+        let colors = StateColors.badge(for: state)
+
+        HStack(spacing: 8) {
+            if let dotColor = colors.dot {
+                BreathingDot(color: dotColor, glowRadius: 8)
+            } else {
+                stateGlyph()
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(colors.text)
+            }
+
+            Text(stateName)
+                .font(.system(size: 9, weight: .semibold, design: .default))
+                .tracking(0.7)
+                .foregroundColor(colors.text)
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 5)
+        .background(colors.bg)
+        .border(colors.border, width: 1)
+        .cornerRadius(999)
+    }
+
+    @ViewBuilder
+    func stateGlyph() -> some View {
+        switch state {
+        case .ready:
+            Text("✓")
+                .foregroundColor(DaddyTheme.readyCheckCyan)
+        case .rateLimited:
+            Text("⏸")
+        case .error:
+            Text("✗")
+        default:
+            EmptyView()
         }
     }
 
-    @objc func cardClicked(_ sender: NSButton) {
-        if let sessionID = sessionIDByTag[sender.tag] {
-            selectedSessionID = sessionID
-            onSessionSelected?(sessionID)
-            refresh()
+    var stateName: String {
+        switch state {
+        case .working: return "WORKING"
+        case .rateLimited: return "RATE-LIMITED"
+        case .ready: return "READY"
+        case .error: return "ERROR"
+        case .launching: return "LAUNCHING"
+        case .exited: return "EXITED"
         }
     }
 }
 
-class SessionCardView: NSView {
-    let session: Session
+struct MetricRow: View {
+    let label: String
+    let value: String
+    let color: ColorScheme
 
-    init(session: Session, frame: NSRect) {
-        self.session = session
-        super.init(frame: frame)
-    }
+    enum ColorScheme {
+        case `default`, green, purple
 
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-}
-
-class TerminalViewController: NSViewController {
-    var sessionManager: SessionManager?
-    var outputTextView: NSTextView?
-    var currentSessionID: String?
-
-    init(sessionManager: SessionManager?) {
-        super.init(nibName: nil, bundle: nil)
-        self.sessionManager = sessionManager
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func loadView() {
-        let container = NSView()
-        container.wantsLayer = true
-        container.layer?.backgroundColor = NSColor.black.cgColor
-
-        let headerLabel = NSTextField(frame: NSRect(x: 15, y: container.frame.height - 35, width: 300, height: 25))
-        headerLabel.stringValue = "📺 Live Output"
-        headerLabel.isEditable = false
-        headerLabel.isBordered = false
-        headerLabel.backgroundColor = NSColor.clear
-        headerLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        headerLabel.textColor = NSColor(red: 0.3, green: 1.0, blue: 0.8, alpha: 1)
-        container.addSubview(headerLabel)
-
-        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: container.frame.width, height: container.frame.height - 40))
-        scrollView.hasVerticalScroller = true
-        scrollView.autohidesScrollers = true
-
-        outputTextView = NSTextView(frame: scrollView.bounds)
-        outputTextView?.backgroundColor = NSColor.black
-        outputTextView?.textColor = NSColor(red: 0.0, green: 1.0, blue: 0.5, alpha: 1)
-        outputTextView?.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-        outputTextView?.isEditable = false
-        outputTextView?.isSelectable = true
-
-        scrollView.documentView = outputTextView
-        container.addSubview(scrollView)
-
-        self.view = container
-    }
-
-    func displaySession(_ sessionID: String) {
-        guard let sessionManager = sessionManager else { return }
-
-        currentSessionID = sessionID
-        outputTextView?.string = ""
-
-        guard let pty = sessionManager.getPTYProcess(for: sessionID) else {
-            outputTextView?.string = "Session not found or PTY not available"
-            return
-        }
-
-        pty.registerOutputCallback { [weak self] output in
-            DispatchQueue.main.async {
-                guard let self = self, self.currentSessionID == sessionID else { return }
-                let currentText = self.outputTextView?.string ?? ""
-                self.outputTextView?.string = currentText + output
-                self.outputTextView?.scrollRangeToVisible(NSRange(location: (self.outputTextView?.string.count ?? 0) - 1, length: 1))
+        var color: Color {
+            switch self {
+            case .default: return DaddyTheme.textSecondary
+            case .green: return DaddyTheme.workingGreen
+            case .purple: return DaddyTheme.purple
             }
         }
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 10, weight: .regular, design: .monospaced))
+                .foregroundColor(DaddyTheme.textTertiary)
+                .frame(width: 52, alignment: .leading)
+
+            Text(value)
+                .font(.system(size: 11, weight: .regular, design: .monospaced))
+                .foregroundColor(color.color)
+        }
+    }
+}
+
+// MARK: - Terminal Pane
+struct TerminalPane: View {
+    let sessions: [Session]
+    let selectedSessionID: String?
+
+    var selectedSession: Session? {
+        sessions.first { $0.id == selectedSessionID }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("LIVE OUTPUT")
+                    .font(.system(size: 11, weight: .semibold, design: .default))
+                    .tracking(0.6)
+                    .foregroundColor(DaddyTheme.tealLabel)
+
+                Spacer()
+
+                if let session = selectedSession {
+                    Text("\(session.agent.rawValue) · \(session.projectID)")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(DaddyTheme.terminalGreenDim.opacity(0.6))
+                }
+            }
+            .padding(.horizontal, 17)
+            .padding(.vertical, 15)
+            .border(DaddyTheme.workingGreen.opacity(0.14), width: 0.5)
+
+            if let session = selectedSession {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("$ \(session.agent.rawValue.lowercased()) --permission-mode acceptEdits --model \(session.model?.rawValue ?? "default")")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(DaddyTheme.terminalGreen)
+
+                    Text("─────────────────────────────────")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(DaddyTheme.terminalGreen.opacity(0.5))
+
+                    Text("> working on \(session.workUnitID)…")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(DaddyTheme.terminalGreen)
+
+                    Text("· Reading sources…")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(DaddyTheme.terminalGreenDim.opacity(0.7))
+
+                    Spacer()
+
+                    HStack(spacing: 6) {
+                        Text(">")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(DaddyTheme.terminalGreen.opacity(0.6))
+
+                        Text("█")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundColor(DaddyTheme.terminalGreen)
+                            .opacity(0.9)
+                    }
+                }
+                .padding(17)
+            } else {
+                VStack {
+                    Text("Select an agent to view output")
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundColor(DaddyTheme.textSecondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            HStack(spacing: 10) {
+                Text("›")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(DaddyTheme.terminalGreen.opacity(0.6))
+
+                Text("type to send into session…")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(DaddyTheme.textSecondary)
+
+                Spacer()
+
+                Text("esc interrupt")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(DaddyTheme.errorRedLight)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(DaddyTheme.errorRed.opacity(0.15))
+                    .border(DaddyTheme.errorRed.opacity(0.35), width: 1)
+                    .cornerRadius(8)
+            }
+            .padding(.horizontal, 15)
+            .padding(.vertical, 11)
+            .border(DaddyTheme.workingGreen.opacity(0.14), width: 0.5)
+        }
+        .background(.ultraThinMaterial)
+        .overlay(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color.black.opacity(0.35))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20)
+                .strokeBorder(DaddyTheme.workingGreen.opacity(0.22), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .shadow(color: Color.black.opacity(0.35), radius: 35, x: 0, y: 12)
     }
 }
