@@ -37,6 +37,11 @@ struct VoiceRouter {
 
         let command = parser.parse(trimmed)
 
+        // Launch intent doesn't need a running target.
+        if case .launch = command.intent {
+            return launchAgent(command)
+        }
+
         guard let target = resolveTarget(command) else {
             return .refused(
                 command.agent.map { "no live \($0.rawValue) session" }
@@ -89,6 +94,10 @@ struct VoiceRouter {
         case .status:
             return .ok("\(target.displayName): \(StateColors.name(for: target.state).lowercased())")
 
+        case .launch:
+            // Handled before resolving target; never reached.
+            fatalError("launch intent should be handled before target resolution")
+
         case .unknown:
             // A sentence with no recognised command word is almost always just
             // something to say to the agent. Sending it beats discarding it.
@@ -119,5 +128,23 @@ struct VoiceRouter {
             .trimmingCharacters(in: CharacterSet(charactersIn: " ,.;:!?"))
             .lowercased()
         return !filler.contains(cleaned) && cleaned.split(separator: " ").count > 1
+    }
+
+    /// Launch a new agent in the selected project.
+    private func launchAgent(_ command: ParsedCommand) -> VoiceOutcome {
+        guard let project = store.selectedProject else {
+            return .refused("no project selected")
+        }
+
+        guard let kind = command.agent else {
+            return .refused("no agent named")
+        }
+
+        if store.launchReal(kind, in: project) != nil {
+            return .ok("launched \(kind.rawValue) in \(project.name)")
+        } else {
+            let error = store.launchError ?? "unknown error"
+            return .refused("failed to launch: \(error)")
+        }
     }
 }

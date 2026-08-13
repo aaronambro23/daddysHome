@@ -10,6 +10,7 @@ public enum CommandIntent: Equatable {
     case status        // query status
     case runTests      // run tests
     case switchModel   // switch model
+    case launch        // launch a new agent
     case unknown(String)  // unknown intent
 }
 
@@ -102,6 +103,8 @@ public final class CommandParser {
         ("open code", .opencode),
         ("claude", .claude),
         ("codex", .codex),
+        ("codecs", .codex),      // Transcription: "codex" → "codecs"
+        ("codes", .codex),        // Transcription: "codex" → "codes"
         ("cursor", .cursor),
     ]
 
@@ -254,6 +257,12 @@ public final class CommandParser {
             "switch": .switchModel,
             "change model": .switchModel,
             "model": .switchModel,
+
+            // Launch
+            "start": .launch,
+            "launch": .launch,
+            "begin": .launch,
+            "open": .launch,
         ]
     }
 }

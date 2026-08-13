@@ -2,6 +2,9 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(MockStore.self) private var store
+    @FocusState private var hiddenFieldFocused: Bool
+    @State private var hiddenVoiceInput = ""
+    @State private var isProcessingVoice = false
 
     var body: some View {
         @Bindable var store = store
@@ -24,8 +27,28 @@ struct RootView: View {
                 .padding(.bottom, 18)
                 .transition(.opacity)
             }
+
+            // Hidden text field that always has focus so HEX dictation is captured
+            // from any tab, not just the Voice tab. HEX just pastes; it doesn't
+            // send Return, so we auto-submit when text appears.
+            TextField("", text: $hiddenVoiceInput)
+                .focused($hiddenFieldFocused)
+                .onChange(of: hiddenVoiceInput) { oldValue, newValue in
+                    if !isProcessingVoice && !newValue.isEmpty && oldValue.isEmpty {
+                        isProcessingVoice = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            store.submitVoice(hiddenVoiceInput)
+                            hiddenVoiceInput = ""
+                            isProcessingVoice = false
+                            hiddenFieldFocused = true
+                        }
+                    }
+                }
+                .frame(width: 0, height: 0)
+                .opacity(0)
         }
         .preferredColorScheme(.dark)
+        .onAppear { hiddenFieldFocused = true }
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))

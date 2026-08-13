@@ -37,7 +37,7 @@ struct GlassTabBar: View {
                     .font(.system(size: 11.5, weight: .semibold))
                     .tracking(0.2)
             }
-            .foregroundStyle(isSelected ? DaddyTheme.textPrimary : DaddyTheme.textTertiary)
+            .foregroundStyle(isSelected ? Color.black.opacity(0.72) : DaddyTheme.textTertiary)
             .padding(.horizontal, 16)
             .padding(.vertical, 9)
             .contentShape(Capsule())
