@@ -85,13 +85,13 @@ struct FileTreeView: View {
                 Text(title)
                     .font(.system(size: 9, weight: .medium))
                     .tracking(0.6)
-                    .foregroundStyle(DaddyTheme.textMuted)
+                    .foregroundStyle(isDone ? Color(hex: "#8fe9bb") : Color(hex: "#ecca8f"))
 
                 Spacer()
 
                 Text("\(tasks.count)")
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(isDone ? DaddyTheme.textSecondary : DaddyTheme.working)
+                    .foregroundStyle(isDone ? Color(hex: "#8fe9bb") : Color(hex: "#ecca8f"))
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -106,7 +106,7 @@ struct FileTreeView: View {
         HStack(spacing: 8) {
             Image(systemName: isDone ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(isDone ? DaddyTheme.working : DaddyTheme.working)
+                .foregroundStyle(isDone ? Color(hex: "#8fe9bb") : Color(hex: "#ecca8f"))
 
             Text(task)
                 .font(.system(size: 11, design: .monospaced))

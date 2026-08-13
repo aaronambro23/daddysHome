@@ -71,9 +71,9 @@ struct RootView: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(DaddyTheme.textSecondary)
 
-                Text("DADDY")
-                    .font(.system(size: 14, weight: .bold))
-                    .tracking(1.2)
+                Text("DADDY'S HOME")
+                    .font(.system(size: 13, weight: .bold))
+                    .tracking(1.0)
                     .foregroundStyle(DaddyTheme.textPrimary)
             }
             .padding(.leading, 78)   // clears the traffic lights
