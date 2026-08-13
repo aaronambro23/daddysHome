@@ -39,11 +39,15 @@ struct AgentDashboard: View {
                     if store.visibleAgents.isEmpty {
                         emptyState
                     } else {
-                        ForEach(store.visibleAgents) { agent in
-                            AgentCard(
-                                agent: agent,
-                                isSelected: store.selectedAgentID == agent.id
-                            )
+                        let grouped = Dictionary(grouping: store.visibleAgents) { $0.agent }
+                        ForEach([AgentKind.claude, .codex, .cursor, .opencode], id: \.self) { kind in
+                            if let agents = grouped[kind], !agents.isEmpty {
+                                AgentGroupSection(
+                                    kind: kind,
+                                    agents: agents,
+                                    selectedAgentID: store.selectedAgentID
+                                )
+                            }
                         }
                     }
                 }
@@ -112,5 +116,59 @@ struct AgentDashboard: View {
         }
         .frame(maxWidth: .infinity)
         .padding(40)
+    }
+}
+
+// MARK: - Group Section
+
+struct AgentGroupSection: View {
+    @Environment(MockStore.self) private var store
+
+    let kind: AgentKind
+    let agents: [MockAgent]
+    let selectedAgentID: String?
+
+    @State private var isExpanded = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: { withAnimation(.smooth(duration: 0.2)) { isExpanded.toggle() } }) {
+                HStack(spacing: 8) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(DaddyTheme.textMuted)
+
+                    Text(kind.rawValue.capitalized)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(DaddyTheme.textPrimary)
+
+                    Text("(\(agents.count))")
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(DaddyTheme.textSecondary)
+
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Divider()
+                    .opacity(0.2)
+                    .padding(.horizontal, 12)
+
+                VStack(spacing: 10) {
+                    ForEach(agents) { agent in
+                        AgentCard(
+                            agent: agent,
+                            isSelected: selectedAgentID == agent.id
+                        )
+                    }
+                }
+                .padding(12)
+            }
+        }
+        .insetSurface(cornerRadius: 14)
     }
 }

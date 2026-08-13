@@ -10,29 +10,97 @@ struct AgentCard: View {
     let isSelected: Bool
 
     @State private var hovering = false
+    @State private var showingDocuments = false
+    @State private var inProgressDocs: [String] = []
+    @State private var doneDocs: [String] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 9) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(DaddyTheme.textMuted)
+            Button(action: {
+                withAnimation(.smooth(duration: 0.2)) {
+                    showingDocuments.toggle()
+                    if showingDocuments {
+                        loadDocuments()
+                    }
+                }
+            }) {
+                HStack(spacing: 9) {
+                    Image(systemName: showingDocuments ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(DaddyTheme.textMuted)
 
-                Text(agent.displayName)
-                    .font(.system(size: 13, weight: .bold))
-                    .tracking(1.0)
-                    .foregroundStyle(DaddyTheme.textPrimary)
+                    Text(agent.displayName)
+                        .font(.system(size: 13, weight: .bold))
+                        .tracking(1.0)
+                        .foregroundStyle(DaddyTheme.textPrimary)
 
-                Spacer(minLength: 8)
+                    Spacer(minLength: 8)
 
-                StatusBadge(state: agent.state)
+                    StatusBadge(state: agent.state)
+                }
             }
+            .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 7) {
                 MetricRow(label: "project", value: store.project(agent.projectID)?.path ?? agent.projectID)
                 MetricRow(label: "model", value: agent.model)
                 MetricRow(label: "work", value: agent.workUnitID, accent: DaddyTheme.textPrimary)
                 MetricRow(label: "uptime", value: agent.uptime)
+            }
+
+            if showingDocuments {
+                Divider()
+                    .opacity(0.3)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    if !inProgressDocs.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("IN PROGRESS")
+                                .font(.system(size: 8, weight: .medium))
+                                .tracking(0.6)
+                                .foregroundStyle(Color(hex: "#ecca8f"))
+
+                            ForEach(inProgressDocs, id: \.self) { doc in
+                                HStack(spacing: 6) {
+                                    Image(systemName: "circle")
+                                        .font(.system(size: 8, weight: .semibold))
+                                        .foregroundStyle(Color(hex: "#ecca8f"))
+                                    Text(doc)
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(DaddyTheme.textSecondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                    }
+
+                    if !doneDocs.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("COMPLETED")
+                                .font(.system(size: 8, weight: .medium))
+                                .tracking(0.6)
+                                .foregroundStyle(Color(hex: "#8fe9bb"))
+
+                            ForEach(doneDocs, id: \.self) { doc in
+                                HStack(spacing: 6) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 8, weight: .semibold))
+                                        .foregroundStyle(Color(hex: "#8fe9bb"))
+                                    Text(doc)
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(DaddyTheme.textMuted)
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                    }
+
+                    if inProgressDocs.isEmpty && doneDocs.isEmpty {
+                        Text("No documents yet")
+                            .font(.system(size: 10))
+                            .foregroundStyle(DaddyTheme.textMuted)
+                    }
+                }
             }
 
             if case .error(let message) = agent.state {
@@ -152,5 +220,37 @@ struct AgentCard: View {
                 store.handOff(agent.id, to: kind)
             }
         }
+    }
+
+    private func loadDocuments() {
+        guard let project = store.project(agent.projectID) else { return }
+
+        let projectPath = project.path
+        let handoffsDir = projectPath + "/documents/handoffs"
+        let fm = FileManager.default
+
+        var inProgress: [String] = []
+        var done: [String] = []
+
+        if let contents = try? fm.contentsOfDirectory(atPath: handoffsDir) {
+            for item in contents.sorted() {
+                if item == "DONE.md" || item == "done" {
+                    continue
+                } else if item.hasSuffix(".md") {
+                    inProgress.append(item.replacingOccurrences(of: ".md", with: ""))
+                }
+            }
+
+            // Check done folder
+            let donePath = handoffsDir + "/done"
+            if let doneContents = try? fm.contentsOfDirectory(atPath: donePath) {
+                done = doneContents.filter { $0.hasSuffix(".md") }.map {
+                    $0.replacingOccurrences(of: ".md", with: "")
+                }
+            }
+        }
+
+        self.inProgressDocs = inProgress
+        self.doneDocs = done
     }
 }
