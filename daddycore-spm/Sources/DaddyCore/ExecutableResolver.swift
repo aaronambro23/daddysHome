@@ -117,6 +117,17 @@ public final class ExecutableResolver: @unchecked Sendable {
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
 
+        // Reaped through a termination handler rather than `waitUntilExit()`.
+        //
+        // `waitUntilExit()` pumps the run loop. On the main thread that lets
+        // AppKit deliver a CoreAnimation commit *while SwiftUI is already inside
+        // a view update*, and AttributeGraph aborts the process. It crashed the
+        // app every time the launch menu was opened, because the menu asked
+        // which agents were installed from inside its own body. A semaphore
+        // blocks the thread without pumping anything.
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
+
         do {
             try process.run()
         } catch {
@@ -137,7 +148,10 @@ public final class ExecutableResolver: @unchecked Sendable {
             return []
         }
 
-        process.waitUntilExit()
+        if exited.wait(timeout: .now() + timeout) == .timedOut {
+            process.terminate()
+            return []
+        }
 
         guard process.terminationStatus == 0,
               let value = String(data: box.get(), encoding: .utf8)

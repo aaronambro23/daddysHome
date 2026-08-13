@@ -40,6 +40,7 @@ enum DaddyTab: String, CaseIterable, Identifiable {
 // `tick()` with reads from `SessionManager`.
 
 @Observable
+@MainActor
 final class MockStore {
     // Navigation
     var tab: DaddyTab = .fleet
@@ -54,6 +55,11 @@ final class MockStore {
     /// Work units marked done by hand. The units themselves are derived from
     /// live sessions, so only this override needs storing.
     var doneWorkUnits: Set<String> = []
+
+    /// Agent kinds with a binary on this machine. Filled in shortly after
+    /// launch by `refreshInstalledAgents()`; empty until then, so the launch
+    /// menu shows everything as unavailable for a moment rather than blocking.
+    var installedAgents: Set<AgentKind> = []
 
     // Composer
     var composeText: String = ""
@@ -90,6 +96,7 @@ final class MockStore {
         seed()
         selectedProjectID = projects.first?.id
         selectedAgentID = agents.first?.id
+        refreshInstalledAgents()
     }
 
     // MARK: - Derived
@@ -162,10 +169,35 @@ final class MockStore {
 
     // MARK: - Real sessions
 
-    /// Which agent kinds actually have a binary on this machine. Used to grey
-    /// out launch options rather than let them fail silently.
+    /// Which agent kinds have a binary on this machine.
+    ///
+    /// Computed once, off the main thread — never from inside a view body. The
+    /// launch menu used to ask `ExecutableResolver` directly while rendering,
+    /// and resolving a bare name can spawn a login shell to read its PATH.
+    /// Running a process during layout crashed the app every time the menu was
+    /// opened. Nothing here touches the disk.
     func isInstalled(_ kind: AgentKind) -> Bool {
-        ExecutableResolver.resolve(Self.executableName(for: kind)) != nil
+        installedAgents.contains(kind)
+    }
+
+    /// Probes the PATH away from the main thread and publishes the result.
+    private func refreshInstalledAgents() {
+        Task { installedAgents = await Self.probeInstalledAgents() }
+    }
+
+    /// Static and off-main on purpose: resolving a bare name can spawn a login
+    /// shell, and that must never happen on the thread SwiftUI draws on.
+    private static func probeInstalledAgents() async -> Set<AgentKind> {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                var found: Set<AgentKind> = []
+                for kind in [AgentKind.claude, .codex, .cursor, .opencode]
+                where ExecutableResolver.resolve(executableName(for: kind)) != nil {
+                    found.insert(kind)
+                }
+                continuation.resume(returning: found)
+            }
+        }
     }
 
     static func executableName(for kind: AgentKind) -> String {
@@ -437,10 +469,28 @@ extension MockStore {
         refreshProjects()
     }
 
-    /// Rescans the disk for projects. Cheap enough to call on demand.
+    /// Rescans the disk for projects, off the main thread.
+    ///
+    /// Walking `~/Documents` two levels deep is not free, and it runs on a timer
+    /// — doing it on the main thread would stutter the UI at best. Same rule as
+    /// `refreshInstalledAgents`: no filesystem work where SwiftUI is drawing.
     func refreshProjects() {
-        projects = ProjectScanner.scan().map {
-            MockProject(id: $0.id, name: $0.name, path: $0.path)
+        Task {
+            let found = await Self.scanProjects()
+            guard found != projects else { return }
+
+            projects = found
+            if selectedProjectID == nil { selectedProjectID = found.first?.id }
+        }
+    }
+
+    private static func scanProjects() async -> [MockProject] {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                continuation.resume(returning: ProjectScanner.scan().map {
+                    MockProject(id: $0.id, name: $0.name, path: $0.path)
+                })
+            }
         }
     }
 }
