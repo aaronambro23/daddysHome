@@ -4,11 +4,13 @@ import DaddyCore
 @main
 struct DaddyAppEntry: App {
     @State private var store = MockStore()
+    @State private var handoffs = HandoffViewModel()
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(store)
+                .environment(handoffs)
                 .frame(minWidth: 1400, minHeight: 900)
                 .onReceive(
                     NotificationCenter.default.publisher(

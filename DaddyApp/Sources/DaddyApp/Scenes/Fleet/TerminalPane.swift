@@ -32,25 +32,7 @@ struct TerminalPane: View {
                 }
             }
 
-            if let agent = store.selectedAgent, agent.isRealSession {
-                if let pty = store.pty(for: agent) {
-                    // Real pty: SwiftTerm renders it, including colour and any
-                    // interactive prompts the agent draws.
-                    TerminalSurface(pty: pty)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                } else {
-                    VStack(spacing: 6) {
-                        Text("Session ended")
-                            .font(.system(size: 11))
-                            .foregroundStyle(DaddyTheme.textSecondary)
-                        Text("The process is no longer running")
-                            .font(.system(size: 10))
-                            .foregroundStyle(DaddyTheme.textMuted)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            } else if store.selectedAgent != nil {
+            if store.selectedAgent != nil {
                 transcript
             } else {
                 VStack {

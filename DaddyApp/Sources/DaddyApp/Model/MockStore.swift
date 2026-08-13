@@ -14,7 +14,7 @@ enum DaddyTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .fleet: return "Fleet"
-        case .workUnits: return "Work Units"
+        case .workUnits: return "Batches"
         case .voice: return "Voice"
         case .settings: return "Settings"
         }
@@ -79,9 +79,41 @@ final class MockStore {
 
     init() {
         seed()
+        loadRealProjects()
         selectedProjectID = projects.first?.id
         selectedAgentID = agents.first?.id
         rebuildTerminal()
+    }
+
+    /// Replaces the seeded project list with the real directories under
+    /// `~/Documents`, using DaddyCore's existing discovery. The agent cards are
+    /// still demo data, but projects must be real — the whole PM view reads
+    /// batch documents off disk from these paths.
+    private func loadRealProjects() {
+        let manager = WorkflowStateManager()
+        // discoverProjects only returns newly-seen directories, so union it
+        // with everything already persisted.
+        let discovered = manager.discoverProjects() + manager.getAllProjects()
+
+        // getAllProjects returns everything ever discovered, including
+        // directories since renamed or deleted, so drop any that are gone.
+        var seen = Set<String>()
+        let real = discovered
+            .filter { FileManager.default.fileExists(atPath: $0.path.path) }
+            .filter { seen.insert($0.id).inserted }
+            .map {
+                MockProject(
+                    id: $0.id,
+                    name: $0.name,
+                    path: $0.path.path.replacingOccurrences(
+                        of: FileManager.default.homeDirectoryForCurrentUser.path,
+                        with: "~"
+                    )
+                )
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+        if !real.isEmpty { projects = real }
     }
 
     // MARK: - Derived
@@ -189,12 +221,6 @@ final class MockStore {
         } catch {
             launchError = "\(kind.rawValue): \(error.localizedDescription)"
         }
-    }
-
-    /// The live pty behind an agent card, if it has one.
-    func pty(for agent: MockAgent) -> PTYProcess? {
-        guard let sessionID = agent.sessionID else { return nil }
-        return sessionManager.getPTYProcess(for: sessionID)
     }
 
     /// Terminate every real session. Called on app teardown so agents and

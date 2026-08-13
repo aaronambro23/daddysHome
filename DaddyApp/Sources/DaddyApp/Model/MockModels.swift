@@ -13,6 +13,11 @@ struct MockProject: Identifiable, Hashable {
     let id: String
     let name: String
     let path: String
+
+    /// `~/Documents/x` → an absolute URL.
+    var expandedURL: URL {
+        URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+    }
 }
 
 struct MockAgent: Identifiable {
