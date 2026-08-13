@@ -398,6 +398,9 @@ public final class SessionManager {
     }
 
     private func createHandoffDocument(projectID: String, workUnitID: String, agent: AgentKind) {
+        // Install workflow contract files first (AGENTS.md and CLAUDE.md)
+        installWorkflowContract(projectPath: projectID)
+
         // Create handoff document in project's /documents/handoffs/ directory.
         // File is named after the work unit with .md extension.
         let fm = FileManager.default
@@ -436,11 +439,37 @@ public final class SessionManager {
                 [To be determined]
                 """
 
-                try content.write(toFile: filepath, atomically: true, encoding: .utf8)
+                try content.write(toFile: filepath, atomically: true, encoding: String.Encoding.utf8)
             }
         } catch {
             // Silently fail if we can't create the document — don't crash the session
             print("Failed to create handoff document: \(error)")
+        }
+    }
+
+    private func installWorkflowContract(projectPath: String) {
+        let fm = FileManager.default
+        let projectName = (projectPath as NSString).lastPathComponent
+
+        // Create AGENTS.md with the workflow contract
+        let agentsPath = projectPath + "/AGENTS.md"
+        if !fm.fileExists(atPath: agentsPath) {
+            do {
+                let contract = WorkflowContract.agentsMarkdown(projectName: projectName)
+                try contract.write(toFile: agentsPath, atomically: true, encoding: String.Encoding.utf8)
+            } catch {
+                print("Failed to create AGENTS.md: \(error)")
+            }
+        }
+
+        // Create CLAUDE.md that imports AGENTS.md
+        let claudePath = projectPath + "/CLAUDE.md"
+        if !fm.fileExists(atPath: claudePath) {
+            do {
+                try WorkflowContract.claudeImport.write(toFile: claudePath, atomically: true, encoding: String.Encoding.utf8)
+            } catch {
+                print("Failed to create CLAUDE.md: \(error)")
+            }
         }
     }
 
