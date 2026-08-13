@@ -1,80 +1,124 @@
 import SwiftUI
+import DaddyCore
 
+/// Voice intake, foreground-only.
+///
+/// HEX keeps its global hotkey and stays useful in every other app. Daddy takes
+/// no microphone permission and watches no files: when Daddy becomes frontmost
+/// it focuses the field below, HEX pastes the transcription straight into it
+/// (`useClipboardPaste: true`, and there is no silent mode), and the
+/// interpretation appears underneath.
+///
+/// Nothing runs until Return. Seeing what was heard before it executes is the
+/// point — a misheard phrase should be visible, not surprising.
 struct VoiceView: View {
     @Environment(AppStore.self) private var store
+    @Environment(HandoffViewModel.self) private var handoffs
 
-    /// Phrases the intake will support once `CommandParser` is wired up
-    /// (step 4). Shown as documentation, not as working buttons — pretending
-    /// they work would be the mock data this branch just removed.
+    @FocusState private var fieldFocused: Bool
+    @State private var resolution: VoiceRouter.Resolution?
+
+    private let router = VoiceRouter()
+
     private static let examples: [String] = [
-        "daddy, start claude on payments",
-        "copy the brief for korean makeup",
-        "what's left on push notifications",
+        "start claude on payments",
+        "continue 002",
+        "copy the brief",
         "open wagerwise",
     ]
 
     var body: some View {
+        @Bindable var store = store
+
         HStack(spacing: 16) {
-            listenPanel
-                .frame(width: 420)
+            listenPanel(store: store)
+                .frame(width: 460)
 
             logPanel
         }
+        .onAppear {
+            fieldFocused = true
+            // Batch documents must be loaded before interpreting, or phrases
+            // naming a batch ("continue payments") silently fall back to
+            // starting a new one.
+            handoffs.refresh(project: store.selectedProject)
+            resolution = interpret(store.composeText)
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+        ) { _ in
+            // The field must hold focus or HEX's paste lands nowhere.
+            fieldFocused = true
+        }
+        .onChange(of: store.installedAgents) {
+            // PATH resolution finishes on a background queue after launch, so
+            // an early interpretation can wrongly report an agent as missing.
+            resolution = interpret(store.composeText)
+        }
     }
 
-    // MARK: Listening
+    // MARK: Intake
 
-    private var listenPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SectionHeader(title: store.isListening ? "LISTENING" : "VOICE") {
-                HeaderCaption(text: "double-click ⌥")
+    private func listenPanel(store: AppStore) -> some View {
+        @Bindable var store = store
+
+        return VStack(alignment: .leading, spacing: 0) {
+            SectionHeader(title: "VOICE") {
+                HeaderCaption(text: "hold ⌥ to dictate")
             }
 
-            VStack(spacing: 26) {
-                Spacer(minLength: 10)
-
-                waveform
-
-                Button(store.isListening ? "Stop listening" : "Start listening") {
-                    withAnimation(.smooth(duration: 0.35)) {
-                        store.toggleListening()
-                    }
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(DaddyTheme.textPrimary)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 11)
-                .insetCapsule(opacity: store.isListening ? 0.20 : 0.10)
-
-                Text(store.isListening
-                     ? "HEX is armed — speak, or try a phrase below"
-                     : "HEX is idle. Double-click ⌥ anywhere to wake it.")
+            VStack(alignment: .leading, spacing: 16) {
+                Text("""
+                Speak while Daddy is in front. HEX types into the field below; \
+                press Return to run it.
+                """)
                     .font(.system(size: 10.5))
                     .foregroundStyle(DaddyTheme.textSecondary)
-                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                Spacer(minLength: 10)
+                HStack(spacing: 10) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 12))
+                        .foregroundStyle(
+                            fieldFocused ? DaddyTheme.working : DaddyTheme.textMuted
+                        )
+
+                    TextField("say something, or type it", text: $store.composeText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                        .foregroundStyle(DaddyTheme.textPrimary)
+                        .focused($fieldFocused)
+                        .onChange(of: store.composeText) { _, new in
+                            resolution = interpret(new)
+                        }
+                        .onSubmit(run)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .insetSurface(cornerRadius: 12, selected: fieldFocused)
+
+                interpretation
+
+                Spacer(minLength: 0)
             }
-            .frame(maxWidth: .infinity)
             .padding(20)
 
             GlassHairline()
 
             VStack(alignment: .leading, spacing: 9) {
-                Text("PLANNED COMMANDS")
+                Text("EXAMPLES")
                     .font(.system(size: 9, weight: .medium))
                     .tracking(0.6)
                     .foregroundStyle(DaddyTheme.textMuted)
 
                 FlowRow(spacing: 7) {
                     ForEach(Self.examples, id: \.self) { phrase in
-                        Text(phrase)
-                            .font(.system(size: 10))
-                            .foregroundStyle(DaddyTheme.textMuted)
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 6)
-                            .insetCapsule(opacity: 0.06)
+                        Button(phrase) {
+                            store.composeText = phrase
+                            resolution = interpret(phrase)
+                            fieldFocused = true
+                        }
+                        .buttonStyle(.inset(DaddyTheme.textSecondary))
                     }
                 }
             }
@@ -83,21 +127,31 @@ struct VoiceView: View {
         .glassPanel()
     }
 
-    private var waveform: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            HStack(alignment: .center, spacing: 5) {
-                ForEach(0..<28, id: \.self) { i in
-                    let phase = Double(i) * 0.45
-                    let wave = abs(sin(t * (store.isListening ? 3.4 : 0.7) + phase))
-                    let height = 8 + wave * (store.isListening ? 66 : 12)
-
-                    Capsule()
-                        .fill(Color.white.opacity(store.isListening ? 0.85 : 0.28))
-                        .frame(width: 5, height: height)
+    @ViewBuilder
+    private var interpretation: some View {
+        if let resolution, !resolution.preview.isEmpty {
+            HStack(spacing: 9) {
+                Image(systemName: isActionable ? "arrow.turn.down.right" : "questionmark.circle")
+                    .font(.system(size: 10))
+                Text(resolution.preview)
+                    .font(.system(size: 11))
+                Spacer(minLength: 6)
+                if isActionable {
+                    Text("return")
+                        .font(.system(size: 9, design: .monospaced))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .insetCapsule(opacity: 0.10)
                 }
             }
-            .frame(height: 86)
+            .foregroundStyle(isActionable ? DaddyTheme.accent : DaddyTheme.textMuted)
+        }
+    }
+
+    private var isActionable: Bool {
+        switch resolution?.action {
+        case .newBatch, .continueBatch, .copyBrief, .openProject: return true
+        default: return false
         }
     }
 
@@ -105,20 +159,89 @@ struct VoiceView: View {
 
     private var logPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SectionHeader(title: "VOICE LOG") {
-                HeaderCaption(text: "\(store.voiceLog.count) entries")
+            SectionHeader(title: "HISTORY") {
+                HeaderCaption(text: "\(store.voiceLog.count)")
             }
 
-            ScrollView {
-                VStack(spacing: 9) {
-                    ForEach(store.voiceLog) { entry in
-                        VoiceLogRow(entry: entry)
-                    }
+            if store.voiceLog.isEmpty {
+                VStack(spacing: 6) {
+                    Text("Nothing yet")
+                        .font(.system(size: 11))
+                        .foregroundStyle(DaddyTheme.textSecondary)
                 }
-                .padding(16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    VStack(spacing: 9) {
+                        ForEach(store.voiceLog) { entry in
+                            VoiceLogRow(entry: entry)
+                        }
+                    }
+                    .padding(16)
+                }
             }
         }
         .glassPanel()
+    }
+
+    // MARK: Behaviour
+
+    private func interpret(_ text: String) -> VoiceRouter.Resolution? {
+        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        return router.resolve(
+            text,
+            projects: store.projects,
+            documents: handoffs.documents,
+            currentProjectID: store.selectedProjectID,
+            installed: store.installedAgents
+        )
+    }
+
+    private func run() {
+        guard let resolution, isActionable else { return }
+        let spoken = store.composeText
+
+        switch resolution.action {
+        case .newBatch(let agent, let projectID):
+            if let project = store.project(projectID) {
+                handoffs.launchNewBatch(agent: agent, in: project)
+            }
+
+        case .continueBatch(let agent, let projectID, let number):
+            if let project = store.project(projectID),
+               let doc = handoffs.documents.first(where: { $0.number == number }) {
+                handoffs.launchContinuing(doc, agent: agent, in: project)
+            }
+
+        case .copyBrief(let projectID):
+            if let project = store.project(projectID) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(
+                    handoffs.handoffBrief(for: project), forType: .string
+                )
+            }
+
+        case .openProject(let projectID):
+            store.openBatches(for: projectID)
+            if let project = store.project(projectID) {
+                handoffs.refresh(project: project)
+            }
+
+        case .needsTarget, .unrecognised:
+            return
+        }
+
+        store.voiceLog.insert(
+            VoiceEntry(
+                at: Date(),
+                transcript: spoken,
+                resolution: resolution.preview,
+                didSucceed: true
+            ),
+            at: 0
+        )
+        store.composeText = ""
+        self.resolution = nil
     }
 }
 
@@ -144,9 +267,7 @@ struct VoiceLogRow: View {
 
                 Text(entry.resolution)
                     .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundStyle(
-                        entry.didSucceed ? DaddyTheme.textMuted : DaddyTheme.limited
-                    )
+                    .foregroundStyle(DaddyTheme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
