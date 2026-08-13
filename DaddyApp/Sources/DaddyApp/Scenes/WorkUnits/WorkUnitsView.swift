@@ -61,6 +61,25 @@ struct WorkUnitsView: View {
         HStack(spacing: 6) {
             Button("Refresh") { handoffs.refresh(project: store.selectedProject) }
 
+            if let project = store.selectedProject {
+                // Launch into Terminal.app: Daddy spawns, the work happens in
+                // the user's own terminal.
+                Menu("New batch") {
+                    ForEach(AgentKind.allCases, id: \.rawValue) { kind in
+                        Button(store.isInstalled(kind)
+                               ? kind.displayName
+                               : "\(kind.displayName) — not installed") {
+                            handoffs.launchNewBatch(agent: kind, in: project)
+                        }
+                        .disabled(!store.isInstalled(kind))
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(DaddyTheme.textSecondary)
+                .fixedSize()
+            }
+
             if let project = store.selectedProject, handoffs.isConfigured {
                 Button("Copy brief") {
                     NSPasteboard.general.clearContents()
@@ -197,6 +216,7 @@ struct WorkUnitsView: View {
 
                 ForEach(handoffs.documents) { doc in
                     BatchCard(
+                        project: store.selectedProject,
                         doc: doc,
                         isResumePoint: handoffs.overview?.resumeAt?.id == doc.id
                     )
@@ -232,6 +252,10 @@ struct WorkUnitsView: View {
 // MARK: - Batch card
 
 struct BatchCard: View {
+    @Environment(AppStore.self) private var store
+    @Environment(HandoffViewModel.self) private var handoffs
+
+    let project: Project?
     let doc: HandoffDoc
     let isResumePoint: Bool
 
@@ -364,6 +388,24 @@ struct BatchCard: View {
             if let next = doc.nextSteps { labelled("NEXT POSSIBLE STEPS", next) }
 
             HStack(spacing: 8) {
+                if let project, doc.status != .done {
+                    // Hand this batch to an agent, already told what is left.
+                    Menu("Continue with…") {
+                        ForEach(AgentKind.allCases, id: \.rawValue) { kind in
+                            Button(store.isInstalled(kind)
+                                   ? kind.displayName
+                                   : "\(kind.displayName) — not installed") {
+                                handoffs.launchContinuing(doc, agent: kind, in: project)
+                            }
+                            .disabled(!store.isInstalled(kind))
+                        }
+                    }
+                    .menuStyle(.borderlessButton)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(DaddyTheme.accent)
+                    .fixedSize()
+                }
+
                 Button("Open") { NSWorkspace.shared.open(doc.url) }
                 Button("Reveal") {
                     NSWorkspace.shared.activateFileViewerSelecting([doc.url])

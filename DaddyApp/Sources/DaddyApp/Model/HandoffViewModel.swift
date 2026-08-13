@@ -17,6 +17,49 @@ final class HandoffViewModel {
 
     @ObservationIgnored private let store = HandoffStore()
     @ObservationIgnored private let installer = ContractInstaller()
+    @ObservationIgnored private let launcher = TerminalLauncher()
+
+    // MARK: - Launching
+
+    /// Opens `agent` in Terminal.app, told to continue `doc`.
+    func launchContinuing(_ doc: HandoffDoc, agent: AgentKind, in project: Project) {
+        let relative = "\(WorkflowContract.handoffDirectory)/\(doc.filename)"
+        launch(
+            agent: agent,
+            project: project,
+            prompt: TerminalLauncher.continuePrompt(documentPath: relative),
+            describing: "continuing \(doc.filename)"
+        )
+    }
+
+    /// Opens `agent` in Terminal.app to plan and start the next batch.
+    func launchNewBatch(agent: AgentKind, in project: Project) {
+        launch(
+            agent: agent,
+            project: project,
+            prompt: TerminalLauncher.newBatchPrompt(nextNumber: nextNumber(for: project)),
+            describing: "starting a new batch"
+        )
+    }
+
+    private func launch(
+        agent: AgentKind, project: Project, prompt: String, describing what: String
+    ) {
+        installError = nil
+        installNotice = nil
+
+        do {
+            try launcher.launch(
+                agent: agent,
+                executableName: agent.executableName,
+                projectPath: project.expandedURL,
+                prompt: prompt
+            )
+            installNotice = "Opened \(agent.displayName) in Terminal — \(what)"
+        } catch {
+            installError = error.localizedDescription
+        }
+    }
 
     // MARK: - Cross-project overview
 
