@@ -7,6 +7,7 @@ public final class SessionManager {
     private var sessionErrors: [String: (error: String, count: Int, lastAt: Date)] = [:]
     private var retryAttempts: [String: Int] = [:]
     private var pendingModelSwitch: [String: ModelRef] = [:]
+    private let markdownWriter = MarkdownWriter()
     private let lock = NSLock()
     private let maxRetries = 3
     private let errorThresholdCount = 5
@@ -67,6 +68,9 @@ public final class SessionManager {
         let ptyProcess = PTYProcess(executablePath: execPath, arguments: args, cwd: session.cwd)
 
         try ptyProcess.launch()
+
+        // Create handoff document in /documents/handoffs/ directory
+        createHandoffDocument(projectID: session.projectID, workUnitID: session.workUnitID, agent: session.agent)
 
         lock.lock()
         ptyProcesses[session.id] = ptyProcess
@@ -391,6 +395,53 @@ public final class SessionManager {
 
         session.state = .launching
         try launchSession(session)
+    }
+
+    private func createHandoffDocument(projectID: String, workUnitID: String, agent: AgentKind) {
+        // Create handoff document in project's /documents/handoffs/ directory.
+        // File is named after the work unit with .md extension.
+        let fm = FileManager.default
+        let projectPath = projectID
+        let handoffsDir = projectPath + "/documents/handoffs"
+
+        do {
+            try fm.createDirectory(atPath: handoffsDir, withIntermediateDirectories: true)
+
+            let filename = workUnitID + ".md"
+            let filepath = handoffsDir + "/" + filename
+
+            // Create initial handoff document if it doesn't exist
+            if !fm.fileExists(atPath: filepath) {
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+                let timestamp = dateFormatter.string(from: Date())
+
+                let content = """
+                # \(workUnitID)
+
+                **Agent**: \(agent.rawValue)
+                **Created**: \(timestamp)
+                **Status**: In Progress
+
+                ## Task
+                [Task description here]
+
+                ## Progress
+                - Agent started
+
+                ## Changes
+                [Changes will be documented here]
+
+                ## Next Steps
+                [To be determined]
+                """
+
+                try content.write(toFile: filepath, atomically: true, encoding: .utf8)
+            }
+        } catch {
+            // Silently fail if we can't create the document — don't crash the session
+            print("Failed to create handoff document: \(error)")
+        }
     }
 
     public enum SessionError: LocalizedError {
