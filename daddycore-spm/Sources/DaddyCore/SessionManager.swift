@@ -56,9 +56,10 @@ public final class SessionManager {
         defer { lock.unlock() }
         ptyProcesses[session.id] = ptyProcess
 
-        var sessionCopy = session
-        sessionCopy.state = .ready
-        sessions[session.id] = sessionCopy
+        // `Session` is a reference type — this mutates the caller's instance
+        // too. Named accordingly so it does not read as a copy.
+        session.state = .ready
+        sessions[session.id] = session
 
         captureSessionOutput(sessionID: session.id)
     }
@@ -112,7 +113,7 @@ public final class SessionManager {
         defer { lock.unlock() }
         ptyProcesses.removeValue(forKey: sessionID)
 
-        if var session = sessions[sessionID] {
+        if let session = sessions[sessionID] {
             session.state = .exited(exitCode: 0)
             sessions[sessionID] = session
         }
@@ -150,17 +151,26 @@ public final class SessionManager {
             lock.unlock()
             return
         }
+        // A process that has exited stays exited. Output can still arrive after
+        // termination — the final flush — and it must not resurrect the session.
+        if case .exited = session.state {
+            lock.unlock()
+            return
+        }
         lock.unlock()
 
         let newState = adapter.detectState(fromRecentOutput: newOutput)
 
         lock.lock()
         defer { lock.unlock() }
-        var updatedSession = session
-        updatedSession.state = newState
+        let updatedSession = session
+        // `.unknown` means the output did not say, which is not a reason to
+        // discard what it last did say. Keep the previous state instead.
+        if newState != .unknown {
+            updatedSession.state = newState
+        }
         updatedSession.lastOutputAt = Date()
         sessions[sessionID] = updatedSession
-
     }
 
     public func getActiveSessions() -> [Session] {

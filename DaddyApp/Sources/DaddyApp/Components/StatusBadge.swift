@@ -12,6 +12,7 @@ enum StateColors {
         case .error: return DaddyTheme.failure
         case .launching: return DaddyTheme.launching
         case .exited: return DaddyTheme.idle
+        case .unknown: return DaddyTheme.idle
         }
     }
 
@@ -23,6 +24,7 @@ enum StateColors {
         case .error: return "ERROR"
         case .launching: return "LAUNCHING"
         case .exited: return "EXITED"
+        case .unknown: return "UNCLEAR"
         }
     }
 
@@ -34,6 +36,7 @@ enum StateColors {
         case .error: return "xmark"
         case .launching: return "arrow.up.circle"
         case .exited: return "stop.fill"
+        case .unknown: return "questionmark"
         }
     }
 }

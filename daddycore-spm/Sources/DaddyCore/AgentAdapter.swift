@@ -74,31 +74,13 @@ public final class ClaudeAdapter: AgentAdapter {
     }
 
     public func detectState(fromRecentOutput buffer: String) -> AgentState {
-        let lower = buffer.lowercased()
-
-        // Rate limit detection (word boundary)
-        if lower.contains("rate-limit") || lower.range(of: "\\brate\\s+limit", options: .regularExpression) != nil {
-            return .rateLimited
+        let window = OutputHeuristics.recentWindow(buffer).lowercased()
+        return OutputHeuristics.resolve(window: window) { text in
+            text.contains(">>>")
+                || text.contains("claude >")
+                || text.contains("? for shortcuts")
+                || OutputHeuristics.endsWithPrompt(text)
         }
-
-        // Error detection (avoid false positives)
-        if lower.range(of: "\\berror\\b", options: .regularExpression) != nil
-            || lower.range(of: "\\bexception\\b", options: .regularExpression) != nil
-            || lower.range(of: "failed", options: .regularExpression) != nil {
-            return .error("Detected error in output")
-        }
-
-        // Ready detection (prompt appears)
-        if lower.contains(">>>") || lower.contains("claude >") {
-            return .ready
-        }
-
-        // Working detection
-        if lower.range(of: "\\b(thinking|processing|working|analyzing)\\b", options: .regularExpression) != nil {
-            return .working
-        }
-
-        return .ready
     }
 }
 
@@ -147,21 +129,12 @@ public final class CodexAdapter: AgentAdapter {
     }
 
     public func detectState(fromRecentOutput buffer: String) -> AgentState {
-        let lower = buffer.lowercased()
-
-        if lower.contains("rate-limit") || lower.range(of: "\\brate\\s+limit", options: .regularExpression) != nil {
-            return .rateLimited
+        let window = OutputHeuristics.recentWindow(buffer).lowercased()
+        // The old check here was `contains(">") || contains("codex")`, which is
+        // true of essentially every byte Codex ever prints.
+        return OutputHeuristics.resolve(window: window) { text in
+            OutputHeuristics.endsWithPrompt(text)
         }
-
-        if lower.range(of: "\\berror\\b", options: .regularExpression) != nil {
-            return .error("Detected error in output")
-        }
-
-        if lower.contains(">") || lower.contains("codex") {
-            return .ready
-        }
-
-        return .ready
     }
 }
 
@@ -205,17 +178,10 @@ public final class CursorAdapter: AgentAdapter {
     }
 
     public func detectState(fromRecentOutput buffer: String) -> AgentState {
-        let lower = buffer.lowercased()
-
-        if lower.contains("rate-limit") || lower.range(of: "\\brate\\s+limit", options: .regularExpression) != nil {
-            return .rateLimited
+        let window = OutputHeuristics.recentWindow(buffer).lowercased()
+        return OutputHeuristics.resolve(window: window) { text in
+            OutputHeuristics.endsWithPrompt(text)
         }
-
-        if lower.range(of: "\\berror\\b", options: .regularExpression) != nil {
-            return .error("Detected error in output")
-        }
-
-        return .ready
     }
 }
 
@@ -259,16 +225,9 @@ public final class OpenCodeAdapter: AgentAdapter {
     }
 
     public func detectState(fromRecentOutput buffer: String) -> AgentState {
-        let lower = buffer.lowercased()
-
-        if lower.contains("rate-limit") || lower.range(of: "\\brate\\s+limit", options: .regularExpression) != nil {
-            return .rateLimited
+        let window = OutputHeuristics.recentWindow(buffer).lowercased()
+        return OutputHeuristics.resolve(window: window) { text in
+            OutputHeuristics.endsWithPrompt(text)
         }
-
-        if lower.range(of: "\\berror\\b", options: .regularExpression) != nil {
-            return .error("Detected error in output")
-        }
-
-        return .ready
     }
 }

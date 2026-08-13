@@ -15,8 +15,13 @@ public enum AgentState: Equatable, Codable {
     case error(String)
     case exited(exitCode: Int32)
 
+    /// The output does not say. Distinct from `.ready`, which is a claim that
+    /// the agent is idle and waiting for you — a claim worth being wrong about,
+    /// because acting on it means interrupting something mid-thought.
+    case unknown
+
     enum CodingKeys: String, CodingKey {
-        case launching, ready, working, rateLimited, error, exited
+        case launching, ready, working, rateLimited, error, exited, unknown
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -24,6 +29,8 @@ public enum AgentState: Equatable, Codable {
         switch self {
         case .launching:
             try container.encodeNil(forKey: .launching)
+        case .unknown:
+            try container.encodeNil(forKey: .unknown)
         case .ready:
             try container.encodeNil(forKey: .ready)
         case .working:
@@ -41,6 +48,8 @@ public enum AgentState: Equatable, Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         if container.contains(.launching) {
             self = .launching
+        } else if container.contains(.unknown) {
+            self = .unknown
         } else if container.contains(.ready) {
             self = .ready
         } else if container.contains(.working) {

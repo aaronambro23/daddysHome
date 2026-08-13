@@ -387,7 +387,7 @@ final class MockStore {
             append(target.id, .output, "limit cleared — ready")
         case .error:
             mutate(target.id) { $0.state = .ready }
-        case .launching, .exited:
+        case .launching, .exited, .unknown:
             break
         }
         mutate(target.id) { $0.lastOutputAt = Date() }
