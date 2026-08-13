@@ -6,6 +6,7 @@ public final class SessionManager {
     private var adapters: [AgentKind: AgentAdapter] = [:]
     private var sessionErrors: [String: (error: String, count: Int, lastAt: Date)] = [:]
     private var retryAttempts: [String: Int] = [:]
+    private var pendingModelSwitch: [String: ModelRef] = [:]
     private let lock = NSLock()
     private let maxRetries = 3
     private let errorThresholdCount = 5
@@ -127,7 +128,9 @@ public final class SessionManager {
     /// Switch a running agent to a different model, by its human name.
     ///
     /// Nothing reads the output back to confirm the switch took — see the open
-    /// questions in STATUS.md.
+    /// Mark a model switch as pending so updateSessionState can confirm it.
+    /// Only commit the change if the next output looks successful (no error,
+    /// prompt appears).
     public func selectModel(_ humanName: String, for sessionID: String) throws {
         lock.lock()
         guard let pty = ptyProcesses[sessionID],
@@ -147,7 +150,9 @@ public final class SessionManager {
 
         lock.lock()
         defer { lock.unlock() }
-        sessions[sessionID]?.model = model
+        // Track this as pending — only commit it to the session when we confirm
+        // the output shows success (no error, prompt appears).
+        pendingModelSwitch[sessionID] = model
     }
 
     /// Kill whatever is running and start the same session again from scratch.
@@ -301,6 +306,26 @@ public final class SessionManager {
             updatedSession.state = newState
         }
         updatedSession.lastOutputAt = Date()
+
+        // Confirm pending model switch: if we see the agent back at a prompt
+        // with no error, commit the model change.
+        if let pendingModel = pendingModelSwitch[sessionID] {
+            let outputLower = newOutput.lowercased()
+            let hasError = outputLower.contains("error") || outputLower.contains("failed") ||
+                          outputLower.contains("unknown model") || outputLower.contains("not found")
+            let isReady = newState == .ready || newState == .working
+
+            if !hasError && isReady {
+                // Model switch succeeded
+                updatedSession.model = pendingModel
+                pendingModelSwitch.removeValue(forKey: sessionID)
+            } else if hasError {
+                // Model switch failed, stop waiting
+                pendingModelSwitch.removeValue(forKey: sessionID)
+            }
+            // If still waiting (output is unclear), keep the pending flag
+        }
+
         sessions[sessionID] = updatedSession
     }
 
