@@ -49,9 +49,11 @@ final class MockStore {
     // Data
     var projects: [MockProject] = []
     var agents: [MockAgent] = []
-    var workUnits: [MockWorkUnit] = []
     var voiceLog: [VoiceEntry] = []
-    var terminal: [TerminalLine] = []
+
+    /// Work units marked done by hand. The units themselves are derived from
+    /// live sessions, so only this override needs storing.
+    var doneWorkUnits: Set<String> = []
 
     // Composer
     var composeText: String = ""
@@ -73,7 +75,6 @@ final class MockStore {
     var launchAtLogin: Bool = false
 
     private var tickCount: Int = 0
-    private var streamCursor: [String: Int] = [:]
 
     /// Owns every real pty. Seeded demo agents do not touch this.
     @ObservationIgnored let sessionManager = SessionManager()
@@ -89,7 +90,6 @@ final class MockStore {
         seed()
         selectedProjectID = projects.first?.id
         selectedAgentID = agents.first?.id
-        rebuildTerminal()
     }
 
     // MARK: - Derived
@@ -115,18 +115,33 @@ final class MockStore {
         agents.filter { $0.projectID == projectID && $0.isLive }.count
     }
 
+    /// Work units are derived from sessions, not stored. There is no persistence
+    /// on this branch, so the only honest source is what is actually running —
+    /// an empty list means nothing has been launched, not that data is missing.
+    /// (`simple` is the branch that owns the written record; see BRANCHES.md.)
     func workUnits(for projectID: String?) -> [MockWorkUnit] {
-        guard let projectID else { return workUnits }
-        return workUnits.filter { $0.projectID == projectID }
+        let relevant = projectID.map { pid in agents.filter { $0.projectID == pid } } ?? agents
+
+        return Dictionary(grouping: relevant, by: \.workUnitID)
+            .map { unitID, cards -> MockWorkUnit in
+                let newest = cards.max(by: { $0.lastOutputAt < $1.lastOutputAt })
+                let names = cards.map(\.displayName).sorted().joined(separator: " · ")
+
+                return MockWorkUnit(
+                    id: unitID,
+                    projectID: newest?.projectID ?? "",
+                    name: unitID,
+                    status: doneWorkUnits.contains(unitID) ? .done
+                        : (cards.contains(where: \.isLive) ? .active : .idle),
+                    summary: "\(names) · \(project(newest?.projectID ?? "")?.name ?? "")",
+                    lastActivityAt: newest?.lastOutputAt ?? Date()
+                )
+            }
+            .sorted { $0.lastActivityAt > $1.lastActivityAt }
     }
 
     func project(_ id: String) -> MockProject? {
         projects.first { $0.id == id }
-    }
-
-    var terminalForSelection: [TerminalLine] {
-        guard let id = selectedAgentID else { return [] }
-        return terminal.filter { $0.agentID == id }
     }
 
     // MARK: - Selection
@@ -135,14 +150,12 @@ final class MockStore {
         selectedProjectID = (selectedProjectID == id) ? nil : id
         if let current = selectedAgent, let pid = selectedProjectID, current.projectID != pid {
             selectedAgentID = visibleAgents.first?.id
-            rebuildTerminal()
         }
     }
 
     func select(agent id: String) {
         guard selectedAgentID != id else { return }
         selectedAgentID = id
-        rebuildTerminal()
     }
 
     // MARK: - Actions
@@ -165,16 +178,21 @@ final class MockStore {
     }
 
     /// Spawns a real CLI in a real pty and adds a card backed by it.
-    func launchReal(_ kind: AgentKind, in project: MockProject) {
+    @discardableResult
+    func launchReal(
+        _ kind: AgentKind,
+        in project: MockProject,
+        workUnitID: String? = nil
+    ) -> MockAgent? {
         launchError = nil
 
         let cwd = URL(fileURLWithPath: (project.path as NSString).expandingTildeInPath)
-        let workUnitID = "live-\(Int(Date().timeIntervalSince1970) % 10_000)"
+        let unit = workUnitID ?? newWorkUnitID()
 
         do {
             let session = try sessionManager.createSession(
                 projectID: project.id,
-                workUnitID: workUnitID,
+                workUnitID: unit,
                 agent: kind,
                 cwd: cwd
             )
@@ -184,9 +202,9 @@ final class MockStore {
                 id: session.id,
                 projectID: project.id,
                 agent: kind,
-                workUnitID: workUnitID,
+                workUnitID: unit,
                 model: Self.defaultModel(for: kind),
-                state: .working,
+                state: .launching,
                 startedAt: Date(),
                 lastOutputAt: Date(),
                 sessionID: session.id
@@ -194,9 +212,22 @@ final class MockStore {
             agents.append(card)
             selectedProjectID = project.id
             selectedAgentID = card.id
+            return card
         } catch {
             launchError = "\(kind.rawValue): \(error.localizedDescription)"
+            return nil
         }
+    }
+
+    /// Was `"live-\(epoch % 10_000)"`, which repeats every 2.7 hours — two
+    /// sessions started either side of that boundary shared a work unit.
+    private var workUnitCounter = 0
+    func newWorkUnitID() -> String {
+        workUnitCounter += 1
+
+        let stamp = DateFormatter()
+        stamp.dateFormat = "MMdd-HHmm"
+        return "live-\(stamp.string(from: Date()))-\(workUnitCounter)"
     }
 
     /// The live pty behind an agent card, if it has one.
@@ -218,135 +249,82 @@ final class MockStore {
     // MARK: - Actions
 
     func interrupt(_ agentID: String) {
-        if let agent = agents.first(where: { $0.id == agentID }), let id = agent.sessionID {
-            try? sessionManager.interruptSession(id)
-            mutate(agentID) { $0.lastOutputAt = Date() }
-            return
-        }
-
-        mutate(agentID) { agent in
-            agent.state = .ready
-            agent.lastOutputAt = Date()
-        }
-        append(agentID, .error, "^C  interrupt sent — agent returned to prompt")
+        guard let id = agents.first(where: { $0.id == agentID })?.sessionID else { return }
+        try? sessionManager.interruptSession(id)
+        mutate(agentID) { $0.lastOutputAt = Date() }
     }
 
     func stop(_ agentID: String) {
-        if let agent = agents.first(where: { $0.id == agentID }), let id = agent.sessionID {
-            try? sessionManager.terminateSession(id)
+        guard let id = agents.first(where: { $0.id == agentID })?.sessionID else { return }
+        try? sessionManager.terminateSession(id)
+        if let live = sessionManager.session(id) {
             mutate(agentID) { agent in
-                agent.state = .exited(exitCode: 0)
+                agent.state = live.state
                 agent.lastOutputAt = Date()
             }
-            return
         }
-
-        mutate(agentID) { agent in
-            agent.state = .exited(exitCode: 0)
-            agent.lastOutputAt = Date()
-        }
-        append(agentID, .dim, "session terminated (exit 0)")
     }
 
     /// Nudge a stopped agent to keep going, without throwing away what it has
     /// already worked out. The counterpart to `interrupt`.
     func resume(_ agentID: String) {
-        guard let agent = agents.first(where: { $0.id == agentID }) else { return }
-
-        if let id = agent.sessionID {
-            do {
-                try sessionManager.resumeSession(id)
-                mutate(agentID) { $0.lastOutputAt = Date() }
-            } catch {
-                launchError = "resume: \(error.localizedDescription)"
-            }
-            return
+        guard let id = agents.first(where: { $0.id == agentID })?.sessionID else { return }
+        do {
+            try sessionManager.resumeSession(id)
+            mutate(agentID) { $0.lastOutputAt = Date() }
+        } catch {
+            launchError = "resume: \(error.localizedDescription)"
         }
-
-        mutate(agentID) { agent in
-            agent.state = .working
-            agent.lastOutputAt = Date()
-        }
-        append(agentID, .command, "> continue")
     }
 
+    /// Kill the process and start the same session again. Distinct from
+    /// `resume`, which keeps the conversation.
     func relaunch(_ agentID: String) {
-        guard let agent = agents.first(where: { $0.id == agentID }) else { return }
-
-        // A real card gets a real process. This used to fall through to the
-        // mock path, so a dead live agent sat at "launching" forever: `tick()`
-        // only promotes launching → working for demo agents.
-        if let id = agent.sessionID {
-            mutate(agentID) { agent in
-                agent.state = .launching
-                agent.startedAt = Date()
-                agent.lastOutputAt = Date()
-            }
-            do {
-                try sessionManager.restartSession(id, approvalPolicy: approvalPolicy)
-                rebuildTerminal()
-            } catch {
-                launchError = "relaunch: \(error.localizedDescription)"
-                mutate(agentID) { $0.state = .error(error.localizedDescription) }
-            }
-            return
-        }
+        guard let id = agents.first(where: { $0.id == agentID })?.sessionID else { return }
 
         mutate(agentID) { agent in
             agent.state = .launching
             agent.startedAt = Date()
             agent.lastOutputAt = Date()
         }
-        append(agentID, .rule, "")
-        append(agentID, .command,
-               "$ \(agent.agent.rawValue) --permission-mode \(approvalPolicy.rawValue) --model \(agent.model)")
-        append(agentID, .dim, "starting session…")
+
+        do {
+            try sessionManager.restartSession(id, approvalPolicy: approvalPolicy)
+        } catch {
+            launchError = "relaunch: \(error.localizedDescription)"
+            mutate(agentID) { $0.state = .error(error.localizedDescription) }
+        }
     }
 
+    /// The text goes into the pty; the agent's own output comes back through the
+    /// terminal renderer. There is nothing to fake on the way.
     func send(_ text: String, to agentID: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty,
+              let id = agents.first(where: { $0.id == agentID })?.sessionID else { return }
 
-        // Real session: the text goes into the pty, and the agent's own output
-        // comes back through the terminal renderer. Nothing to fake.
-        if let agent = agents.first(where: { $0.id == agentID }), let id = agent.sessionID {
-            try? sessionManager.sendPrompt(trimmed, to: id)
-            mutate(agentID) { $0.lastOutputAt = Date() }
-            composeText = ""
-            return
-        }
-
-        append(agentID, .command, "> \(trimmed)")
-        mutate(agentID) { agent in
-            agent.state = .working
-            agent.lastOutputAt = Date()
-        }
+        try? sessionManager.sendPrompt(trimmed, to: id)
+        mutate(agentID) { $0.lastOutputAt = Date() }
         composeText = ""
     }
 
+    /// Start a different agent on the same work, in the same project.
+    ///
+    /// This used to append a card with no process behind it, so a handoff
+    /// produced something that looked like an agent and could not be talked to.
     func handOff(_ agentID: String, to kind: AgentKind) {
-        guard let source = agents.first(where: { $0.id == agentID }) else { return }
-        let new = MockAgent(
-            id: UUID().uuidString,
-            projectID: source.projectID,
-            agent: kind,
-            workUnitID: source.workUnitID,
-            model: Self.defaultModel(for: kind),
-            state: .launching,
-            startedAt: Date(),
-            lastOutputAt: Date()
-        )
-        agents.append(new)
-        selectedAgentID = new.id
-        append(new.id, .command,
-               "$ \(kind.rawValue) --permission-mode \(approvalPolicy.rawValue) --model \(new.model)")
-        append(new.id, .dim, "handed off from \(source.displayName) · \(source.workUnitID)")
+        guard let source = agents.first(where: { $0.id == agentID }),
+              let project = project(source.projectID) else { return }
+
+        launchReal(kind, in: project, workUnitID: source.workUnitID)
     }
 
     func markDone(_ workUnitID: String) {
-        guard let idx = workUnits.firstIndex(where: { $0.id == workUnitID }) else { return }
-        workUnits[idx].status = workUnits[idx].status == .done ? .active : .done
-        workUnits[idx].lastActivityAt = Date()
+        if doneWorkUnits.contains(workUnitID) {
+            doneWorkUnits.remove(workUnitID)
+        } else {
+            doneWorkUnits.insert(workUnitID)
+        }
     }
 
     func toggleListening() {
@@ -410,8 +388,11 @@ final class MockStore {
             voiceLevel = 0.18
         }
 
-        // Real sessions report their own state; never script over them.
-        for agent in agents where agent.isRealSession {
+        // Every card is a real session now, so state comes from the process and
+        // nothing invents it. The dashboard sits still when nothing is happening,
+        // which is correct: it used to shuffle states on a timer so it would look
+        // busy while you watched.
+        for agent in agents {
             guard let sessionID = agent.sessionID else { continue }
 
             if let live = sessionManager.session(sessionID) {
@@ -420,61 +401,13 @@ final class MockStore {
 
             // The pty vanishing means the process died on its own.
             if let pty = sessionManager.getPTYProcess(for: sessionID), !pty.isProcessRunning {
-                mutate(agent.id) { $0.state = .exited(exitCode: 0) }
+                mutate(agent.id) { $0.state = .exited(exitCode: pty.exitCode ?? 0) }
             }
         }
 
-        // Stream scripted output for demo agents only.
-        for agent in agents where agent.state == .working && !agent.isRealSession {
-            guard tickCount % 2 == 0 || agent.id == selectedAgentID else { continue }
-            appendStreamLine(for: agent)
-            mutate(agent.id) { $0.lastOutputAt = Date() }
-        }
-
-        // Launching demo agents come up after a beat.
-        for agent in agents where agent.state == .launching && !agent.isRealSession {
-            mutate(agent.id) { $0.state = .working }
-            append(agent.id, .output, "> ready · picking up \(agent.workUnitID)")
-        }
-
-        // Every few seconds one live agent changes state, so the dashboard is
-        // never static while you look at it.
-        if tickCount % 7 == 0 { advanceOneState() }
-    }
-
-    private func advanceOneState() {
-        let candidates = agents.filter(\.isLive)
-        guard let target = candidates.randomElement() else { return }
-
-        switch target.state {
-        case .working:
-            if Int.random(in: 0..<10) < 2 {
-                mutate(target.id) { $0.state = .rateLimited }
-                append(target.id, .error, "rate limit reached — backing off 4m")
-            } else {
-                mutate(target.id) { $0.state = .ready }
-                append(target.id, .output, "✓ done — awaiting instruction")
-            }
-        case .ready:
-            mutate(target.id) { $0.state = .working }
-            append(target.id, .output, "> resuming \(target.workUnitID)…")
-        case .rateLimited:
-            mutate(target.id) { $0.state = .ready }
-            append(target.id, .output, "limit cleared — ready")
-        case .error:
-            mutate(target.id) { $0.state = .ready }
-        case .launching, .exited, .unknown:
-            break
-        }
-        mutate(target.id) { $0.lastOutputAt = Date() }
-    }
-
-    private func appendStreamLine(for agent: MockAgent) {
-        let script = Self.stream(for: agent.agent)
-        let cursor = streamCursor[agent.id] ?? 0
-        let line = script[cursor % script.count]
-        streamCursor[agent.id] = cursor + 1
-        append(agent.id, line.0, line.1)
+        // Rescan for projects occasionally — a repo cloned while Daddy is open
+        // should show up without a restart.
+        if tickCount % 30 == 0 { refreshProjects() }
     }
 
     // MARK: - Buffer plumbing
@@ -484,22 +417,6 @@ final class MockStore {
         body(&agents[idx])
     }
 
-    private func append(_ agentID: String, _ kind: TerminalLine.Kind, _ text: String) {
-        terminal.append(TerminalLine(agentID: agentID, kind: kind, text: text))
-        // Keep the buffer bounded — this runs forever.
-        if terminal.count > 600 {
-            terminal.removeFirst(terminal.count - 600)
-        }
-    }
-
-    private func rebuildTerminal() {
-        guard let agent = selectedAgent else { return }
-        guard !terminal.contains(where: { $0.agentID == agent.id }) else { return }
-        append(agent.id, .command,
-               "$ \(agent.agent.rawValue) --permission-mode \(approvalPolicy.rawValue) --model \(agent.model)")
-        append(agent.id, .rule, "")
-        append(agent.id, .output, "> working on \(agent.workUnitID)…")
-    }
 }
 
 // MARK: - Seed Data
@@ -514,119 +431,16 @@ extension MockStore {
         }
     }
 
-    static func stream(for kind: AgentKind) -> [(TerminalLine.Kind, String)] {
-        switch kind {
-        case .claude:
-            return [
-                (.dim, "· Reading Sources/DaddyCore/SessionManager.swift"),
-                (.output, "  applying edit → SessionManager.swift:118"),
-                (.dim, "· Running swift build"),
-                (.output, "  Compiling DaddyCore (9 sources)"),
-                (.dim, "· Build succeeded in 4.2s"),
-                (.output, "  writing DaddyWork/auth-refactor/notes.md"),
-            ]
-        case .codex:
-            return [
-                (.dim, "· scanning workspace"),
-                (.output, "  patch → tests/test_auth.py"),
-                (.dim, "· pytest -q"),
-                (.output, "  14 passed, 1 skipped"),
-            ]
-        case .cursor:
-            return [
-                (.dim, "· indexing repository"),
-                (.output, "  composer: refactor HEXWatcher polling"),
-                (.dim, "· awaiting approval for 3 file writes"),
-            ]
-        case .opencode:
-            return [
-                (.dim, "· reading prd.md"),
-                (.output, "  drafting milestone-7 checklist"),
-                (.dim, "· idle"),
-            ]
-        }
+    /// Reads the world as it actually is. There is no seeded data left: an
+    /// empty dashboard means no agents are running, which is the truth.
+    func seed() {
+        refreshProjects()
     }
 
-    func seed() {
-        let now = Date()
-
-        projects = [
-            MockProject(id: "daddysHome", name: "daddysHome", path: "~/Documents/daddy"),
-            MockProject(id: "hex-bridge", name: "hex-bridge", path: "~/Documents/hex-bridge"),
-            MockProject(id: "daddycore-spm", name: "daddycore-spm", path: "~/Documents/daddycore-spm"),
-            MockProject(id: "notes-sync", name: "notes-sync", path: "~/Documents/notes-sync"),
-            MockProject(id: "portfolio-site", name: "portfolio-site", path: "~/Documents/portfolio-site"),
-            MockProject(id: "tax-2026", name: "tax-2026", path: "~/Documents/tax-2026"),
-        ]
-
-        agents = [
-            MockAgent(id: "a1", projectID: "daddysHome", agent: .claude,
-                      workUnitID: "auth-refactor", model: "opus-5",
-                      state: .working,
-                      startedAt: now.addingTimeInterval(-1_820),
-                      lastOutputAt: now.addingTimeInterval(-4)),
-            MockAgent(id: "a2", projectID: "daddysHome", agent: .codex,
-                      workUnitID: "test-coverage", model: "gpt-5-codex",
-                      state: .ready,
-                      startedAt: now.addingTimeInterval(-940),
-                      lastOutputAt: now.addingTimeInterval(-96)),
-            MockAgent(id: "a3", projectID: "hex-bridge", agent: .cursor,
-                      workUnitID: "hotkey-latency", model: "composer-1",
-                      state: .rateLimited,
-                      startedAt: now.addingTimeInterval(-5_400),
-                      lastOutputAt: now.addingTimeInterval(-240)),
-            MockAgent(id: "a4", projectID: "daddycore-spm", agent: .opencode,
-                      workUnitID: "milestone-7", model: "sonnet-5",
-                      state: .working,
-                      startedAt: now.addingTimeInterval(-320),
-                      lastOutputAt: now.addingTimeInterval(-2)),
-            MockAgent(id: "a5", projectID: "notes-sync", agent: .claude,
-                      workUnitID: "markdown-sync", model: "opus-5",
-                      state: .error("adapter exited unexpectedly"),
-                      startedAt: now.addingTimeInterval(-7_200),
-                      lastOutputAt: now.addingTimeInterval(-1_500)),
-        ]
-
-        workUnits = [
-            MockWorkUnit(id: "auth-refactor", projectID: "daddysHome", name: "Authentication refactor",
-                         status: .active, summary: "Move token exchange into DaddyCore, drop keychain shim",
-                         lastActivityAt: now.addingTimeInterval(-60)),
-            MockWorkUnit(id: "test-coverage", projectID: "daddysHome", name: "Test coverage push",
-                         status: .active, summary: "CommandParser Spanish cases, 9/14 → 14/14",
-                         lastActivityAt: now.addingTimeInterval(-600)),
-            MockWorkUnit(id: "liquid-glass", projectID: "daddysHome", name: "Liquid Glass reskin",
-                         status: .active, summary: "Real glassEffect surfaces, aurora backdrop, live tabs",
-                         lastActivityAt: now.addingTimeInterval(-20)),
-            MockWorkUnit(id: "hotkey-latency", projectID: "hex-bridge", name: "Hotkey latency",
-                         status: .idle, summary: "Double-tap ⌥ dispatch is ~180ms, target <60ms",
-                         lastActivityAt: now.addingTimeInterval(-3_100)),
-            MockWorkUnit(id: "milestone-7", projectID: "daddycore-spm", name: "Milestone 7 scoping",
-                         status: .active, summary: "Rate-limit backoff policy + session recovery",
-                         lastActivityAt: now.addingTimeInterval(-120)),
-            MockWorkUnit(id: "markdown-sync", projectID: "notes-sync", name: "Markdown sync",
-                         status: .idle, summary: "DaddyWork ↔ Obsidian vault two-way write",
-                         lastActivityAt: now.addingTimeInterval(-9_000)),
-            MockWorkUnit(id: "pty-hardening", projectID: "daddycore-spm", name: "PTY hardening",
-                         status: .done, summary: "NSLock around session table, no more races",
-                         lastActivityAt: now.addingTimeInterval(-86_400)),
-            MockWorkUnit(id: "menu-bar", projectID: "daddysHome", name: "Menu bar background mode",
-                         status: .done, summary: "NSStatusItem persists after window close",
-                         lastActivityAt: now.addingTimeInterval(-172_800)),
-        ]
-
-        voiceLog = [
-            VoiceEntry(at: now.addingTimeInterval(-45),
-                       transcript: "daddy, what's claude doing",
-                       resolution: "read state · claude · auth-refactor · working", didSucceed: true),
-            VoiceEntry(at: now.addingTimeInterval(-300),
-                       transcript: "start codex on test coverage",
-                       resolution: "launch · codex · daddysHome/test-coverage", didSucceed: true),
-            VoiceEntry(at: now.addingTimeInterval(-780),
-                       transcript: "pásate a opus",
-                       resolution: "set model · opus-5 · claude", didSucceed: true),
-            VoiceEntry(at: now.addingTimeInterval(-1_500),
-                       transcript: "mark the auth thing done",
-                       resolution: "ambiguous work unit — asked to confirm", didSucceed: false),
-        ]
+    /// Rescans the disk for projects. Cheap enough to call on demand.
+    func refreshProjects() {
+        projects = ProjectScanner.scan().map {
+            MockProject(id: $0.id, name: $0.name, path: $0.path)
+        }
     }
 }

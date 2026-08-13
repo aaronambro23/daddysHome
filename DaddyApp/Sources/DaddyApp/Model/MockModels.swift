@@ -69,21 +69,6 @@ struct MockWorkUnit: Identifiable {
     var lastActivityAt: Date
 }
 
-struct TerminalLine: Identifiable {
-    enum Kind {
-        case command
-        case output
-        case dim
-        case error
-        case rule
-    }
-
-    let id = UUID()
-    let agentID: String
-    let kind: Kind
-    let text: String
-}
-
 struct VoiceEntry: Identifiable {
     let id = UUID()
     let at: Date

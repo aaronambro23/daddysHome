@@ -32,7 +32,7 @@ struct TerminalPane: View {
                 }
             }
 
-            if let agent = store.selectedAgent, agent.isRealSession {
+            if let agent = store.selectedAgent {
                 if let pty = store.pty(for: agent) {
                     // Real pty: SwiftTerm renders it, including colour and any
                     // interactive prompts the agent draws.
@@ -40,25 +40,18 @@ struct TerminalPane: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                 } else {
-                    VStack(spacing: 6) {
-                        Text("Session ended")
-                            .font(.system(size: 11))
-                            .foregroundStyle(DaddyTheme.textSecondary)
-                        Text("The process is no longer running")
-                            .font(.system(size: 10))
-                            .foregroundStyle(DaddyTheme.textMuted)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    emptyState(
+                        "Session ended",
+                        detail: "The process is no longer running. Relaunch starts a new one."
+                    )
                 }
-            } else if store.selectedAgent != nil {
-                transcript
+            } else if store.agents.isEmpty {
+                emptyState(
+                    "No agents running",
+                    detail: "Pick a project in the sidebar and launch one."
+                )
             } else {
-                VStack {
-                    Text("Select an agent to view output")
-                        .font(.system(size: 11))
-                        .foregroundStyle(DaddyTheme.textMuted)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                emptyState("Select an agent to view its output", detail: nil)
             }
 
             GlassHairline()
@@ -68,63 +61,19 @@ struct TerminalPane: View {
         .glassPanel()
     }
 
-    // MARK: Transcript
-
-    private var transcript: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(store.terminalForSelection) { line in
-                        lineView(line)
-                            .id(line.id)
-                    }
-
-                    HStack(spacing: 6) {
-                        Text(">")
-                            .foregroundStyle(DaddyTheme.textMuted)
-                        BlinkingCursor()
-                    }
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .id("cursor")
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(18)
-            }
-            .onChange(of: store.terminalForSelection.count) {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo("cursor", anchor: .bottom)
-                }
-            }
-        }
-    }
-
     @ViewBuilder
-    private func lineView(_ line: TerminalLine) -> some View {
-        switch line.kind {
-        case .rule:
-            GlassHairline()
-                .padding(.vertical, 4)
-        case .command:
-            Text(line.text)
-                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                .foregroundStyle(DaddyTheme.textPrimary)
-                .textSelection(.enabled)
-        case .output:
-            Text(line.text)
-                .font(.system(size: 10.5, design: .monospaced))
+    private func emptyState(_ title: String, detail: String?) -> some View {
+        VStack(spacing: 6) {
+            Text(title)
+                .font(.system(size: 11))
                 .foregroundStyle(DaddyTheme.textSecondary)
-                .textSelection(.enabled)
-        case .dim:
-            Text(line.text)
-                .font(.system(size: 10.5, design: .monospaced))
-                .foregroundStyle(DaddyTheme.textMuted)
-                .textSelection(.enabled)
-        case .error:
-            Text(line.text)
-                .font(.system(size: 10.5, design: .monospaced))
-                .foregroundStyle(DaddyTheme.failure)
-                .textSelection(.enabled)
+            if let detail {
+                Text(detail)
+                    .font(.system(size: 10))
+                    .foregroundStyle(DaddyTheme.textMuted)
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: Composer
@@ -171,19 +120,3 @@ struct TerminalPane: View {
     }
 }
 
-// MARK: - Cursor
-
-struct BlinkingCursor: View {
-    @State private var on = true
-
-    var body: some View {
-        Text("█")
-            .foregroundStyle(DaddyTheme.textSecondary)
-            .opacity(on ? 0.9 : 0.1)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
-                    on = false
-                }
-            }
-    }
-}

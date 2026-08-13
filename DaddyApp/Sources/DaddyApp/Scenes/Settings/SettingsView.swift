@@ -91,8 +91,8 @@ struct SettingsView: View {
 
                     MetricRow(label: "projects", value: "\(store.projects.count)")
                     MetricRow(label: "sessions", value: "\(store.liveAgentCount) live")
-                    MetricRow(label: "units", value: "\(store.workUnits.count)")
-                    MetricRow(label: "store", value: "~/Library/Daddy/state.json")
+                    MetricRow(label: "units", value: "\(store.workUnits(for: nil).count)")
+                    MetricRow(label: "store", value: "none — sessions end with the app")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(20)
