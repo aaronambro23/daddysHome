@@ -2,7 +2,8 @@ import SwiftUI
 import DaddyCore
 
 struct SettingsView: View {
-    @Environment(MockStore.self) private var store
+    @Environment(AppStore.self) private var store
+    @Environment(HandoffViewModel.self) private var handoffs
 
     private static let claudeModels = ["opus-5", "sonnet-5", "haiku-4-5"]
 
@@ -11,33 +12,19 @@ struct SettingsView: View {
 
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 0) {
-                SectionHeader(title: "AGENT DEFAULTS") {
-                    HeaderCaption(text: "applies to new sessions")
+                SectionHeader(title: "DEFAULTS") {
+                    HeaderCaption(text: "applies to launched agents")
                 }
 
                 VStack(alignment: .leading, spacing: 22) {
                     settingBlock(
                         "Default Claude model",
-                        "Used when a voice command doesn't name a model."
+                        "Used when a launch doesn't name a model."
                     ) {
                         Picker("", selection: $store.defaultModel) {
                             ForEach(Self.claudeModels, id: \.self) { model in
                                 Text(model).tag(model)
                             }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                    }
-
-                    settingBlock(
-                        "Approval policy",
-                        store.approvalPolicy == .safeAuto
-                            ? "Agents pause before writes outside the work unit."
-                            : "Agents never pause. Fast, and entirely on you."
-                    ) {
-                        Picker("", selection: $store.approvalPolicy) {
-                            Text("safe-auto").tag(ApprovalPolicy.safeAuto)
-                            Text("full-bypass").tag(ApprovalPolicy.fullBypass)
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
@@ -59,40 +46,47 @@ struct SettingsView: View {
             .glassPanel()
 
             VStack(alignment: .leading, spacing: 0) {
-                SectionHeader(title: "NOTIFICATIONS") {
-                    HeaderCaption(text: "\(activeNotificationCount)/3 on")
+                SectionHeader(title: "AGENT CLIS") {
+                    HeaderCaption(text: "\(store.installedAgents.count)/4 found")
                 }
 
-                VStack(alignment: .leading, spacing: 22) {
-                    settingBlock("Agent ready", "Ping when a session finishes and wants input.") {
-                        Toggle("", isOn: $store.notifyOnReady)
-                            .toggleStyle(.switch).labelsHidden()
-                    }
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(AgentKind.allCases, id: \.rawValue) { kind in
+                        HStack(spacing: 10) {
+                            Image(systemName: store.isInstalled(kind)
+                                  ? "checkmark.circle.fill"
+                                  : "xmark.circle")
+                                .font(.system(size: 11))
+                                .foregroundStyle(store.isInstalled(kind)
+                                                 ? DaddyTheme.working
+                                                 : DaddyTheme.textMuted)
 
-                    settingBlock("Rate limited", "Ping when an agent hits a provider limit.") {
-                        Toggle("", isOn: $store.notifyOnRateLimit)
-                            .toggleStyle(.switch).labelsHidden()
-                    }
+                            Text(kind.displayName)
+                                .font(.system(size: 12))
+                                .foregroundStyle(DaddyTheme.textPrimary)
 
-                    settingBlock("Session error", "Ping when an adapter exits unexpectedly.") {
-                        Toggle("", isOn: $store.notifyOnError)
-                            .toggleStyle(.switch).labelsHidden()
+                            Spacer(minLength: 6)
+
+                            Text(kind.executableName)
+                                .font(.system(size: 9.5, design: .monospaced))
+                                .foregroundStyle(DaddyTheme.textMuted)
+                        }
                     }
                 }
                 .padding(20)
 
                 GlassHairline()
 
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("STATE")
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("TRACKED")
                         .font(.system(size: 9, weight: .medium))
                         .tracking(0.6)
                         .foregroundStyle(DaddyTheme.textMuted)
 
-                    MetricRow(label: "projects", value: "\(store.projects.count)")
-                    MetricRow(label: "sessions", value: "\(store.liveAgentCount) live")
-                    MetricRow(label: "units", value: "\(store.workUnits.count)")
-                    MetricRow(label: "store", value: "~/Library/Daddy/state.json")
+                    statRow("projects", "\(store.projects.count)")
+                    statRow("with batches", "\(handoffs.summaries.count)")
+                    statRow("tasks open", "\(handoffs.totalOutstandingTasks)")
+                    statRow("needs attention", "\(handoffs.attentionItems.count)")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(20)
@@ -103,9 +97,17 @@ struct SettingsView: View {
         }
     }
 
-    private var activeNotificationCount: Int {
-        [store.notifyOnReady, store.notifyOnRateLimit, store.notifyOnError]
-            .filter { $0 }.count
+    private func statRow(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(DaddyTheme.textMuted)
+                .frame(width: 110, alignment: .leading)
+
+            Text(value)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(DaddyTheme.textSecondary)
+        }
     }
 
     @ViewBuilder

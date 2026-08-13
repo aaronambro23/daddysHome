@@ -4,7 +4,7 @@ import DaddyCore
 /// The PM view: every batch document in the selected project, in order, with
 /// what is done, what is outstanding, and where a new agent should pick up.
 struct WorkUnitsView: View {
-    @Environment(MockStore.self) private var store
+    @Environment(AppStore.self) private var store
     @Environment(HandoffViewModel.self) private var handoffs
 
     var body: some View {
@@ -125,7 +125,7 @@ struct WorkUnitsView: View {
 
     /// Shown when a project has batch documents but no installed contract —
     /// a nudge, not a wall.
-    private func contractNudge(_ project: MockProject) -> some View {
+    private func contractNudge(_ project: Project) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "info.circle")
                 .font(.system(size: 10))
@@ -140,7 +140,7 @@ struct WorkUnitsView: View {
         .padding(.vertical, 10)
     }
 
-    private func notConfigured(_ project: MockProject) -> some View {
+    private func notConfigured(_ project: Project) -> some View {
         VStack(spacing: 14) {
             Text("\(project.name) has no working agreement")
                 .font(.system(size: 12, weight: .semibold))
@@ -170,7 +170,7 @@ struct WorkUnitsView: View {
         .padding(30)
     }
 
-    private func emptyState(_ project: MockProject) -> some View {
+    private func emptyState(_ project: Project) -> some View {
         VStack(spacing: 10) {
             Text("No batches yet")
                 .font(.system(size: 12, weight: .semibold))

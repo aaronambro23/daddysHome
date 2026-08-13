@@ -1,7 +1,8 @@
 import SwiftUI
 
 struct ProjectsSidebar: View {
-    @Environment(MockStore.self) private var store
+    @Environment(AppStore.self) private var store
+    @Environment(HandoffViewModel.self) private var handoffs
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -15,7 +16,7 @@ struct ProjectsSidebar: View {
                         ProjectRow(
                             project: project,
                             isSelected: store.selectedProjectID == project.id,
-                            sessionCount: store.agentCount(for: project.id)
+                            openTaskCount: handoffs.outstandingTasks(for: project.id)
                         ) {
                             withAnimation(.smooth(duration: 0.3)) {
                                 store.select(project: project.id)
@@ -48,10 +49,8 @@ struct ProjectsSidebar: View {
 
     private var focusDescription: String {
         guard let project = store.selectedProject else { return "all projects" }
-        guard let agent = store.selectedAgent, agent.projectID == project.id else {
-            return project.name
-        }
-        return "\(project.name) › \(agent.workUnitID)"
+        guard let resume = handoffs.overview?.resumeAt else { return project.name }
+        return "\(project.name) › \(resume.slug)"
     }
 }
 
@@ -60,9 +59,9 @@ struct ProjectsSidebar: View {
 // Inside a glass panel, so: no glass. Selection is a plain white-alpha inset.
 
 struct ProjectRow: View {
-    let project: MockProject
+    let project: Project
     let isSelected: Bool
-    let sessionCount: Int
+    let openTaskCount: Int
     let onTap: () -> Void
 
     @State private var hovering = false
@@ -71,7 +70,7 @@ struct ProjectRow: View {
         Button(action: onTap) {
             HStack(spacing: 10) {
                 Circle()
-                    .fill(sessionCount > 0 ? DaddyTheme.working : DaddyTheme.textVeryDim)
+                    .fill(openTaskCount > 0 ? DaddyTheme.working : DaddyTheme.textVeryDim)
                     .frame(width: 6, height: 6)
 
                 Text(project.name)
@@ -80,8 +79,8 @@ struct ProjectRow: View {
 
                 Spacer(minLength: 6)
 
-                if sessionCount > 0 {
-                    Text("\(sessionCount)")
+                if openTaskCount > 0 {
+                    Text("\(openTaskCount)")
                         .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                         .foregroundStyle(DaddyTheme.working)
                         .padding(.horizontal, 7)

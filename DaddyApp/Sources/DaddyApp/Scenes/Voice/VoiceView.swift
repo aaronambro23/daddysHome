@@ -1,15 +1,16 @@
 import SwiftUI
 
 struct VoiceView: View {
-    @Environment(MockStore.self) private var store
+    @Environment(AppStore.self) private var store
 
-    private static let examples: [(String, String)] = [
-        ("daddy, what's claude doing", "read state · active session"),
-        ("start codex on test coverage", "launch · codex · daddysHome"),
-        ("switch to opus", "set model · opus-5"),
-        ("pause everything", "interrupt · all live sessions"),
-        ("pásate a español", "set locale · es-MX"),
-        ("mark milestone seven done", "work unit · milestone-7 · done"),
+    /// Phrases the intake will support once `CommandParser` is wired up
+    /// (step 4). Shown as documentation, not as working buttons — pretending
+    /// they work would be the mock data this branch just removed.
+    private static let examples: [String] = [
+        "daddy, start claude on payments",
+        "copy the brief for korean makeup",
+        "what's left on push notifications",
+        "open wagerwise",
     ]
 
     var body: some View {
@@ -61,21 +62,19 @@ struct VoiceView: View {
             GlassHairline()
 
             VStack(alignment: .leading, spacing: 9) {
-                Text("TRY")
+                Text("PLANNED COMMANDS")
                     .font(.system(size: 9, weight: .medium))
                     .tracking(0.6)
                     .foregroundStyle(DaddyTheme.textMuted)
 
                 FlowRow(spacing: 7) {
-                    ForEach(Self.examples, id: \.0) { phrase, resolution in
-                        Button {
-                            withAnimation(.smooth(duration: 0.3)) {
-                                store.simulateVoiceCommand(phrase, resolution: resolution)
-                            }
-                        } label: {
-                            Text(phrase)
-                        }
-                        .buttonStyle(.inset(DaddyTheme.textSecondary))
+                    ForEach(Self.examples, id: \.self) { phrase in
+                        Text(phrase)
+                            .font(.system(size: 10))
+                            .foregroundStyle(DaddyTheme.textMuted)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 6)
+                            .insetCapsule(opacity: 0.06)
                     }
                 }
             }

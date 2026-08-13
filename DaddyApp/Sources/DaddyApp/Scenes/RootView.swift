@@ -1,7 +1,8 @@
 import SwiftUI
 
 struct RootView: View {
-    @Environment(MockStore.self) private var store
+    @Environment(AppStore.self) private var store
+    @Environment(HandoffViewModel.self) private var handoffs
 
     var body: some View {
         @Bindable var store = store
@@ -14,8 +15,8 @@ struct RootView: View {
 
                 Group {
                     switch store.tab {
-                    case .fleet: FleetView()
-                    case .workUnits: WorkUnitsView()
+                    case .overview: OverviewView()
+                    case .batches: WorkUnitsView()
                     case .voice: VoiceView()
                     case .settings: SettingsView()
                     }
@@ -27,9 +28,14 @@ struct RootView: View {
         }
         .preferredColorScheme(.dark)
         .task {
+            // Periodic rescan until the file watcher lands (step 3). Reading a
+            // handful of small Markdown files is cheap.
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                store.tick()
+                try? await Task.sleep(for: .seconds(5))
+                handoffs.scanAll(projects: store.projects)
+                if store.tab == .batches {
+                    handoffs.refresh(project: store.selectedProject)
+                }
             }
         }
     }
@@ -83,12 +89,14 @@ struct RootView: View {
                     .buttonStyle(.plain)
                     .glassPill(interactive: true)
 
+                    // Outstanding work across every tracked project — the one
+                    // number worth carrying in the chrome.
                     HStack(spacing: 6) {
-                        Text("\(store.liveAgentCount)")
+                        Text("\(handoffs.totalOutstandingTasks)")
                             .font(.system(size: 10, weight: .semibold, design: .monospaced))
                             .foregroundStyle(DaddyTheme.textPrimary)
 
-                        Text("sessions")
+                        Text("tasks open")
                             .font(.system(size: 10))
                             .foregroundStyle(DaddyTheme.textSecondary)
                     }

@@ -18,9 +18,128 @@ final class HandoffViewModel {
     @ObservationIgnored private let store = HandoffStore()
     @ObservationIgnored private let installer = ContractInstaller()
 
+    // MARK: - Cross-project overview
+
+    /// One project's batch state, for the Overview tab.
+    struct ProjectSummary: Identifiable {
+        let project: Project
+        let overview: HandoffStore.Overview
+        let isConfigured: Bool
+        let lastActivity: Date?
+
+        var id: String { project.id }
+    }
+
+    /// Something a PM would want flagged.
+    struct AttentionItem: Identifiable {
+        enum Kind {
+            /// Every task ticked, but the document was never marked done.
+            case stalled
+            /// No document touched in a while.
+            case idle
+
+            var symbol: String {
+                switch self {
+                case .stalled: return "exclamationmark.triangle.fill"
+                case .idle: return "clock.badge.questionmark"
+                }
+            }
+
+            var color: Color {
+                switch self {
+                case .stalled: return DaddyTheme.limited
+                case .idle: return DaddyTheme.idle
+                }
+            }
+        }
+
+        let id = UUID()
+        let kind: Kind
+        let projectID: String
+        let title: String
+        let detail: String
+    }
+
+    private(set) var summaries: [ProjectSummary] = []
+    private(set) var attentionItems: [AttentionItem] = []
+
+    /// Unticked tasks across every tracked project.
+    var totalOutstandingTasks: Int {
+        summaries.reduce(0) { $0 + $1.overview.outstandingTasks }
+    }
+
+    /// Unticked tasks for one project, from the last cross-project scan.
+    func outstandingTasks(for projectID: String) -> Int {
+        summaries.first { $0.project.id == projectID }?.overview.outstandingTasks ?? 0
+    }
+
+    /// Days without a document changing before a project is called idle.
+    private let idleThresholdDays = 7
+
+    /// Reads every project. Only projects that actually have batch documents
+    /// are surfaced — otherwise the Overview would list every directory in
+    /// ~/Documents, most of which are not agent work.
+    func scanAll(projects: [Project]) {
+        var found: [ProjectSummary] = []
+        var flags: [AttentionItem] = []
+
+        for project in projects {
+            let url = project.expandedURL
+            let docs = store.documents(in: url, projectID: project.id)
+            guard !docs.isEmpty else { continue }
+
+            let overview = store.overview(of: docs)
+            let lastActivity = docs.map(\.modifiedAt).max()
+
+            found.append(
+                ProjectSummary(
+                    project: project,
+                    overview: overview,
+                    isConfigured: installer.isInstalled(in: url),
+                    lastActivity: lastActivity
+                )
+            )
+
+            // A batch with everything ticked but no "done" status is the most
+            // common real-world failure: the agent finished and forgot to close
+            // the document, so the next one cannot tell if it is safe to move on.
+            for doc in docs where doc.status == .stalled {
+                flags.append(
+                    AttentionItem(
+                        kind: .stalled,
+                        projectID: project.id,
+                        title: "\(project.name) · \(doc.filename)",
+                        detail: "All \(doc.totalCount) tasks ticked but never marked done"
+                    )
+                )
+            }
+
+            if let lastActivity,
+               overview.resumeAt != nil,
+               let days = Calendar.current.dateComponents(
+                   [.day], from: lastActivity, to: Date()
+               ).day,
+               days >= idleThresholdDays {
+                flags.append(
+                    AttentionItem(
+                        kind: .idle,
+                        projectID: project.id,
+                        title: project.name,
+                        detail: "Unfinished work, untouched for \(days) days"
+                    )
+                )
+            }
+        }
+
+        summaries = found.sorted {
+            ($0.lastActivity ?? .distantPast) > ($1.lastActivity ?? .distantPast)
+        }
+        attentionItems = flags
+    }
+
     /// Re-reads the project from disk. Cheap enough to call on a timer — these
     /// are a handful of small Markdown files.
-    func refresh(project: MockProject?) {
+    func refresh(project: Project?) {
         guard let project else {
             documents = []
             overview = nil
@@ -38,16 +157,16 @@ final class HandoffViewModel {
         overview = store.overview(of: docs)
     }
 
-    func handoffDirectory(for project: MockProject) -> URL {
+    func handoffDirectory(for project: Project) -> URL {
         store.handoffDirectory(for: project.expandedURL)
     }
 
-    func nextNumber(for project: MockProject) -> Int {
+    func nextNumber(for project: Project) -> Int {
         store.nextNumber(in: project.expandedURL, projectID: project.id)
     }
 
     /// Installs the cross-CLI working agreement into the project.
-    func installContract(into project: MockProject) {
+    func installContract(into project: Project) {
         installError = nil
         installNotice = nil
 
@@ -71,7 +190,7 @@ final class HandoffViewModel {
 
     /// Writes the derived overview out as `DONE.md` so the state is readable
     /// outside the app. Daddy owns this file; agents are told not to touch it.
-    func writeOverview(for project: MockProject) {
+    func writeOverview(for project: Project) {
         let markdown = store.renderOverviewMarkdown(
             projectName: project.name,
             documents: documents
@@ -90,7 +209,7 @@ final class HandoffViewModel {
 
     /// The brief you hand to a fresh agent so it does not have to be
     /// re-explained the project. This is the whole point of the feature.
-    func handoffBrief(for project: MockProject) -> String {
+    func handoffBrief(for project: Project) -> String {
         guard let overview, !documents.isEmpty else {
             return "No handoff documents yet in \(project.name)."
         }
