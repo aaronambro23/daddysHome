@@ -3,13 +3,20 @@ import SwiftUI
 struct VoiceView: View {
     @Environment(MockStore.self) private var store
 
-    private static let examples: [(String, String)] = [
-        ("daddy, what's claude doing", "read state · active session"),
-        ("start codex on test coverage", "launch · codex · daddysHome"),
-        ("switch to opus", "set model · opus-5"),
-        ("pause everything", "interrupt · all live sessions"),
-        ("pásate a español", "set locale · es-MX"),
-        ("mark milestone seven done", "work unit · milestone-7 · done"),
+    @FocusState private var dictationFocused: Bool
+
+    // Phrases the parser genuinely understands. These are not canned demos —
+    // tapping one runs it through `CommandParser` and into a live session,
+    // exactly as dictating it would.
+    private static let examples: [String] = [
+        "claude, continue",
+        "codex, stop",
+        "what's claude doing",
+        "run the tests",
+        "claude, fix the login bug",
+        "dale",
+        "frena",
+        "hand this to codex",
     ]
 
     var body: some View {
@@ -47,11 +54,13 @@ struct VoiceView: View {
                 .insetCapsule(opacity: store.isListening ? 0.20 : 0.10)
 
                 Text(store.isListening
-                     ? "HEX is armed — speak, or try a phrase below"
+                     ? "HEX is armed — dictation lands in the field below"
                      : "HEX is idle. Double-click ⌥ anywhere to wake it.")
                     .font(.system(size: 10.5))
                     .foregroundStyle(DaddyTheme.textSecondary)
                     .multilineTextAlignment(.center)
+
+                dictationField
 
                 Spacer(minLength: 10)
             }
@@ -67,10 +76,10 @@ struct VoiceView: View {
                     .foregroundStyle(DaddyTheme.textMuted)
 
                 FlowRow(spacing: 7) {
-                    ForEach(Self.examples, id: \.0) { phrase, resolution in
+                    ForEach(Self.examples, id: \.self) { phrase in
                         Button {
                             withAnimation(.smooth(duration: 0.3)) {
-                                store.simulateVoiceCommand(phrase, resolution: resolution)
+                                store.submitVoice(phrase)
                             }
                         } label: {
                             Text(phrase)
@@ -82,6 +91,35 @@ struct VoiceView: View {
             .padding(18)
         }
         .glassPanel()
+    }
+
+    /// Where dictated text lands. HEX pastes into whatever has keyboard focus,
+    /// so Daddy gives it a field of its own rather than reading another app's
+    /// transcript file — no Full Disk Access, and you see what was heard before
+    /// it reaches an agent.
+    private var dictationField: some View {
+        @Bindable var store = store
+
+        return HStack(spacing: 10) {
+            Image(systemName: "mic")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(DaddyTheme.textMuted)
+
+            TextField("speak, or type a command…", text: $store.voiceText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(DaddyTheme.textPrimary)
+                .focused($dictationFocused)
+                .onSubmit { store.submitVoice(store.voiceText) }
+
+            Button("run") { store.submitVoice(store.voiceText) }
+                .buttonStyle(.inset(DaddyTheme.working))
+                .disabled(store.voiceText.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .insetSurface(cornerRadius: 14)
+        .onAppear { dictationFocused = true }
     }
 
     private var waveform: some View {

@@ -42,12 +42,20 @@ public final class MarkdownWriter {
 
         let workUnitDir = getWorkUnitDirectory(project: project, workUnit: workUnit)
 
+        // Was "yyyy-MM-dd_HHmm", so two snapshots taken in the same minute wrote
+        // to the same file and the second silently replaced the first. Seconds,
+        // plus a counter for the genuinely simultaneous case: a snapshot is a
+        // record of a moment, and losing one loses history.
         let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd_HHmm"
+        dateFormatter.dateFormat = "yyyy-MM-dd_HHmmss"
         let timestamp = dateFormatter.string(from: Date())
 
-        let filename = "\(timestamp).md"
-        let filePath = workUnitDir.appendingPathComponent(filename)
+        var filePath = workUnitDir.appendingPathComponent("\(timestamp).md")
+        var suffix = 2
+        while FileManager.default.fileExists(atPath: filePath.path) {
+            filePath = workUnitDir.appendingPathComponent("\(timestamp)-\(suffix).md")
+            suffix += 1
+        }
 
         let markdown = formatSnapshot(snapshot)
 

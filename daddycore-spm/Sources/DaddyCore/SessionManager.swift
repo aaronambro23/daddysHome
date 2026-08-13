@@ -100,6 +100,32 @@ public final class SessionManager {
         sessions[sessionID]?.lastOutputAt = Date()
     }
 
+    /// Switch a running agent to a different model, by its human name.
+    ///
+    /// Nothing reads the output back to confirm the switch took — see the open
+    /// questions in STATUS.md.
+    public func selectModel(_ humanName: String, for sessionID: String) throws {
+        lock.lock()
+        guard let pty = ptyProcesses[sessionID],
+              let session = sessions[sessionID],
+              let adapter = adapters[session.agent] else {
+            lock.unlock()
+            throw SessionError.sessionNotFound(sessionID)
+        }
+        lock.unlock()
+
+        guard let rawValue = adapter.modelFlagValue(for: humanName) else {
+            throw SessionError.unknownModel(humanName, session.agent)
+        }
+
+        let model = ModelRef(agent: session.agent, rawValue: rawValue)
+        try adapter.selectModel(model, on: pty)
+
+        lock.lock()
+        defer { lock.unlock() }
+        sessions[sessionID]?.model = model
+    }
+
     /// Kill whatever is running and start the same session again from scratch.
     ///
     /// Distinct from `resumeSession`: this throws the conversation away. It is
@@ -303,6 +329,7 @@ public final class SessionManager {
         case sessionNotFound(String)
         case unknownAgent(AgentKind)
         case retryLimitReached(String)
+        case unknownModel(String, AgentKind)
 
         public var errorDescription: String? {
             switch self {
@@ -312,6 +339,8 @@ public final class SessionManager {
                 return "Unknown agent: \(agent)"
             case .retryLimitReached(let id):
                 return "Gave up recovering session \(id) after repeated failures"
+            case .unknownModel(let name, let agent):
+                return "\(agent.rawValue) has no model called \"\(name)\""
             }
         }
     }

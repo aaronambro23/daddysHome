@@ -60,6 +60,10 @@ final class MockStore {
     var isListening: Bool = false
     var voiceLevel: Double = 0.2
 
+    /// What was dictated, before it is sent. Shown rather than run blind, so a
+    /// misheard command can be corrected instead of reaching an agent.
+    var voiceText: String = ""
+
     // Settings
     var defaultModel: String = "opus-5"
     var approvalPolicy: ApprovalPolicy = .safeAuto
@@ -73,6 +77,10 @@ final class MockStore {
 
     /// Owns every real pty. Seeded demo agents do not touch this.
     @ObservationIgnored let sessionManager = SessionManager()
+
+    /// Turns a spoken sentence into an intent. Existed and was unit-tested long
+    /// before anything called it.
+    @ObservationIgnored let commandParser = CommandParser()
 
     /// Surfaced in the UI when a launch fails (missing binary, bad cwd).
     var launchError: String?
@@ -352,14 +360,40 @@ final class MockStore {
         }
     }
 
-    func simulateVoiceCommand(_ phrase: String, resolution: String) {
+    /// The one entry point for spoken input. Dictated text lands in the voice
+    /// composer (HEX pastes into whatever has focus, and Daddy only listens
+    /// while it is frontmost), and this routes it to a real agent.
+    @MainActor
+    func submitVoice(_ transcript: String) {
+        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let outcome = VoiceRouter(store: self).route(trimmed)
+
         voiceLog.insert(
-            VoiceEntry(at: Date(), transcript: phrase, resolution: resolution, didSucceed: true),
+            VoiceEntry(at: Date(), transcript: trimmed,
+                       resolution: outcome.summary, didSucceed: outcome.didSucceed),
             at: 0
         )
-        if let id = selectedAgentID {
-            append(id, .dim, "voice · \(resolution)")
-            mutate(id) { $0.state = .working }
+        voiceText = ""
+    }
+
+    /// Switch the model on a live session. Returns false if the agent has no
+    /// model by that name, so the caller can say so rather than fail silently.
+    func switchModel(_ humanName: String, on agentID: String) -> Bool {
+        guard let agent = agents.first(where: { $0.id == agentID }) else { return false }
+
+        guard let sessionID = agent.sessionID else {
+            mutate(agentID) { $0.model = humanName }
+            return true
+        }
+
+        do {
+            try sessionManager.selectModel(humanName, for: sessionID)
+            mutate(agentID) { $0.model = humanName }
+            return true
+        } catch {
+            return false
         }
     }
 
