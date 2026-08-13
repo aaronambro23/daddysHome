@@ -222,6 +222,34 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
         return kill(-group, 0) != 0
     }
 
+    /// Turns a raw `waitpid` status into the exit code a shell would report.
+    ///
+    /// SwiftTerm hands the delegate the status word, not the code: a child that
+    /// runs `exit 3` arrives here as 768, which is `3 << 8`. Every consumer of
+    /// this class was reporting that number verbatim.
+    ///
+    /// A process killed by a signal has no exit code, so it is reported as
+    /// `128 + signal` — the same convention shells use, which matters here
+    /// because `shutdown()` ends agents with SIGKILL.
+    static func decodeWaitStatus(_ status: Int32) -> Int32 {
+        let lowBits = status & 0x7f
+        if lowBits == 0 || lowBits == 0x7f {
+            return (status >> 8) & 0xff
+        }
+        return 128 + lowBits
+    }
+
+    /// The child's exit code, or nil while it is still running.
+    ///
+    /// Unlike `waitUntilExit()` this never blocks, so it is safe to ask right
+    /// after `shutdown()` — where waiting could deadlock if the termination
+    /// delegate has not fired yet.
+    public var exitCode: Int32? {
+        lock.lock()
+        defer { lock.unlock() }
+        return hasExited ? lastExitCode : nil
+    }
+
     /// Blocks until the child exits. Returns its exit code.
     @discardableResult
     public func waitUntilExit() -> Int32 {
@@ -335,7 +363,7 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
             return
         }
         hasExited = true
-        lastExitCode = exitCode ?? 0
+        lastExitCode = Self.decodeWaitStatus(exitCode ?? 0)
         let code = lastExitCode
         let callbacks = terminationCallbacks
         terminationCallbacks.removeAll()

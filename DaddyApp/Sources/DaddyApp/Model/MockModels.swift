@@ -46,6 +46,12 @@ struct MockAgent: Identifiable {
         if case .exited = state { return false }
         return true
     }
+
+    /// Mid-task. Interrupting is the useful control here; continuing is not.
+    var isBusy: Bool {
+        if case .working = state { return true }
+        return false
+    }
 }
 
 struct MockWorkUnit: Identifiable {

@@ -84,16 +84,41 @@ public final class SessionManager {
     }
 
     public func interruptSession(_ sessionID: String) throws {
+        let (pty, adapter) = try liveSession(sessionID)
+        try adapter.interrupt(pty)
+    }
+
+    /// Tell a stopped agent to keep going. The other half of `interruptSession`
+    /// — without it you can halt an agent but never restart its train of
+    /// thought, which is most of the point of holding the process.
+    public func resumeSession(_ sessionID: String) throws {
+        let (pty, adapter) = try liveSession(sessionID)
+        try adapter.resume(pty)
+
         lock.lock()
-        guard let ptyProcess = ptyProcesses[sessionID],
-              let session = sessions[sessionID],
-              let adapter = adapters[session.agent] else {
+        defer { lock.unlock() }
+        sessions[sessionID]?.lastOutputAt = Date()
+    }
+
+    /// Kill whatever is running and start the same session again from scratch.
+    ///
+    /// Distinct from `resumeSession`: this throws the conversation away. It is
+    /// what "relaunch" on a dead card should do.
+    public func restartSession(
+        _ sessionID: String,
+        approvalPolicy: ApprovalPolicy = .safeAuto
+    ) throws {
+        lock.lock()
+        guard let session = sessions[sessionID] else {
             lock.unlock()
             throw SessionError.sessionNotFound(sessionID)
         }
         lock.unlock()
 
-        try adapter.interrupt(ptyProcess)
+        teardownPTY(for: sessionID)
+
+        session.state = .launching
+        try launchSession(session, approvalPolicy: approvalPolicy)
     }
 
     public func terminateSession(_ sessionID: String) throws {
@@ -114,9 +139,46 @@ public final class SessionManager {
         ptyProcesses.removeValue(forKey: sessionID)
 
         if let session = sessions[sessionID] {
-            session.state = .exited(exitCode: 0)
+            // Report what actually happened, not a hardcoded success.
+            session.state = .exited(exitCode: ptyProcess.exitCode ?? 0)
             sessions[sessionID] = session
         }
+    }
+
+    /// Attaches an already-launched process to a session.
+    ///
+    /// Internal, not public: the app always goes through `launchSession`. Tests
+    /// use this to drive the lifecycle with a stand-in process rather than
+    /// requiring an agent CLI to be installed.
+    func attach(_ pty: PTYProcess, to sessionID: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        ptyProcesses[sessionID] = pty
+    }
+
+    /// Shuts down the pty attached to a session, leaving the session itself in
+    /// the table.
+    ///
+    /// Both restart and recover used to just drop the reference, which leaked
+    /// the old agent and every process it had spawned.
+    func teardownPTY(for sessionID: String) {
+        lock.lock()
+        let existing = ptyProcesses.removeValue(forKey: sessionID)
+        lock.unlock()
+
+        existing?.shutdown()
+    }
+
+    private func liveSession(_ sessionID: String) throws -> (PTYProcess, AgentAdapter) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let pty = ptyProcesses[sessionID],
+              let session = sessions[sessionID],
+              let adapter = adapters[session.agent] else {
+            throw SessionError.sessionNotFound(sessionID)
+        }
+        return (pty, adapter)
     }
 
     public func session(_ sessionID: String) -> Session? {
@@ -173,10 +235,15 @@ public final class SessionManager {
         sessions[sessionID] = updatedSession
     }
 
+    /// Sessions that still have a process behind them. This used to be a second
+    /// copy of `allSessions()`, which made the name a lie.
     public func getActiveSessions() -> [Session] {
         lock.lock()
         defer { lock.unlock() }
-        return Array(sessions.values)
+        return sessions.values.filter { session in
+            if case .exited = session.state { return false }
+            return ptyProcesses[session.id]?.isProcessRunning ?? false
+        }
     }
 
     public func getPTYProcess(for sessionID: String) -> PTYProcess? {
@@ -214,26 +281,28 @@ public final class SessionManager {
             lock.unlock()
             throw SessionError.sessionNotFound(sessionID)
         }
-        lock.unlock()
 
+        // `retryAttempts` used to be read and written outside the lock.
         let attempts = (retryAttempts[sessionID] ?? 0) + 1
         guard attempts <= maxRetries else {
-            throw SessionError.sessionNotFound("Max retries exceeded for \(sessionID)")
+            lock.unlock()
+            throw SessionError.retryLimitReached(sessionID)
         }
-
         retryAttempts[sessionID] = attempts
-
-        lock.lock()
-        ptyProcesses[sessionID] = nil
         sessionErrors[sessionID] = nil
         lock.unlock()
 
+        // Kills the old process group rather than orphaning it.
+        teardownPTY(for: sessionID)
+
+        session.state = .launching
         try launchSession(session)
     }
 
     public enum SessionError: LocalizedError {
         case sessionNotFound(String)
         case unknownAgent(AgentKind)
+        case retryLimitReached(String)
 
         public var errorDescription: String? {
             switch self {
@@ -241,6 +310,8 @@ public final class SessionManager {
                 return "Session not found: \(id)"
             case .unknownAgent(let agent):
                 return "Unknown agent: \(agent)"
+            case .retryLimitReached(let id):
+                return "Gave up recovering session \(id) after repeated failures"
             }
         }
     }

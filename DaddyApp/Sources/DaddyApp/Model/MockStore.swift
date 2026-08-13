@@ -240,13 +240,55 @@ final class MockStore {
         append(agentID, .dim, "session terminated (exit 0)")
     }
 
+    /// Nudge a stopped agent to keep going, without throwing away what it has
+    /// already worked out. The counterpart to `interrupt`.
+    func resume(_ agentID: String) {
+        guard let agent = agents.first(where: { $0.id == agentID }) else { return }
+
+        if let id = agent.sessionID {
+            do {
+                try sessionManager.resumeSession(id)
+                mutate(agentID) { $0.lastOutputAt = Date() }
+            } catch {
+                launchError = "resume: \(error.localizedDescription)"
+            }
+            return
+        }
+
+        mutate(agentID) { agent in
+            agent.state = .working
+            agent.lastOutputAt = Date()
+        }
+        append(agentID, .command, "> continue")
+    }
+
     func relaunch(_ agentID: String) {
+        guard let agent = agents.first(where: { $0.id == agentID }) else { return }
+
+        // A real card gets a real process. This used to fall through to the
+        // mock path, so a dead live agent sat at "launching" forever: `tick()`
+        // only promotes launching → working for demo agents.
+        if let id = agent.sessionID {
+            mutate(agentID) { agent in
+                agent.state = .launching
+                agent.startedAt = Date()
+                agent.lastOutputAt = Date()
+            }
+            do {
+                try sessionManager.restartSession(id, approvalPolicy: approvalPolicy)
+                rebuildTerminal()
+            } catch {
+                launchError = "relaunch: \(error.localizedDescription)"
+                mutate(agentID) { $0.state = .error(error.localizedDescription) }
+            }
+            return
+        }
+
         mutate(agentID) { agent in
             agent.state = .launching
             agent.startedAt = Date()
             agent.lastOutputAt = Date()
         }
-        guard let agent = agents.first(where: { $0.id == agentID }) else { return }
         append(agentID, .rule, "")
         append(agentID, .command,
                "$ \(agent.agent.rawValue) --permission-mode \(approvalPolicy.rawValue) --model \(agent.model)")

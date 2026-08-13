@@ -49,11 +49,17 @@ struct AgentCard: View {
             }
 
             HStack(spacing: 8) {
-                if agent.isLive {
+                // The control that is useful depends on what the agent is
+                // doing: halt it while it works, restart its train of thought
+                // once it has stopped, spawn a new process once it is gone.
+                if !agent.isLive {
+                    Button("Relaunch") { store.relaunch(agent.id) }
+                } else if agent.isBusy {
                     Button("Interrupt") { store.interrupt(agent.id) }
                     Button("Stop") { store.stop(agent.id) }
                 } else {
-                    Button("Relaunch") { store.relaunch(agent.id) }
+                    Button("Continue") { store.resume(agent.id) }
+                    Button("Stop") { store.stop(agent.id) }
                 }
 
                 Menu("Hand off") {

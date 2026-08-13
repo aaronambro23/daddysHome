@@ -149,6 +149,12 @@ struct TerminalPane: View {
                 .disabled(store.composeText.trimmingCharacters(in: .whitespaces).isEmpty
                           || store.selectedAgent == nil)
 
+            Button("go on") {
+                if let agent = store.selectedAgent { store.resume(agent.id) }
+            }
+            .buttonStyle(.inset(DaddyTheme.working))
+            .disabled(store.selectedAgent == nil)
+
             Button("esc") {
                 if let agent = store.selectedAgent { store.interrupt(agent.id) }
             }
