@@ -1,429 +1,210 @@
-# Daddy — Project Status
+# Daddy — Project Status (`simple` branch)
 
-**Last Updated**: 2026-08-12  
-**Repository**: `git@github.com-personal:aaronambro23/daddysHome.git`  
-**Current Phase**: Milestones 0-6 complete, UI redesign + HEX integration complete, Liquid Glass UI reskin in progress
-
----
-
-## Completed Milestones
-
-| Milestone | Component | Status | Tests |
-|-----------|-----------|--------|-------|
-| **0** | PTY control, adapters, session management | ✅ Complete | N/A |
-| **1** | Integration tests | ✅ Complete | 5/6 passing |
-| **2** | macOS app + CLI with SwiftTerm | ✅ Complete | N/A |
-| **3** | Workflow state model & persistence | ✅ Complete | 7/7 passing |
-| **4** | Markdown workflow system | ✅ Complete | 4/5 passing |
-| **5** | Voice command parser (English/Spanish) | ✅ Complete | 9/14 passing |
-| **6** | Background app refinement | ✅ Complete | 26/32 passing |
+**Last Updated**: 2026-08-12
+**Repository**: `git@github.com-personal:aaronambro23/daddysHome.git`
+**Branch**: `simple`
 
 ---
 
-## Test Results
+## What Daddy is
+
+A **command centre and PM centre** for AI coding agents.
+
+Daddy does not run agents inside itself. It launches them into Terminal.app,
+where the work actually happens, and it owns the paper trail: what each batch of
+work was meant to do, what got done, what is left, and what the previous agent
+thought should happen next.
+
+The problem it exists to solve: when you open a new agent session — a fresh
+Claude chat, or a switch to Codex or Cursor — you should not have to re-explain
+the project. Daddy hands the new session a written record of exactly where the
+last one stopped.
+
+---
+
+## The two branches
+
+| | `simple` (this branch) | `complex` |
+|---|---|---|
+| **Where work happens** | Your own Terminal.app window | Embedded terminal inside Daddy |
+| **Who owns the process** | Terminal.app | `SessionManager` owns a real pty |
+| **What Daddy shows** | Batch documents, progress, history | Live agent output, states, uptime |
+| **Terminal rendering** | None | SwiftTerm `TerminalView` |
+| **Core question** | "Where did we leave off?" | "What is the agent doing right now?" |
+| **Head** | `802c040` | `b78c745` |
+
+Both share the same base commit (`b78c745`): the real pty work, the
+process-group shutdown fix, `ExecutableResolver`, and the Liquid Glass UI.
+`simple` then removed the embedded terminal and everything mock; `complex`
+keeps them.
+
+`simple` is the active line of development.
+
+---
+
+## The workflow
+
+1. **Install the working agreement** on a project. Daddy writes `AGENTS.md` —
+   the convention Codex, Cursor and opencode already read — plus a one-line
+   `CLAUDE.md` containing `@AGENTS.md`, so Claude Code picks up the same file.
+   One contract, every CLI.
+
+2. **You decide the batching.** In your prompt, you say how the work should be
+   divided. One area of work may become one document or five; the agent does not
+   decide this.
+
+3. **The agent creates the document at the start of a batch**, at
+   `docs/handoffs/NNN-slug.md` in the project it is working in — numbered for
+   order, with the plan as unticked checkboxes.
+
+4. **It ticks boxes as it works**, and records changes (especially deletions) as
+   it goes.
+
+5. **It closes the document** with a summary and, most importantly, its opinion
+   on the next possible steps — the part a git diff can never produce.
+
+6. **Daddy reads all of it** and tells you where a new agent should resume. One
+   click launches that agent in Terminal.app, already told which document to read
+   and which tasks are still open.
+
+Because the document is created at the *start*, a half-ticked file is itself the
+"where we left off" signal. Nothing has to be reconstructed after the fact, and
+an interrupted session still leaves a usable record.
+
+---
+
+## Development status
+
+| Step | | Status |
+|---|---|---|
+| — | Handoff contract, parser, derived overview | ✅ `85a5a0e` |
+| 1 | Cross-project Overview; mock surfaces removed | ✅ `549aef9` |
+| 2 | Launch into Terminal.app, pre-briefed | ✅ `c7721c4` |
+| 4 | Voice intake, foreground-only | ✅ `802c040` |
+| 3 | Live refresh via file watching | ⬜ Not started |
+| 5 | Diagnostics (`daddy doctor`) | ⬜ Not started |
+
+### Tests
 
 ```
-Total: 43/49 passing, 1 skipped (6 failures) — whole suite runs in ~4s
-├── PTYIntegrationTests:     5/5 passing ✅ (+1 skipped, opt-in live agent)
-├── ExecutableResolverTests: 6/6 passing ✅  new
-├── TerminalInputTests:      5/5 passing ✅  new
-├── UTF8ChunkDecodingTests:  5/5 passing ✅  new
-├── WorkflowStateTests:      7/7 passing ✅
-├── DaddyCoreTests:          1/1 passing ✅
-├── MarkdownWriterTests:     4/5 passing     (pre-existing failure)
-└── CommandParserTests:      9/14 passing    (pre-existing failures)
+82 tests · 5 failures · 1 skipped · ~1s
 ```
 
-All 6 remaining failures are pre-existing and confined to `CommandParserTests` and
-`MarkdownWriterTests`. Note `CommandParserTests` is mildly flaky — the failure count
-varies between 4 and 5 across runs.
+All failures are pre-existing and confined to `CommandParserTests` and
+`MarkdownWriterTests`. `CommandParserTests` is mildly flaky — the count varies
+between 4 and 5 across runs.
 
-**Live agent tests are opt-in:**
+Live agent tests are opt-in: `DADDY_LIVE_AGENT_TESTS=1 swift test`. They are
+skipped by default because launching an interactive agent TUI inside XCTest is
+unreliable — the agent never exits and the runner can block at exit on the file
+descriptors it inherited.
+
+---
+
+## What's built
+
+### DaddyCore
+
+- **`WorkflowContract.swift`** — the cross-CLI working agreement written into a
+  project. A Claude *skill* cannot serve this role: skills live in
+  `.claude/skills/` and no other CLI can read them.
+- **`HandoffDoc.swift`** — parses `NNN-slug.md`: status, agent, checkbox
+  progress, goal / summary / changes / next-steps. Distinguishes "all ticked but
+  never marked done" (`stalled`) from `done`, and ignores the template's italic
+  placeholders so a fresh document does not look pre-filled.
+- **`HandoffStore.swift`** — reads a project's documents and derives the
+  overview, including which document to resume at. Can render it as `DONE.md`.
+- **`ContractInstaller.swift`** — writes `AGENTS.md` + `CLAUDE.md`, copying any
+  existing file to `.bak` first.
+- **`TerminalLauncher.swift`** — opens an agent in Terminal.app via AppleScript
+  `do script`, with an initial prompt naming the document to continue.
+- **`ExecutableResolver.swift`** — resolves bare CLI names against the login
+  shell's PATH. A GUI app launched from Finder inherits a minimal PATH that does
+  not include `~/.local/bin`, where these CLIs live.
+- **`PTYProcess.swift`** — a real pty (`forkpty` via SwiftTerm's `LocalProcess`)
+  with process-group shutdown. Unused by the UI on this branch; kept for future
+  unattended runs.
+- **`TerminalInput.swift`** — typed control bytes and named keys.
+
+### DaddyApp
+
+- **Overview** — every project that has batch documents, its progress, and a
+  Needs Attention panel flagging stalled batches and projects with unfinished
+  work untouched for a week.
+- **Batches** — the selected project's documents in order, expandable to goal,
+  outstanding tasks, summary and next steps. "Copy brief" assembles what a fresh
+  agent needs. "Continue with…" launches an agent on that batch.
+- **Voice** — foreground-only intake (see below).
+- **Settings** — which agent CLIs actually resolve, and what Daddy is tracking.
+
+Projects are real directories under `~/Documents`, via DaddyCore's
+`discoverProjects()`, filtered to those that still exist.
+
+---
+
+## How voice works
+
+HEX (`/Applications/Hex.app`, third-party) keeps its global hotkey and stays
+useful in every other app. Daddy takes **no microphone permission**, watches no
+files, and needs no Full Disk Access.
+
+When Daddy becomes frontmost it focuses its voice field. HEX pastes the
+transcription into that field, Daddy shows its interpretation, and **Return**
+runs it.
+
+Foreground rather than a wake word because HEX always pastes into the focused
+field — `copyToClipboard: false`, `useClipboardPaste: true`, and there is no
+silent mode. A global "daddy, …" would type the command into whatever app you
+were in. Frontmost makes the paste land somewhere harmless, and visible.
+
+`VoiceRouter` reuses `CommandParser` for intent and its Spanish keywords, but
+does its own verb, agent and target matching: `CommandParser`'s dictionary has
+`continue`, `go` and `dale` but no `start`, `launch` or `run`, and it has no
+concept of projects or batches.
+
+---
+
+## Known gaps
+
+- **The HEX paste path has never been tested with real dictation.** The field
+  focuses, the parse is correct, and the launch works — but pasting from HEX into
+  the focused field is the one step that has not been exercised.
+- **No file watching yet.** A five-second rescan stands in, so an agent ticking a
+  box takes up to five seconds to appear. Step 3 replaces this.
+- **No diagnostics.** Failures are silent: a CLI missing from PATH, `Hex.app` not
+  installed, `saveTranscriptionHistory` switched off. Step 5 addresses this.
+- **`HEXWatcher` is unused and buggy.** Its dedup compares `UInt64(text.utf8.count)`
+  against a variable named `lastReadPosition`, so a short transcription following
+  a long one is dropped. Only relevant if a global wake-word mode is ever added.
+- **`CommandParser` has 4-5 failing tests**, covering intents this branch routes
+  around rather than uses.
+
+---
+
+## Build & test
 
 ```bash
-DADDY_LIVE_AGENT_TESTS=1 swift test   # launches the real claude CLI
-```
-
-They are skipped by default because launching an interactive agent TUI inside XCTest is
-unreliable: the agent never exits on its own, and the runner can block at exit on the
-file descriptors it inherited. The pty layer is covered without it — `testSessionOutputCapture`
-exercises real `forkpty` output, and `testTerminateKillsDescendants` proves process-group
-shutdown reaps spawned children.
-
----
-
-## What's Built
-
-### DaddyCore (Swift Package)
-
-Core types and business logic:
-- **Models.swift**: `Project`, `WorkUnit`, `Session`, `AgentKind` (Sendable), `AgentState` (Codable), `ModelRef`, `Focus`
-- **PTYProcess.swift**: Real pseudo-terminal via SwiftTerm's `LocalProcess` (`forkpty`), so
-  agents see a TTY and keep colour/spinners/approval prompts. Process-group shutdown
-  (SIGHUP+SIGTERM → grace → SIGKILL) so Node descendants are not orphaned; incremental
-  UTF-8 decoding across chunk boundaries
-- **ExecutableResolver.swift**: Resolves bare CLI names against the login shell's PATH —
-  a GUI app's inherited PATH does not include `~/.local/bin` where the agents live
-- **TerminalInput.swift**: Typed input (control bytes, named keys, text) so an interrupt
-  is a real `0x03` and Enter is `\r`, not `\n`
-- **AgentAdapter.swift**: Protocol + 4 implementations (Claude, Codex, Cursor, OpenCode)
-- **SessionManager.swift**: Concurrent multi-session orchestration with NSLock
-- **WorkflowState.swift**: Project discovery, focus management, persistent JSON state
-- **MarkdownWriter.swift**: Create/manage workflow Markdown files (Desktop/DaddyWork/...)
-- **CommandParser.swift**: Parse English/Spanish voice commands into structured intents
-
-### DaddyApp (macOS executable)
-
-User-facing application:
-- AppKit-based GUI with futuristic dark theme (trippy cyan/green accents)
-- Menu-bar NSStatusItem with persistent background operation
-- Three-pane layout: Projects | Agent Dashboard | Terminal
-- Projects sidebar: shows ~/Documents directories for active work
-- Agent Dashboard: real-time cards showing:
-  * Agent name (cyan), state emoji, project path
-  * Model in use, work unit ID, last activity
-- SwiftTerm's `TerminalView` for rendering, via `TerminalSurface` — a renderer only;
-  `SessionManager` owns the pty (not `LocalProcessTerminalView`, which would own its own)
-- SessionManager integration for real sessions launched from the dashboard
-- Real-time status icon (◇ inactive, ● active, ⚠ rate-limited)
-- macOS notifications for session state changes
-- HEX integration: listens for voice commands, auto-spawns agents
-
-### daddy-cli (CLI executable)
-
-Command-line control:
-- `daddy-cli launch <agent> <project-path> [model]`
-- `daddy-cli help`
-- Fully functional; tests pass
-
----
-
-## Key Capabilities Working
-
-✅ Create sessions for any of 4 agents in any project directory  
-✅ Launch sessions (spawn real CLI processes via PTY)  
-✅ Capture live process output in real-time  
-✅ Detect agent state (ready/working/rate-limited/error/exited)  
-✅ Send prompts and commands into live sessions  
-✅ Interrupt and resume sessions  
-✅ Concurrent multi-session management  
-✅ Thread-safe access via NSLock  
-✅ Parse English and Argentine Spanish voice commands  
-✅ Persist workflow state to JSON  
-✅ Create timestamped Markdown context files  
-✅ Mark work units complete with DONE.md  
-✅ Project discovery from ~/Documents  
-✅ Rate-limit detection (word-boundary regex)  
-✅ Menu-bar status monitoring (persistent background app)  
-✅ Dynamic session list in menu  
-✅ Error recovery with retry mechanism  
-✅ User notifications for session state changes  
-✅ Futuristic dark dashboard UI (cyan/green accents)  
-✅ Project sidebar (~/Documents directories)  
-✅ Active agent dashboard with real-time status  
-✅ HEX integration (voice command parsing & spawning)  
-✅ Clickable session cards with live terminal output  
-✅ Real-time PTY streaming to terminal pane  
-✅ Session selection with visual highlighting  
-
----
-
-## Remaining Work
-
-### Milestone 6: Background App Refinement ✅ Complete
-
-- [x] Menu-bar NSStatusItem (active session count, rate-limited agents, current focus indicator)
-- [x] Persistent background operation independent of window visibility
-- [x] State-detection regex tuning per CLI behavior (word-boundary patterns)
-- [x] Error recovery and resilience (retry mechanism, error tracking)
-- [x] User-facing status notifications (macOS notifications for state changes)
-
-### Latest Work (Post-Milestone 6)
-
-**UI Redesign** ✅ Complete
-- Futuristic dark theme with cyan/green accents (RGB: 0.05-0.12)
-- Three-pane layout with projects, dashboard, terminal
-- Project sidebar showing ~/Documents directories
-- Real-time agent dashboard with status cards
-- Live updates (1s sessions, 2s projects)
-
-**HEX Integration** ⚠️ Not wired — see "HEX Voice Intake" under Future Work
-- `HEXWatcher.swift` and `CommandParser.swift` both exist and are unit-tested
-- But nothing constructs `HEXWatcher` anywhere in the app, and `CommandParser`
-  is referenced only by its own tests. The pieces are in isolation; no voice
-  command has ever reached a session.
-
-**Terminal Wiring** ✅ Complete
-- Click agent cards to select and view live output
-- Selected card highlights (bright cyan, 2px border)
-- Terminal pane streams real-time PTY output
-- Green monospace terminal aesthetic
-- Auto-scrolls to latest output
-- Switch between agents by clicking cards
-
-**Liquid Glass UI Reskin** 🔄 In Progress (Step 1-5 Complete)
-- Dark gradient sky background (#0a1030 → #1a1046 → #07333f, 135°)
-- 3 drifting radial-gradient color orbs (blue, teal, purple) with soft 40-50px blur
-- Custom glass panel modifiers using .ultraThinMaterial + tint + border + highlight + shadow
-- Recolored all UI: accent blue (#33ccff), working green (#1aff99), amber, purple
-- Dark terminal pane with green text (#00ff80) and green-tinted border
-- Breathing dot animations for HEX-ready and working states
-- State-aware status badges (ready=neutral white, working=green+glow, rateLimited=amber, error=red)
-- Interactive enhancements: hover effects on pills (HEX ready, session count) and agent cards
-- Card scaling animation (1.02x) on hover/selection for tactile feedback
-- Header as flush glass strip with traffic-light clearance (78pt leading padding)
-
-**Liquid Glass Approach** (Current vs. Future):
-- **Current (macOS 13+)**: Custom `.ultraThinMaterial` glass modifiers with manual overlays
-  - Real blur effect via material background
-  - Manual tint layer, 1px stroke border, top edge highlight, drop shadow
-  - Hover-based interactivity (state tracking + scale effects)
-  - Works on current macOS version (no unreleased APIs)
-- **Deferred (macOS 26.0+)**: Apple's official Liquid Glass APIs (not yet available)
-  - `glassEffect()` modifier for automatic glass rendering
-  - `GlassEffectContainer` for intelligent shape blending
-  - `glassEffectID()` + morphing transitions for automatic card/shape morphing
-  - `.interactive()` for real-time pointer/touch responsiveness
-  - Better performance optimization via native framework
-
-**Next Steps (Step 6 & Beyond)**:
-- [ ] Terminal input (accept user typing in terminal pane → PTY)
-- [ ] Session management buttons (stop, interrupt on cards)
-- [ ] Full Liquid Glass morphing once macOS 26.0+ APIs available
-- [ ] Fix remaining 6 test failures
-- [ ] Session history/replay
-- [ ] Task status tags (feat/bug/refactor/test)
-- [ ] Clickable project cards to spawn new sessions
-
-### Future Work (Beyond MVP)
-
-**HEX Voice Intake** (not started — components exist, nothing is connected)
-
-*What HEX is:* a third-party system-wide dictation app (`/Applications/Hex.app`,
-bundle `com.kitlangton.Hex`). Daddy does **not** implement speech recognition and
-never needs microphone permission. HEX keeps its own global hotkey (hold left ⌥,
-double-tap to lock) and stays useful across every other app on the machine.
-
-*What exists today:*
-- `DaddyCore/HEXWatcher.swift` — `DispatchSource` file watcher over
-  `~/Library/Containers/com.kitlangton.Hex/Data/Library/Application Support/com.kitlangton.Hex/transcription_history.json`,
-  exposing `onNewTranscription: ((String) -> Void)`. Never instantiated.
-- `DaddyCore/CommandParser.swift` — parses English/Spanish phrases into
-  structured intents. 9/14 tests passing. Referenced only by its tests.
-
-*The missing link:* `HEXWatcher.onNewTranscription` → `CommandParser.parse()` →
-`SessionManager` action.
-
-*Design decision — addressing (how Daddy knows a transcription is for it):*
-HEX pastes into whatever field has focus. Its settings confirm there is no
-silent mode (`copyToClipboard: false`, `useClipboardPaste: true`). So a global
-wake word would type the command into Slack/notes/whatever is focused.
-
-Decision: **consume voice only while Daddy is frontmost.** The paste then lands
-in Daddy's own composer — harmless, and it shows what was heard before it runs.
-This also means the frontmost path can read its own `TextField` directly and
-skip `HEXWatcher` entirely: no Full Disk Access, no file watching.
-
-Optional later: a global wake-word mode ("daddy, …") for across-the-room
-control, keeping `HEXWatcher` for that path only, accepting that it pastes into
-the focused app. Note the tradeoff against PRD principle 4.1 (voice-first):
-frontmost-only means clicking into Daddy first, which weakens hands-off use.
-
-*Known bugs to fix before this ships:*
-- `HEXWatcher.swift:74-76` — dedup is broken. It compares
-  `UInt64(text.utf8.count)` (the transcription's character length) against a
-  variable named `lastReadPosition`, so a transcription only fires if its text
-  is longer than the longest seen so far. "start codex on test coverage"
-  followed by "stop" drops the second. Key off transcription `id`/`timestamp`.
-- `HEXWatcher.init?()` returns nil and never retries if the JSON file is absent,
-  so if HEX hasn't run since boot the watcher is dead for the whole session.
-
-*External dependencies:*
-- HEX setting `saveTranscriptionHistory: true` — if the user turns this off, the
-  file-watcher path goes deaf silently.
-- Full Disk Access, required to read another app's container (file-watcher path
-  only; the frontmost path avoids it).
-
-**Terminal Input** (not started)
-- Accept user input in terminal pane (type into active agent)
-- Send keyboard input directly to PTY
-- Handle control characters (Ctrl+C, Ctrl+D, etc)
-
-**Session Management UI** (not started)
-- Stop/interrupt buttons on session cards
-- Session history and replay
-- Session output export/copy
-- Multi-select sessions
-
-**Dashboard Enhancements**
-- Clickable project cards to spawn new sessions
-- Task status indicators (feat/bug/refactor/test)
-- Session duration tracking
-- Agent performance metrics (time, tokens, etc)
-
----
-
-## Architecture Overview
-
-```
-DaddyApp (macOS executable)
-    ↓
-    +── TerminalSurface → SwiftTerm TerminalView   [renderer only]
-    │   └── fed by PTYProcess; input/resize sent back to it
-    │
-    +── SessionManager (DaddyCore)   [sole owner of every pty]
-        ├── Session (per agent/project)
-        │   ├── PTYProcess
-        │   ├── AgentAdapter
-        │   ├── AgentState
-        │   └── Output callbacks
-        │
-        ├── WorkflowStateManager
-        │   ├── Project discovery
-        │   ├── Focus management
-        │   └── JSON persistence
-        │
-        └── MarkdownWriter
-            └── Desktop/DaddyWork/ state files
-
-CommandParser (Voice Input)
-    └── English/Spanish transcript → structured command
-
-[Future]
-    ↓
-    HexWatcher (transcription_history.json)
-    └── → CommandParser → SessionManager operations
-```
-
----
-
-## File Structure
-
-```
-daddy/
-├── daddycore-spm/                  # Swift Package (library + CLI + tests)
-│   ├── Package.swift
-│   ├── Sources/DaddyCore/
-│   │   ├── Models.swift
-│   │   ├── PTYProcess.swift
-│   │   ├── AgentAdapter.swift      (Claude, Codex, Cursor, OpenCode)
-│   │   ├── SessionManager.swift
-│   │   ├── WorkflowState.swift
-│   │   ├── MarkdownWriter.swift
-│   │   ├── CommandParser.swift
-│   │   └── DaddyCore.swift
-│   ├── Sources/DaddyCLI/
-│   │   └── main.swift
-│   └── Tests/DaddyCoreTests/       (5 test suites)
-│
-├── DaddyApp/                       # macOS app (AppKit + SwiftTerm)
-│   ├── Package.swift
-│   └── Sources/DaddyApp/
-│       └── main.swift
-│
-├── prd.md                          # Product requirements
-├── ARCHITECTURE.md                 # Technical design
-├── STATUS.md                       # This file
-└── .git/                           # Version control
-```
-
----
-
-## Build & Test
-
-```bash
-# Build everything
-cd daddycore-spm && swift build -c release
-cd ../DaddyApp && swift build
-
-# Run tests
+# Tests
 cd daddycore-spm && swift test
 
-# Run CLI
-daddycore-spm/.build/release/daddy-cli help
-daddycore-spm/.build/release/daddy-cli launch claude ~/Documents/my-project opus
-
-# Run GUI
-DaddyApp/.build/debug/DaddyApp
+# Run the app
+cd DaddyApp && swift build && ./.build/debug/DaddyApp
 ```
 
----
+Requires **macOS 26** (`DaddyApp` targets `.macOS(.v26)` for the Liquid Glass
+APIs). `daddycore-spm` stays on `.macOS(.v13)`.
 
-## Known Issues & Limitations
-
-1. **CommandParser substring matching**: Keywords like "go" match within "going". Needs refinement for whole-word or position-aware matching.
-2. **PTY state detection**: Simple substring/regex matching; may need tuning per CLI output variations.
-3. **Model selection**: Currently uses CLI flags only; mid-session `/model` navigation not yet tested under PTY.
-4. **HEX integration**: Not yet implemented; Full Disk Access required to read transcription_history.json.
-5. **Menu bar**: Not yet implemented; window-only app currently.
-6. **Error recovery**: Basic error handling; no retry logic for transient failures.
+The app must **not** be sandboxed, or a launched child shell loses filesystem
+access. Relevant when bundling and notarizing.
 
 ---
 
-## What's Working Now
+## Next steps
 
-**Voice-First Workflow:**
-1. User double-clicks option key (HEX activation)
-2. Speaks command: "Claude, fix the bug in this feature"
-3. App parses command → spawns Claude session in ~/Documents
-4. Dashboard shows live agent status (cyan card with state emoji)
-5. Click card to select agent → terminal pane streams live output
-6. Watch agent work in real-time with green terminal text
-7. Session state visible on menu bar (● active, ⚠ rate-limited, etc)
-8. Notifications alert on rate-limit, error, or completion
-
-**Example Voice Commands:**
-- "claude work on the feature" → spawns Claude, intent: work
-- "codex switch to opus" → spawns Codex with opus model
-- "cursor review the code" → spawns Cursor for review
-- "stop" → interrupts current agent
-
-## What's Ready to Ship
-
-✅ Full voice-first workflow (HEX → spawn agents)
-✅ Real-time agent monitoring dashboard
-✅ Live terminal output from selected agents
-✅ Menu bar persistent background app
-✅ State notifications (ready, rate-limited, error, exited)
-✅ Error recovery with auto-retry
-✅ Project discovery from ~/Documents
-✅ Agent switching via dashboard clicks
-✅ Dark futuristic UI with cyan/green accents
-
-## Next Session Checklist
-
-When resuming work:
-
-- [ ] Confirm all commits are pushed: `git log --oneline | head -10`
-- [ ] Verify tests still pass: `cd daddycore-spm && swift test` (~26/32 passing)
-- [ ] Build both: `cd daddycore-spm && swift build && cd ../DaddyApp && swift build`
-- [ ] **Next priorities:**
-  - Terminal input (accept typing in terminal pane → agent)
-  - Session management buttons (stop, interrupt, kill)
-  - Fix remaining 6 test failures
-  - Add task type tags to dashboard
-  - Session history/replay
-
----
-
-## GitHub Repository
-
-```
-SSH: git@github.com-personal:aaronambro23/daddysHome.git
-Uses personal SSH key: ~/.ssh/id_ed25519_personal
-SSH config: Host github.com-personal
-```
-
----
-
-## Summary
-
-Daddy is a **local, voice-first macOS control plane for multi-agent AI coding workflows**. Core infrastructure is complete and tested. The system can:
-
-- Spawn and control 4 different coding-agent CLIs concurrently
-- Track workflow state and persist it to JSON
-- Create human-readable Markdown context files on Desktop
-- Parse English/Spanish voice commands
-- Detect agent state (ready/working/rate-limited/error)
-
-Remaining work is primarily UI refinement (menu bar, background persistence) and HEX integration for voice transcripts. The foundation is solid and ready for the final polish phase.
+1. **Step 3 — file watching.** `DispatchSource.makeFileSystemObjectSource` over
+   each project's `docs/handoffs/`, debounced. The pattern already exists in
+   `HEXWatcher.swift:44`; fix its two bugs rather than inheriting them.
+2. **Step 5 — diagnostics.** Which CLIs resolve, is Hex installed and configured,
+   is Full Disk Access granted, which projects have the contract.
+3. **Try it on a real project.** Install the working agreement on one of the
+   client repos and run a real batch through it end to end.
