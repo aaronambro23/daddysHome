@@ -1,20 +1,21 @@
 import SwiftUI
+import DaddyCore
 
 // A clear glass panel. No dark fill, no tint, no neon — the terminal reads as
 // near-white monospace over whatever the backdrop is doing behind the glass.
 
 struct TerminalPane: View {
     @Environment(MockStore.self) private var store
-    @FocusState private var composerFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SectionHeader(title: "OUTPUT") {
                 if let agent = store.selectedAgent {
                     HStack(spacing: 8) {
-                        if agent.isRealSession {
-                            // Distinguish a real pty from seeded demo data at a
-                            // glance — otherwise they are indistinguishable.
+                        // Driven by whether the process is actually running.
+                        // This used to key off `isRealSession`, which is true of
+                        // every card now — so a dead agent still said LIVE.
+                        if isRunning(agent) {
                             HStack(spacing: 5) {
                                 BreathingDot(color: DaddyTheme.working, glowRadius: 6, size: 4)
                                 Text("LIVE")
@@ -25,6 +26,14 @@ struct TerminalPane: View {
                             .padding(.horizontal, 7)
                             .padding(.vertical, 3)
                             .insetCapsule(tint: DaddyTheme.working, opacity: 0.12)
+                        } else {
+                            Text("ENDED")
+                                .font(.system(size: 8, weight: .bold))
+                                .tracking(0.8)
+                                .foregroundStyle(DaddyTheme.textMuted)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .insetCapsule(opacity: 0.08)
                         }
 
                         HeaderCaption(text: "\(agent.agent.rawValue) · \(agent.workUnitID)")
@@ -33,17 +42,17 @@ struct TerminalPane: View {
             }
 
             if let agent = store.selectedAgent {
-                if let pty = store.pty(for: agent) {
+                if let pty = store.pty(for: agent), pty.isProcessRunning {
                     // Real pty: SwiftTerm renders it, including colour and any
                     // interactive prompts the agent draws.
                     TerminalSurface(pty: pty)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                 } else {
-                    emptyState(
-                        "Session ended",
-                        detail: "The process is no longer running. Relaunch starts a new one."
-                    )
+                    // A pty that has exited is *not* shown as a terminal. The
+                    // emulator keeps painting the last frame and a blinking
+                    // caret, so a dead session looked alive and half-drawn.
+                    endedState(pty: store.pty(for: agent))
                 }
             } else if store.agents.isEmpty {
                 emptyState(
@@ -56,9 +65,61 @@ struct TerminalPane: View {
 
             GlassHairline()
 
-            composer
+            controls
         }
         .glassPanel()
+    }
+
+    private func isRunning(_ agent: MockAgent) -> Bool {
+        store.pty(for: agent)?.isProcessRunning ?? false
+    }
+
+    /// What a finished session looks like.
+    ///
+    /// The last output is kept, as plain selectable text rather than a live
+    /// terminal — agents often say something useful on the way out (OpenCode
+    /// prints the command to resume that exact session), and throwing it away
+    /// would lose it. Escape sequences are stripped, so what is left is what a
+    /// person would have read.
+    @ViewBuilder
+    private func endedState(pty: PTYProcess?) -> some View {
+        let tail = pty.map { OutputHeuristics.recentWindow($0.recentOutput, lines: 14) } ?? ""
+
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "stop.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DaddyTheme.textMuted)
+
+                Text(exitDescription(pty))
+                    .font(.system(size: 11))
+                    .foregroundStyle(DaddyTheme.textSecondary)
+            }
+
+            if !tail.isEmpty {
+                ScrollView {
+                    Text(tail)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(DaddyTheme.textMuted)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 220)
+            }
+
+            Text("Resume chat on the card reopens this conversation.")
+                .font(.system(size: 10))
+                .foregroundStyle(DaddyTheme.textVeryDim)
+
+            Spacer(minLength: 0)
+        }
+        .padding(22)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func exitDescription(_ pty: PTYProcess?) -> String {
+        guard let code = pty?.exitCode else { return "Session ended" }
+        return code == 0 ? "Session ended cleanly" : "Session ended (exit \(code))"
     }
 
     @ViewBuilder
@@ -76,47 +137,49 @@ struct TerminalPane: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: Composer
+    // MARK: Controls
+    //
+    // There is deliberately no text field here.
+    //
+    // The pane above *is* the agent's input — it is a real terminal, so you type
+    // straight into it. A composer would send exactly what typing already sends,
+    // and it did something worse than duplicate: whenever it held focus,
+    // keystrokes meant for the agent went into the field instead and never
+    // arrived. What is left are the two things typing cannot express, because
+    // they are signals rather than text.
 
-    private var composer: some View {
-        @Bindable var store = store
+    private var controls: some View {
+        let agent = store.selectedAgent
+        let live = agent.map(isRunning) ?? false
 
         return HStack(spacing: 10) {
-            Text("›")
-                .font(.system(size: 12, design: .monospaced))
+            Text(hint(for: agent, live: live))
+                .font(.system(size: 10))
                 .foregroundStyle(DaddyTheme.textMuted)
 
-            TextField("type to send into session…", text: $store.composeText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 10.5, design: .monospaced))
-                .foregroundStyle(DaddyTheme.textPrimary)
-                .focused($composerFocused)
-                .onSubmit(sendComposer)
-
-            Button("send", action: sendComposer)
-                .buttonStyle(.inset)
-                .disabled(store.composeText.trimmingCharacters(in: .whitespaces).isEmpty
-                          || store.selectedAgent == nil)
+            Spacer(minLength: 8)
 
             Button("go on") {
-                if let agent = store.selectedAgent { store.resume(agent.id) }
+                if let agent { store.resume(agent.id) }
             }
             .buttonStyle(.inset(DaddyTheme.working))
-            .disabled(store.selectedAgent == nil)
+            .disabled(!live)
 
             Button("esc") {
-                if let agent = store.selectedAgent { store.interrupt(agent.id) }
+                if let agent { store.interrupt(agent.id) }
             }
             .buttonStyle(.inset(DaddyTheme.failure))
-            .disabled(store.selectedAgent == nil)
+            .disabled(!live)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
     }
 
-    private func sendComposer() {
-        guard let agent = store.selectedAgent else { return }
-        store.send(store.composeText, to: agent.id)
+    private func hint(for agent: MockAgent?, live: Bool) -> String {
+        guard agent != nil else { return "no session selected" }
+        return live
+            ? "type in the terminal above to talk to this agent"
+            : "this session has ended"
     }
 }
 

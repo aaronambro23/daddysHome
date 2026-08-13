@@ -19,6 +19,14 @@ public protocol AgentAdapter: AnyObject {
         approvalPolicy: ApprovalPolicy
     ) -> [String]
 
+    /// Extra arguments that make this CLI pick up its previous conversation
+    /// instead of starting a blank one, or nil if it cannot.
+    ///
+    /// Relaunching otherwise gets you the same agent in the same directory with
+    /// no memory of what you were doing, which is rarely what "relaunch" means
+    /// to the person clicking it.
+    var continueConversationArgs: [String]? { get }
+
     func modelFlagValue(for humanName: String) -> String?
 
     func sendPrompt(_ text: String, to pty: PTYProcess) throws
@@ -65,6 +73,10 @@ public final class ClaudeAdapter: AgentAdapter {
     public static let executablePath = "claude"
 
     public let interruptInput = TerminalInput.key(.escape)
+
+    /// `claude --continue` resumes the most recent conversation in this
+    /// directory.
+    public let continueConversationArgs: [String]? = ["--continue"]
 
     public init() {}
 
@@ -120,6 +132,12 @@ public final class CodexAdapter: AgentAdapter {
 
     public let interruptInput = TerminalInput.interrupt
 
+    /// Unknown. Codex has a `resume` subcommand rather than a flag, and the
+    /// exact form has not been confirmed against the installed CLI — so
+    /// relaunching Codex starts a fresh conversation rather than guessing at an
+    /// invocation that would fail outright. See STATUS.md open questions.
+    public let continueConversationArgs: [String]? = nil
+
     public init() {}
 
     public func launchArgs(
@@ -164,6 +182,9 @@ public final class CursorAdapter: AgentAdapter {
 
     public let interruptInput = TerminalInput.key(.escape)
 
+    /// From `agent --help`: `--continue  Continue previous session`.
+    public let continueConversationArgs: [String]? = ["--continue"]
+
     public init() {}
 
     public func launchArgs(
@@ -178,10 +199,18 @@ public final class CursorAdapter: AgentAdapter {
             args.append(model.rawValue)
         }
 
-        // `approvalPolicy` is deliberately not translated here. Claude and Codex
-        // have flags whose names are already established in this file; this CLI
-        // does not, and inventing one makes the launch fail outright rather than
-        // just ignore the setting. Wire it up once the real flag is confirmed.
+        // From `agent --help`:
+        //   --auto-review  server classifier auto-runs safe tool calls and
+        //                  prompts for the rest
+        //   -f, --force    allow commands unless explicitly denied (`--yolo`
+        //                  is an alias)
+        switch approvalPolicy {
+        case .safeAuto:
+            args.append("--auto-review")
+        case .fullBypass:
+            args.append("--force")
+        }
+
         return args
     }
 
@@ -203,6 +232,9 @@ public final class OpenCodeAdapter: AgentAdapter {
 
     public let interruptInput = TerminalInput.interrupt
 
+    /// From `opencode --help`: `-c, --continue  continue the last session`.
+    public let continueConversationArgs: [String]? = ["--continue"]
+
     public init() {}
 
     public func launchArgs(
@@ -217,7 +249,13 @@ public final class OpenCodeAdapter: AgentAdapter {
             args.append(model.rawValue)
         }
 
-        // See CursorAdapter: no confirmed approval flag, so none is invented.
+        // From `opencode --help`: `--auto` auto-approves permissions that are
+        // not explicitly denied. There is no separate "safe" flag — prompting
+        // is the default — so safeAuto simply adds nothing.
+        if approvalPolicy == .fullBypass {
+            args.append("--auto")
+        }
+
         return args
     }
 

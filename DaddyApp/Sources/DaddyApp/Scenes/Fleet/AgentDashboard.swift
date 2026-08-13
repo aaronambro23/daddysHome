@@ -9,6 +9,12 @@ struct AgentDashboard: View {
             SectionHeader(title: "AGENTS") {
                 HStack(spacing: 10) {
                     HeaderCaption(text: scopeCaption)
+
+                    if store.agents.contains(where: { !$0.isLive }) {
+                        Button("clear finished") { store.dismissAllExited() }
+                            .buttonStyle(.inset)
+                    }
+
                     launchMenu
                 }
             }

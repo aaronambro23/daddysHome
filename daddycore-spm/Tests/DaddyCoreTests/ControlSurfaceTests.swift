@@ -78,6 +78,50 @@ final class ControlSurfaceTests: XCTestCase {
         XCTAssertTrue(bypass.contains("--dangerously-skip-permissions"))
     }
 
+    func testApprovalPolicyReachesEveryAdapter() {
+        // All four used to accept the setting and ignore it. Flag names for
+        // Cursor and OpenCode come from their real `--help` output.
+        let cwd = URL(fileURLWithPath: "/tmp")
+        let adapters: [AgentAdapter] = [
+            ClaudeAdapter(), CodexAdapter(), CursorAdapter(), OpenCodeAdapter(),
+        ]
+
+        for adapter in adapters {
+            let safe = adapter.launchArgs(cwd: cwd, model: nil, approvalPolicy: .safeAuto)
+            let bypass = adapter.launchArgs(cwd: cwd, model: nil, approvalPolicy: .fullBypass)
+
+            XCTAssertNotEqual(
+                safe, bypass,
+                "\(type(of: adapter)) still ignores the approval setting"
+            )
+        }
+    }
+
+    func testCursorAndOpenCodeUseTheirRealFlags() {
+        let cwd = URL(fileURLWithPath: "/tmp")
+
+        let cursor = CursorAdapter()
+        XCTAssertTrue(
+            cursor.launchArgs(cwd: cwd, model: nil, approvalPolicy: .safeAuto)
+                .contains("--auto-review")
+        )
+        XCTAssertTrue(
+            cursor.launchArgs(cwd: cwd, model: nil, approvalPolicy: .fullBypass)
+                .contains("--force")
+        )
+
+        let opencode = OpenCodeAdapter()
+        XCTAssertFalse(
+            opencode.launchArgs(cwd: cwd, model: nil, approvalPolicy: .safeAuto)
+                .contains("--auto"),
+            "prompting is opencode's default; safe mode should add nothing"
+        )
+        XCTAssertTrue(
+            opencode.launchArgs(cwd: cwd, model: nil, approvalPolicy: .fullBypass)
+                .contains("--auto")
+        )
+    }
+
     func testApprovalPolicyChangesCodexSandbox() {
         let adapter = CodexAdapter()
         let cwd = URL(fileURLWithPath: "/tmp")

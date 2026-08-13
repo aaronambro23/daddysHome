@@ -61,8 +61,6 @@ final class MockStore {
     /// menu shows everything as unavailable for a moment rather than blocking.
     var installedAgents: Set<AgentKind> = []
 
-    // Composer
-    var composeText: String = ""
 
     // Voice
     var isListening: Bool = false
@@ -200,7 +198,8 @@ final class MockStore {
         }
     }
 
-    static func executableName(for kind: AgentKind) -> String {
+    /// `nonisolated` because the PATH probe runs off the main actor.
+    nonisolated static func executableName(for kind: AgentKind) -> String {
         switch kind {
         case .claude: return "claude"
         case .codex: return "codex"
@@ -309,9 +308,17 @@ final class MockStore {
         }
     }
 
-    /// Kill the process and start the same session again. Distinct from
-    /// `resume`, which keeps the conversation.
-    func relaunch(_ agentID: String) {
+    /// Whether this agent's CLI can pick up its previous conversation.
+    func canResumeChat(_ kind: AgentKind) -> Bool {
+        sessionManager.canContinueConversation(kind)
+    }
+
+    /// Start the process again.
+    ///
+    /// `continuingConversation` is the difference between "run this CLI again"
+    /// and "carry on where we left off" — the CLI reopens its own last session
+    /// rather than a blank one. Not every agent can do it; see `canResumeChat`.
+    func relaunch(_ agentID: String, continuingConversation: Bool = false) {
         guard let id = agents.first(where: { $0.id == agentID })?.sessionID else { return }
 
         mutate(agentID) { agent in
@@ -321,7 +328,11 @@ final class MockStore {
         }
 
         do {
-            try sessionManager.restartSession(id, approvalPolicy: approvalPolicy)
+            try sessionManager.restartSession(
+                id,
+                approvalPolicy: approvalPolicy,
+                continuingConversation: continuingConversation
+            )
         } catch {
             launchError = "relaunch: \(error.localizedDescription)"
             mutate(agentID) { $0.state = .error(error.localizedDescription) }
@@ -337,7 +348,31 @@ final class MockStore {
 
         try? sessionManager.sendPrompt(trimmed, to: id)
         mutate(agentID) { $0.lastOutputAt = Date() }
-        composeText = ""
+    }
+
+    /// Remove a finished agent from the dashboard.
+    ///
+    /// Without this a dead card stays forever: `stop` leaves it visible on
+    /// purpose, so you can see how the agent ended, but nothing cleared it
+    /// afterwards.
+    func dismiss(_ agentID: String) {
+        guard let agent = agents.first(where: { $0.id == agentID }) else { return }
+
+        if let sessionID = agent.sessionID {
+            sessionManager.forgetSession(sessionID)
+        }
+        agents.removeAll { $0.id == agentID }
+
+        if selectedAgentID == agentID {
+            selectedAgentID = visibleAgents.first?.id ?? agents.first?.id
+        }
+    }
+
+    /// Clear every finished agent at once.
+    func dismissAllExited() {
+        for agent in agents where !agent.isLive {
+            dismiss(agent.id)
+        }
     }
 
     /// Start a different agent on the same work, in the same project.

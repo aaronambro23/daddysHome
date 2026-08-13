@@ -48,24 +48,58 @@ struct AgentCard: View {
                     }
             }
 
-            HStack(spacing: 8) {
+            // Actions sit below a rule rather than floating at the bottom of the
+            // card. They were easy to miss, and identical to each other, so the
+            // primary one now carries colour and an icon and the rest recede.
+            GlassHairline()
+                .padding(.top, 2)
+
+            HStack(spacing: 7) {
                 // The control that is useful depends on what the agent is
                 // doing: halt it while it works, restart its train of thought
                 // once it has stopped, spawn a new process once it is gone.
                 if !agent.isLive {
-                    Button("Relaunch") { store.relaunch(agent.id) }
+                    if store.canResumeChat(agent.agent) {
+                        action("Resume chat", "arrow.uturn.left", DaddyTheme.working) {
+                            store.relaunch(agent.id, continuingConversation: true)
+                        }
+                        action("Fresh start", "arrow.clockwise", DaddyTheme.textSecondary) {
+                            store.relaunch(agent.id)
+                        }
+                    } else {
+                        action("Relaunch", "arrow.clockwise", DaddyTheme.working) {
+                            store.relaunch(agent.id)
+                        }
+                    }
+                    action("Dismiss", "xmark", DaddyTheme.textMuted) {
+                        store.dismiss(agent.id)
+                    }
                 } else if agent.isBusy {
-                    Button("Interrupt") { store.interrupt(agent.id) }
-                    Button("Stop") { store.stop(agent.id) }
+                    action("Interrupt", "hand.raised.fill", DaddyTheme.limited) {
+                        store.interrupt(agent.id)
+                    }
+                    action("Stop", "stop.fill", DaddyTheme.failure) {
+                        store.stop(agent.id)
+                    }
                 } else {
-                    Button("Continue") { store.resume(agent.id) }
-                    Button("Stop") { store.stop(agent.id) }
+                    action("Continue", "play.fill", DaddyTheme.working) {
+                        store.resume(agent.id)
+                    }
+                    action("Stop", "stop.fill", DaddyTheme.failure) {
+                        store.stop(agent.id)
+                    }
                 }
 
-                GlassDropdown(items: handOffItems, width: 190) {
-                    Text("Hand off")
-                        .font(.system(size: 10, weight: .medium))
+                if agent.isLive {
+                    GlassDropdown(items: handOffItems, width: 190) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "arrowshape.turn.up.right")
+                                .font(.system(size: 8))
+                            Text("Hand off")
+                                .font(.system(size: 10, weight: .medium))
+                        }
                         .foregroundStyle(DaddyTheme.textSecondary)
+                    }
                 }
 
                 Spacer(minLength: 6)
@@ -74,7 +108,6 @@ struct AgentCard: View {
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(DaddyTheme.textMuted)
             }
-            .buttonStyle(.inset)
         }
         .padding(15)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -87,6 +120,25 @@ struct AgentCard: View {
                 store.select(agent: agent.id)
             }
         }
+    }
+
+    /// One shape for every action, so they read as a row of controls rather
+    /// than a row of identical pills. Colour marks what the button does; the
+    /// icon makes it recognisable before the label is read.
+    private func action(
+        _ title: String,
+        _ symbol: String,
+        _ accent: Color,
+        _ perform: @escaping () -> Void
+    ) -> some View {
+        Button(action: perform) {
+            HStack(spacing: 5) {
+                Image(systemName: symbol)
+                    .font(.system(size: 8, weight: .bold))
+                Text(title)
+            }
+        }
+        .buttonStyle(.inset(accent))
     }
 
     private var handOffItems: [GlassDropdownItem] {

@@ -40,13 +40,28 @@ public final class SessionManager {
         return session
     }
 
-    public func launchSession(_ session: Session, approvalPolicy: ApprovalPolicy = .safeAuto) throws {
+    /// Whether this agent can pick up its previous conversation on relaunch.
+    public func canContinueConversation(_ kind: AgentKind) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return adapters[kind]?.continueConversationArgs != nil
+    }
+
+    public func launchSession(
+        _ session: Session,
+        approvalPolicy: ApprovalPolicy = .safeAuto,
+        continuingConversation: Bool = false
+    ) throws {
         guard let adapter = adapters[session.agent] else {
             throw SessionError.unknownAgent(session.agent)
         }
 
         let execPath = type(of: adapter).executablePath
-        let args = adapter.launchArgs(cwd: session.cwd, model: session.model, approvalPolicy: approvalPolicy)
+        var args = adapter.launchArgs(cwd: session.cwd, model: session.model, approvalPolicy: approvalPolicy)
+
+        if continuingConversation, let resumeArgs = adapter.continueConversationArgs {
+            args += resumeArgs
+        }
 
         let ptyProcess = PTYProcess(executablePath: execPath, arguments: args, cwd: session.cwd)
 
@@ -141,7 +156,8 @@ public final class SessionManager {
     /// what "relaunch" on a dead card should do.
     public func restartSession(
         _ sessionID: String,
-        approvalPolicy: ApprovalPolicy = .safeAuto
+        approvalPolicy: ApprovalPolicy = .safeAuto,
+        continuingConversation: Bool = false
     ) throws {
         lock.lock()
         guard let session = sessions[sessionID] else {
@@ -153,7 +169,11 @@ public final class SessionManager {
         teardownPTY(for: sessionID)
 
         session.state = .launching
-        try launchSession(session, approvalPolicy: approvalPolicy)
+        try launchSession(
+            session,
+            approvalPolicy: approvalPolicy,
+            continuingConversation: continuingConversation
+        )
     }
 
     public func terminateSession(_ sessionID: String) throws {
@@ -200,6 +220,22 @@ public final class SessionManager {
         lock.lock()
         defer { lock.unlock() }
         ptyProcesses[sessionID] = pty
+    }
+
+    /// Removes a session entirely, killing it first if it is still running.
+    ///
+    /// `terminateSession` deliberately keeps the record so the card can still
+    /// show how the agent ended. This is the other half: once you have read
+    /// that, you need a way to be rid of it, or dead sessions accumulate for as
+    /// long as the app is open.
+    public func forgetSession(_ sessionID: String) {
+        teardownPTY(for: sessionID)
+
+        lock.lock()
+        defer { lock.unlock() }
+        sessions.removeValue(forKey: sessionID)
+        sessionErrors.removeValue(forKey: sessionID)
+        retryAttempts.removeValue(forKey: sessionID)
     }
 
     /// Shuts down the pty attached to a session, leaving the session itself in

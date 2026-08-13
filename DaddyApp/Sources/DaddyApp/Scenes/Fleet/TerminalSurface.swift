@@ -63,6 +63,12 @@ struct TerminalSurface: NSViewRepresentable {
         @MainActor private weak var view: TerminalView?
         @MainActor private var isAttached = false
 
+        /// Output accumulated since the last flush. Written from the pty queue,
+        /// drained on main.
+        private let pendingLock = NSLock()
+        private var pending = ""
+        private var flushScheduled = false
+
         /// Identifies which pty a delivered chunk belongs to, so output from a
         /// session we have since switched away from is discarded rather than
         /// painted into the wrong terminal.
@@ -108,27 +114,73 @@ struct TerminalSurface: NSViewRepresentable {
             pty.registerChunkCallback { [weak self] text in
                 self?.handleChunk(text, generation: currentGeneration)
             }
+
+            takeKeyboardFocus(view)
+        }
+
+        /// Puts the caret in the terminal, since that is where you talk to the
+        /// agent. Deferred by one turn because the view is not in a window yet
+        /// when it is first made.
+        @MainActor
+        private func takeKeyboardFocus(_ view: TerminalView) {
+            DispatchQueue.main.async {
+                view.window?.makeFirstResponder(view)
+            }
         }
 
         /// Called on `PTYProcess`'s private serial queue.
+        ///
+        /// Chunks are accumulated and flushed at most once per frame rather than
+        /// fed one at a time. A TUI redrawing its viewport — OpenCode does this
+        /// on every scroll step — emits a burst of small writes, and giving each
+        /// one its own hop to main and its own full repaint made scrolling tear
+        /// line by line. One flush per frame bounds the repaints no matter how
+        /// chatty the agent is, and hands the parser bigger blocks besides.
         private func handleChunk(_ text: String, generation incoming: Int) {
             generationLock.lock()
             let isCurrent = incoming == generation
             generationLock.unlock()
             guard isCurrent else { return }
 
-            DispatchQueue.main.async { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self, let view = self.view else { return }
-                    view.getTerminal().feed(text: text)
-                    view.setNeedsDisplay(view.bounds)
-                }
+            pendingLock.lock()
+            pending += text
+            let alreadyScheduled = flushScheduled
+            flushScheduled = true
+            pendingLock.unlock()
+
+            guard !alreadyScheduled else { return }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.flushInterval) { [weak self] in
+                MainActor.assumeIsolated { self?.flushPending() }
             }
+        }
+
+        /// One frame at 60Hz. Long enough to coalesce a redraw burst, short
+        /// enough that typing still feels immediate.
+        private static let flushInterval: TimeInterval = 1.0 / 60.0
+
+        @MainActor
+        private func flushPending() {
+            pendingLock.lock()
+            let text = pending
+            pending = ""
+            flushScheduled = false
+            pendingLock.unlock()
+
+            guard !text.isEmpty, let view else { return }
+            view.getTerminal().feed(text: text)
+            view.setNeedsDisplay(view.bounds)
         }
 
         @MainActor
         func rebindIfNeeded(to newPTY: PTYProcess, view: TerminalView) {
             guard newPTY !== pty else { return }
+
+            // Anything buffered belongs to the session being left behind.
+            pendingLock.lock()
+            pending = ""
+            pendingLock.unlock()
+
             pty = newPTY
             isAttached = false
             view.getTerminal().resetToInitialState()
