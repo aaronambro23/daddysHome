@@ -90,11 +90,17 @@ struct AgentDashboard: View {
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Text("No agents on this project")
+            Text(store.selectedProject == nil
+                 ? "No agents running"
+                 : "No agents on this project")
                 .font(.system(size: 11))
                 .foregroundStyle(DaddyTheme.textSecondary)
 
-            Text("Pick another project, or speak to Daddy to launch one")
+            // This used to say "or speak to Daddy to launch one", which is not
+            // true: voice steers agents that already exist, it cannot start one.
+            Text(store.selectedProject == nil
+                 ? "Pick a project on the left, then use Launch above."
+                 : "Use Launch above to start one here.")
                 .font(.system(size: 10))
                 .foregroundStyle(DaddyTheme.textMuted)
         }
