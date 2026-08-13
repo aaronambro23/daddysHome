@@ -49,6 +49,14 @@ public final class ExecutableResolver: @unchecked Sendable {
 
     // MARK: - Search paths
 
+    /// The PATH an agent should be given, as a colon-separated string.
+    ///
+    /// A GUI app's own PATH is nearly empty, and an agent needs to find `node`,
+    /// `git`, `rg` and whatever else it shells out to — not just its own binary.
+    public static func pathForChildProcesses() -> String {
+        shared.searchPaths().joined(separator: ":")
+    }
+
     private func searchPaths() -> [String] {
         lock.lock()
         if let cached = cachedSearchPaths {

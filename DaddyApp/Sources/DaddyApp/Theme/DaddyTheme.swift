@@ -53,4 +53,9 @@ enum DaddyTheme {
     static var insetFillSelected: Color { Color.white.opacity(0.15) }
     static var insetStroke: Color { Color.white.opacity(0.10) }
     static var insetStrokeSelected: Color { Color.white.opacity(0.28) }
+
+    /// Fill for popovers we draw ourselves. A popover is its own window, so
+    /// there is no panel behind it to tint — it needs an opaque ground of its
+    /// own or the system's grey shows through.
+    static var popoverBackground: Color { Color(hex: "#141a2e") }
 }

@@ -62,17 +62,11 @@ struct AgentCard: View {
                     Button("Stop") { store.stop(agent.id) }
                 }
 
-                Menu("Hand off") {
-                    ForEach([AgentKind.claude, .codex, .cursor, .opencode], id: \.rawValue) { kind in
-                        Button(kind.rawValue.capitalized) {
-                            store.handOff(agent.id, to: kind)
-                        }
-                    }
+                GlassDropdown(items: handOffItems, width: 190) {
+                    Text("Hand off")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(DaddyTheme.textSecondary)
                 }
-                .menuStyle(.borderlessButton)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(DaddyTheme.textSecondary)
-                .fixedSize()
 
                 Spacer(minLength: 6)
 
@@ -91,6 +85,19 @@ struct AgentCard: View {
         .onTapGesture {
             withAnimation(.smooth(duration: 0.3)) {
                 store.select(agent: agent.id)
+            }
+        }
+    }
+
+    private var handOffItems: [GlassDropdownItem] {
+        [AgentKind.claude, .codex, .cursor, .opencode].map { kind in
+            GlassDropdownItem(
+                id: kind.rawValue,
+                title: kind.rawValue.capitalized,
+                note: store.isInstalled(kind) ? nil : "not installed",
+                isEnabled: store.isInstalled(kind) && kind != agent.agent
+            ) {
+                store.handOff(agent.id, to: kind)
             }
         }
     }

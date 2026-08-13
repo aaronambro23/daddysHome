@@ -53,15 +53,24 @@ public final class SessionManager {
         try ptyProcess.launch()
 
         lock.lock()
-        defer { lock.unlock() }
         ptyProcesses[session.id] = ptyProcess
 
         // `Session` is a reference type — this mutates the caller's instance
         // too. Named accordingly so it does not read as a copy.
         session.state = .ready
         sessions[session.id] = session
+        lock.unlock()
 
-        captureSessionOutput(sessionID: session.id)
+        // Registered *after* unlocking, deliberately.
+        //
+        // This used to call a helper that took the lock again while this method
+        // still held it. `NSLock` is not recursive, so launching an agent
+        // deadlocked the calling thread — the main thread, in the app — and the
+        // window beachballed forever. It was masked for a long time by a crash
+        // that happened earlier in the same click.
+        ptyProcess.registerOutputCallback { [weak self] output in
+            self?.updateSessionState(sessionID: session.id, newOutput: output)
+        }
     }
 
     public func sendPrompt(_ prompt: String, to sessionID: String) throws {
@@ -171,6 +180,17 @@ public final class SessionManager {
         }
     }
 
+    /// Swaps the adapter used for a kind.
+    ///
+    /// Internal: tests use it to launch a harmless stand-in binary through the
+    /// real `launchSession` path, so the lifecycle can be exercised without an
+    /// agent CLI installed.
+    func register(_ adapter: AgentAdapter, for kind: AgentKind) {
+        lock.lock()
+        defer { lock.unlock() }
+        adapters[kind] = adapter
+    }
+
     /// Attaches an already-launched process to a session.
     ///
     /// Internal, not public: the app always goes through `launchSession`. Tests
@@ -217,19 +237,6 @@ public final class SessionManager {
         lock.lock()
         defer { lock.unlock() }
         return Array(sessions.values)
-    }
-
-    private func captureSessionOutput(sessionID: String) {
-        lock.lock()
-        guard let ptyProcess = ptyProcesses[sessionID] else {
-            lock.unlock()
-            return
-        }
-        lock.unlock()
-
-        ptyProcess.registerOutputCallback { [weak self] output in
-            self?.updateSessionState(sessionID: sessionID, newOutput: output)
-        }
     }
 
     private func updateSessionState(sessionID: String, newOutput: String) {

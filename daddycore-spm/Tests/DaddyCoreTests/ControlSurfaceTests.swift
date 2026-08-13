@@ -179,6 +179,99 @@ final class ControlSurfaceTests: XCTestCase {
         XCTAssertEqual(active, [live.id], "getActiveSessions used to return everything")
     }
 
+    // MARK: - Child environment
+
+    func testChildEnvironmentDeclaresATerminal() {
+        let env = PTYProcess.childEnvironment()
+
+        // Without TERM a TUI cannot read terminfo, decides the terminal can do
+        // nothing, and stops redrawing in place — every keystroke reprints the
+        // input line on a new row.
+        XCTAssertTrue(env.contains("TERM=xterm-256color"), "no TERM: \(env)")
+        XCTAssertTrue(env.contains("COLORTERM=truecolor"))
+    }
+
+    func testChildEnvironmentCarriesAUsablePath() {
+        let env = PTYProcess.childEnvironment()
+
+        guard let path = env.first(where: { $0.hasPrefix("PATH=") }) else {
+            return XCTFail("no PATH — agents cannot find node, git, or anything else")
+        }
+        XCTAssertTrue(path.contains("/usr/bin"), path)
+    }
+
+    func testTheChildActuallySeesTERM() throws {
+        // End-to-end: what the process really gets, not what we meant to send.
+        let pty = PTYProcess(
+            executablePath: "/bin/sh",
+            arguments: ["-c", "printf 'TERM<%s>' \"$TERM\""],
+            cwd: URL(fileURLWithPath: "/tmp")
+        )
+        try pty.launch()
+        defer { pty.shutdown() }
+
+        XCTAssertTrue(
+            waitFor { pty.recentOutput.contains("TERM<xterm-256color>") },
+            "child saw: \(pty.recentOutput.debugDescription)"
+        )
+    }
+
+    // MARK: - Launch
+
+    /// An adapter that runs `/bin/cat`, so the real launch path can be
+    /// exercised without an agent CLI installed.
+    private final class StubAdapter: AgentAdapter {
+        static let kind = AgentKind.claude
+        static let executablePath = "/bin/cat"
+        let interruptInput = TerminalInput.interrupt
+
+        func launchArgs(cwd: URL, model: ModelRef?, approvalPolicy: ApprovalPolicy) -> [String] { [] }
+        func modelFlagValue(for humanName: String) -> String? { humanName }
+        func detectState(fromRecentOutput buffer: String) -> AgentState { .ready }
+    }
+
+    func testLaunchingASessionDoesNotDeadlock() throws {
+        // `launchSession` held the lock and then called a helper that took it
+        // again. NSLock is not recursive, so launching an agent hung the calling
+        // thread — the main thread in the app — and beachballed the window.
+        let manager = SessionManager()
+        manager.register(StubAdapter(), for: .claude)
+
+        let session = try makeCatSession(manager)
+        let returned = DispatchSemaphore(value: 0)
+
+        DispatchQueue.global().async {
+            try? manager.launchSession(session)
+            returned.signal()
+        }
+
+        XCTAssertEqual(
+            returned.wait(timeout: .now() + 5), .success,
+            "launchSession never returned — the lock is re-entered somewhere"
+        )
+        XCTAssertNotNil(manager.getPTYProcess(for: session.id))
+
+        try? manager.terminateSession(session.id)
+    }
+
+    func testOutputAfterLaunchStillUpdatesState() throws {
+        // The state callback is registered after the lock is released; make sure
+        // moving it did not stop it being registered at all.
+        let manager = SessionManager()
+        manager.register(StubAdapter(), for: .claude)
+
+        let session = try makeCatSession(manager)
+        try manager.launchSession(session)
+        defer { try? manager.terminateSession(session.id) }
+
+        try manager.sendPrompt("hello", to: session.id)
+
+        XCTAssertTrue(
+            waitFor { manager.getPTYProcess(for: session.id)?.recentOutput.contains("hello") == true },
+            "no output came back through the session"
+        )
+    }
+
     func testControlOnAnUnknownSessionThrows() {
         let manager = SessionManager()
 

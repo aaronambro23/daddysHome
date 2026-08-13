@@ -84,6 +84,17 @@ struct TerminalSurface: NSViewRepresentable {
             let currentGeneration = generation
             generationLock.unlock()
 
+            // Tell the child how big it really is, straight away.
+            //
+            // `PTYProcess` starts at a fixed 120×30 because the pty exists
+            // before any view does. A TUI lays out its first frame against
+            // whatever it is told at startup, so if the pane is a different
+            // shape that frame is drawn wrong and stays wrong until something
+            // else triggers a resize. `sizeChanged` only fires when the size
+            // *changes*, which may be never.
+            let size = view.getTerminal().getDims()
+            pty.resize(columns: UInt16(size.cols), rows: UInt16(size.rows))
+
             // Replay what the session already produced, so selecting a session
             // mid-flight does not show an empty pane.
             let backlog = pty.recentOutput

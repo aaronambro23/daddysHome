@@ -85,6 +85,34 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
 
     // MARK: Lifecycle
 
+    /// The environment an agent is launched into.
+    ///
+    /// This used to be `nil`, meaning the child inherited a GUI app's
+    /// environment — which has no `TERM` in it at all. Without `TERM` a TUI
+    /// cannot look up terminfo, so it assumes the terminal can do nothing and
+    /// stops redrawing in place: every keystroke reprints the whole input line
+    /// underneath the last one. Claude Code hid the problem because it emits
+    /// hardcoded ANSI, but OpenCode and Cursor read terminfo and degraded.
+    ///
+    /// `PATH` matters for a second reason: an agent shells out to `node`, `git`,
+    /// `rg` and anything else it needs, and a GUI app's PATH finds none of them.
+    /// SwiftTerm's own helper deliberately leaves PATH out, so it is added here.
+    static func childEnvironment() -> [String] {
+        var env = Terminal.getEnvironmentVariables(termName: "xterm-256color", trueColor: true)
+        env.append("PATH=\(ExecutableResolver.pathForChildProcesses())")
+
+        let inherited = ProcessInfo.processInfo.environment
+        for key in ["SHELL", "LC_ALL", "LC_CTYPE", "TMPDIR", "SSH_AUTH_SOCK"] {
+            if let value = inherited[key] { env.append("\(key)=\(value)") }
+        }
+
+        // Some CLIs key colour support off this rather than COLORTERM.
+        env.append("FORCE_COLOR=1")
+        env.append("TERM_PROGRAM=Daddy")
+
+        return env
+    }
+
     public func launch() throws {
         guard !localProcess.running else { return }
 
@@ -97,7 +125,7 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
         localProcess.startProcess(
             executable: resolved,
             args: arguments,
-            environment: nil,
+            environment: Self.childEnvironment(),
             execName: nil,
             currentDirectory: cwd.path
         )

@@ -51,34 +51,34 @@ struct AgentDashboard: View {
     /// on PATH are disabled rather than allowed to fail silently — a missing
     /// agent should be visible, not a mystery.
     private var launchMenu: some View {
-        Menu {
-            if let project = store.selectedProject {
-                ForEach([AgentKind.claude, .codex, .cursor, .opencode], id: \.rawValue) { kind in
-                    let installed = store.isInstalled(kind)
-                    Button {
-                        store.launchReal(kind, in: project)
-                    } label: {
-                        Text(installed
-                             ? kind.rawValue.capitalized
-                             : "\(kind.rawValue.capitalized) — not installed")
-                    }
-                    .disabled(!installed)
-                }
-            } else {
-                Text("Select a project first")
-            }
-        } label: {
+        GlassDropdown(
+            items: launchItems,
+            emptyMessage: "Select a project first"
+        ) {
             HStack(spacing: 5) {
                 Image(systemName: "play.fill")
                     .font(.system(size: 8))
                 Text("Launch")
                     .font(.system(size: 10, weight: .medium))
             }
+            .foregroundStyle(DaddyTheme.textSecondary)
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .foregroundStyle(DaddyTheme.textSecondary)
-        .disabled(store.selectedProject == nil)
+    }
+
+    private var launchItems: [GlassDropdownItem] {
+        guard let project = store.selectedProject else { return [] }
+
+        return [AgentKind.claude, .codex, .cursor, .opencode].map { kind in
+            let installed = store.isInstalled(kind)
+            return GlassDropdownItem(
+                id: kind.rawValue,
+                title: kind.rawValue.capitalized,
+                note: installed ? nil : "not installed",
+                isEnabled: installed
+            ) {
+                store.launchReal(kind, in: project)
+            }
+        }
     }
 
     private var scopeCaption: String {
