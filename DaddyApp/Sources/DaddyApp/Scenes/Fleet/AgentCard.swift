@@ -8,6 +8,7 @@ struct AgentCard: View {
 
     let agent: MockAgent
     let isSelected: Bool
+    let onOpenProgress: (String) -> Void
 
     @State private var hovering = false
     @State private var showingDocuments = false
@@ -15,38 +16,47 @@ struct AgentCard: View {
     @State private var doneDocs: [String] = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button(action: {
-                withAnimation(.smooth(duration: 0.2)) {
-                    showingDocuments.toggle()
-                    if showingDocuments {
-                        loadDocuments()
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Button(action: {
+                    withAnimation(.smooth(duration: 0.2)) {
+                        showingDocuments.toggle()
+                        if showingDocuments {
+                            loadDocuments()
+                        }
+                    }
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: showingDocuments ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(DaddyTheme.textMuted)
+
+                        Text(agent.displayName)
+                            .font(.system(size: 12, weight: .bold))
+                            .tracking(0.8)
+                            .foregroundStyle(DaddyTheme.textPrimary)
                     }
                 }
-            }) {
-                HStack(spacing: 9) {
-                    Image(systemName: showingDocuments ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(DaddyTheme.textMuted)
+                .buttonStyle(.plain)
 
-                    Text(agent.displayName)
-                        .font(.system(size: 13, weight: .bold))
-                        .tracking(1.0)
-                        .foregroundStyle(DaddyTheme.textPrimary)
+                Spacer(minLength: 6)
 
-                    Spacer(minLength: 8)
+                StatusBadge(state: agent.state, compact: true)
+            }
 
-                    StatusBadge(state: agent.state)
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    let liveState = store.readAgentStateFromFile(agentID: agent.id, projectPath: store.selectedProject?.path ?? "")
+                    MetricRow(label: "model", value: liveState.model ?? "-")
+                    MetricRow(label: "work", value: liveState.workUnitID ?? "-", accent: DaddyTheme.textPrimary)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    MetricRow(label: "project", value: store.project(agent.projectID)?.name ?? agent.projectID)
+                    MetricRow(label: "uptime", value: agent.uptime)
                 }
             }
-            .buttonStyle(.plain)
-
-            VStack(alignment: .leading, spacing: 7) {
-                MetricRow(label: "project", value: store.project(agent.projectID)?.path ?? agent.projectID)
-                MetricRow(label: "model", value: agent.model)
-                MetricRow(label: "work", value: agent.workUnitID, accent: DaddyTheme.textPrimary)
-                MetricRow(label: "uptime", value: agent.uptime)
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if showingDocuments {
                 Divider()
@@ -156,6 +166,10 @@ struct AgentCard: View {
                     action("Stop", "stop.fill", DaddyTheme.failure) {
                         store.stop(agent.id)
                     }
+                }
+
+                action("View docs", "doc.text.magnifyingglass", DaddyTheme.textSecondary) {
+                    onOpenProgress(agent.projectID)
                 }
 
                 if agent.isLive {

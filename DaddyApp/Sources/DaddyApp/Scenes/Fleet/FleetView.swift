@@ -2,47 +2,55 @@ import SwiftUI
 
 struct FleetView: View {
     @Environment(MockStore.self) private var store
-    @State private var sidebarVisible = true
+    @State private var sidebarExpanded = false
+    @State private var progressPanelOpen = false
+    @State private var progressPanelProjectID: String?
 
     var body: some View {
         HStack(spacing: 16) {
-            if sidebarVisible {
-                ProjectsSidebar()
-                    .frame(width: 264)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-            }
+            ProjectsSidebar(expanded: $sidebarExpanded)
+                .frame(width: sidebarExpanded ? 264 : 50)
+                .transition(.asymmetric(insertion: .identity, removal: .identity))
 
             VStack(spacing: 0) {
-                HStack {
-                    Button(action: { withAnimation(.smooth(duration: 0.3)) { sidebarVisible.toggle() } }) {
-                        Image(systemName: sidebarVisible ? "sidebar.leading" : "sidebar.leading")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(DaddyTheme.textMuted)
+                AgentDashboard(
+                    progressOpen: $progressPanelOpen,
+                    onOpenProgress: { projectID in
+                        progressPanelProjectID = projectID
+                        withAnimation(.smooth(duration: 0.3)) {
+                            progressPanelOpen = true
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .padding(.leading, 12)
-                    .padding(.vertical, 8)
+                )
+                .transition(.opacity)
 
-                    Spacer()
+                if progressPanelOpen {
+                    Divider()
+                    let panelProject = store.project(progressPanelProjectID ?? "") ?? store.selectedProject
+                    FileTreeView(project: panelProject)
+                        .frame(height: 280)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                .frame(height: 32)
-
-                AgentDashboard()
             }
             .frame(minWidth: 380)
 
-            // Show progress panel if a project is selected
-            if let project = store.selectedProject {
-                FileTreeView(project: project)
-                    .frame(width: 280)
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .trailing).combined(with: .opacity),
-                        removal: .move(edge: .trailing).combined(with: .opacity)
-                    ))
-            }
-
             TerminalPane()
                 .frame(width: 496)
+        }
+        .onAppear {
+            installEscapeMonitor()
+        }
+    }
+
+    private func installEscapeMonitor() {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == 53 && progressPanelOpen {
+                withAnimation(.smooth(duration: 0.3)) {
+                    progressPanelOpen = false
+                }
+                return nil
+            }
+            return event
         }
     }
 }

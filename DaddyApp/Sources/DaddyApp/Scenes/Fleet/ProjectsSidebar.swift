@@ -2,46 +2,111 @@ import SwiftUI
 
 struct ProjectsSidebar: View {
     @Environment(MockStore.self) private var store
+    @Binding var expanded: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SectionHeader(title: "PROJECTS") {
-                HeaderCaption(text: "~/Documents")
-            }
+        VStack(alignment: .center, spacing: 0) {
+            if expanded {
+                HStack(spacing: 12) {
+                    Text("PROJECTS")
+                        .font(.system(size: 12, weight: .bold))
+                        .tracking(0.8)
+                        .foregroundStyle(DaddyTheme.textPrimary)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(store.projects) { project in
-                        ProjectRow(
-                            project: project,
-                            isSelected: store.selectedProjectID == project.id,
-                            sessionCount: store.agentCount(for: project.id)
-                        ) {
-                            withAnimation(.smooth(duration: 0.3)) {
-                                store.select(project: project.id)
+                    Spacer()
+
+                    Button(action: { withAnimation(.smooth(duration: 0.3)) { expanded.toggle() } }) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(DaddyTheme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(store.projects) { project in
+                            ProjectRow(
+                                project: project,
+                                isSelected: store.selectedProjectID == project.id,
+                                sessionCount: store.agentCount(for: project.id)
+                            ) {
+                                withAnimation(.smooth(duration: 0.3)) {
+                                    store.select(project: project.id)
+                                }
                             }
                         }
                     }
+                    .padding(10)
                 }
-                .padding(10)
+
+                GlassHairline()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("FOCUS")
+                        .font(.system(size: 9, weight: .medium))
+                        .tracking(0.6)
+                        .foregroundStyle(DaddyTheme.textMuted)
+
+                    Text(focusDescription)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(DaddyTheme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+            } else {
+                VStack(spacing: 4) {
+                    Button(action: { withAnimation(.smooth(duration: 0.3)) { expanded.toggle() } }) {
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(DaddyTheme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 8)
+
+                    Divider()
+                        .opacity(0.2)
+                        .padding(.vertical, 4)
+
+                    ScrollView {
+                        VStack(spacing: 8) {
+                            ForEach(store.projects) { project in
+                                Button(action: {
+                                    withAnimation(.smooth(duration: 0.3)) {
+                                        store.select(project: project.id)
+                                    }
+                                }) {
+                                    Circle()
+                                        .fill(store.agentCount(for: project.id) > 0 ? DaddyTheme.working : DaddyTheme.textVeryDim)
+                                        .frame(width: 8, height: 8)
+                                        .overlay(
+                                            Circle().strokeBorder(
+                                                store.selectedProjectID == project.id ? DaddyTheme.textPrimary.opacity(0.6) : Color.clear,
+                                                lineWidth: 1.5
+                                            )
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                                .help(project.name)
+                                .onHover { hovering in
+                                    if hovering && store.projects.first?.id == project.id {
+                                        withAnimation(.smooth(duration: 0.3)) {
+                                            expanded = true
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 10)
             }
-
-            GlassHairline()
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("FOCUS")
-                    .font(.system(size: 9, weight: .medium))
-                    .tracking(0.6)
-                    .foregroundStyle(DaddyTheme.textMuted)
-
-                Text(focusDescription)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(DaddyTheme.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
         }
         .glassPanel()
     }

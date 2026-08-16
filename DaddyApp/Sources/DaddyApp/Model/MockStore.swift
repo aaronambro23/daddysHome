@@ -528,4 +528,28 @@ extension MockStore {
             }
         }
     }
+
+    // MARK: - Agent State File Reading
+
+    /// Reads live agent state from {project}/.daddy/agents/{agent-id}.json
+    /// Returns (model, workUnitID) or (nil, nil) if file doesn't exist or is invalid.
+    func readAgentStateFromFile(agentID: String, projectPath: String) -> (model: String?, workUnitID: String?) {
+        let daddyDir = URL(fileURLWithPath: projectPath).appendingPathComponent(".daddy")
+        let agentsDir = daddyDir.appendingPathComponent("agents")
+        let stateFile = agentsDir.appendingPathComponent("\(agentID).json")
+
+        guard FileManager.default.fileExists(atPath: stateFile.path) else {
+            return (nil, nil)
+        }
+
+        do {
+            let data = try Data(contentsOf: stateFile)
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let model = json?["model"] as? String
+            let workUnitID = json?["workUnitID"] as? String
+            return (model, workUnitID)
+        } catch {
+            return (nil, nil)
+        }
+    }
 }

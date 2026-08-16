@@ -66,10 +66,18 @@ struct RootView: View {
         @Bindable var store = store
 
         return HStack(spacing: 18) {
-            HStack(spacing: 10) {
-                Image(systemName: "diamond.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(DaddyTheme.textSecondary)
+            HStack(spacing: 12) {
+                if let nsImage = NSImage(contentsOfFile: "/Users/aaronambrosi/Documents/daddy/DH-Logo.png") {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 24, height: 24)
+                        .clipShape(Circle())
+                } else {
+                    Image(systemName: "diamond.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(DaddyTheme.accent)
+                }
 
                 Text("DADDY'S HOME")
                     .font(.system(size: 13, weight: .bold))

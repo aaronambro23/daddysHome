@@ -39,6 +39,13 @@ enum DaddyTheme {
     static var launching: Color { Color(hex: "#aecdf2") }
     static var idle: Color { Color(hex: "#9aa4b2") }
 
+    // Provider identity colors — small monogram-circle tint only (icon fill +
+    // glyph), same doctrine as the semantic state colors: never a panel surface.
+    static var providerClaude: Color { Color(hex: "#e0b88f") }
+    static var providerCodex: Color { Color(hex: "#9ecbe8") }
+    static var providerCursor: Color { Color(hex: "#c3a6e8") }
+    static var providerOpenCode: Color { Color(hex: "#a8d99f") }
+
     // Text hierarchy — the primary carrier of structure now that surfaces are
     // all clear.
     static var textPrimary: Color { Color.white.opacity(0.96) }

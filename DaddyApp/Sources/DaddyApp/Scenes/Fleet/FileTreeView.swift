@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct FileTreeView: View {
-    let project: MockProject
+    let project: MockProject?
     @State private var inProgressTasks: [String] = []
     @State private var completedTasks: [String] = []
     @State private var isDoneExists = false
@@ -14,39 +14,53 @@ struct FileTreeView: View {
             }
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    // DONE status
-                    doneStatusSection
+                if project != nil {
+                    VStack(alignment: .leading, spacing: 16) {
+                        // DONE status
+                        doneStatusSection
 
-                    Divider()
-                        .opacity(0.3)
+                        Divider()
+                            .opacity(0.3)
 
-                    // In progress
-                    if !inProgressTasks.isEmpty {
-                        tasksSection(
-                            title: "IN PROGRESS",
-                            tasks: inProgressTasks,
-                            isDone: false
-                        )
+                        // In progress
+                        if !inProgressTasks.isEmpty {
+                            tasksSection(
+                                title: "IN PROGRESS",
+                                tasks: inProgressTasks,
+                                isDone: false
+                            )
+                        }
+
+                        // Completed
+                        if !completedTasks.isEmpty {
+                            tasksSection(
+                                title: "COMPLETED",
+                                tasks: completedTasks,
+                                isDone: true
+                            )
+                        }
+
+                        if inProgressTasks.isEmpty && completedTasks.isEmpty {
+                            Text("No handoff documents yet")
+                                .font(.system(size: 11))
+                                .foregroundStyle(DaddyTheme.textMuted)
+                                .padding(.vertical, 20)
+                        }
                     }
-
-                    // Completed
-                    if !completedTasks.isEmpty {
-                        tasksSection(
-                            title: "COMPLETED",
-                            tasks: completedTasks,
-                            isDone: true
-                        )
-                    }
-
-                    if inProgressTasks.isEmpty && completedTasks.isEmpty {
-                        Text("No handoff documents yet")
+                    .padding(16)
+                } else {
+                    VStack(spacing: 8) {
+                        Text("No project selected")
                             .font(.system(size: 11))
+                            .foregroundStyle(DaddyTheme.textSecondary)
+
+                        Text("Pick a project or open documents from an agent card.")
+                            .font(.system(size: 10))
                             .foregroundStyle(DaddyTheme.textMuted)
-                            .padding(.vertical, 20)
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(40)
                 }
-                .padding(16)
             }
         }
         .glassPanel()
@@ -122,6 +136,8 @@ struct FileTreeView: View {
     }
 
     private func refreshFileTree() {
+        guard let project = project else { return }
+
         let handoffsPath = project.path + "/documents/handoffs"
         let fm = FileManager.default
 

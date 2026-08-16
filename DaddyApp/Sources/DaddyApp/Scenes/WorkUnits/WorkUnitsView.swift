@@ -2,11 +2,12 @@ import SwiftUI
 
 struct WorkUnitsView: View {
     @Environment(MockStore.self) private var store
+    @State private var sidebarExpanded = true
 
     var body: some View {
         HStack(spacing: 16) {
-            ProjectsSidebar()
-                .frame(width: 264)
+            ProjectsSidebar(expanded: $sidebarExpanded)
+                .frame(width: sidebarExpanded ? 264 : 60)
 
             VStack(alignment: .leading, spacing: 0) {
                 SectionHeader(title: "WORK UNITS") {
