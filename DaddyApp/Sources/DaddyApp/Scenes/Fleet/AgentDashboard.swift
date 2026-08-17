@@ -105,11 +105,7 @@ struct AgentDashboard: View {
     }
 
     private var launchMenu: some View {
-        GlassDropdown(
-            items: launchItems,
-            emptyMessage: "Select a project first",
-            staysOpenOnPick: true
-        ) {
+        ProviderLaunchMenu(project: store.selectedProject) {
             HStack(spacing: 5) {
                 Image(systemName: "play.fill")
                     .font(.system(size: 8))
@@ -117,22 +113,6 @@ struct AgentDashboard: View {
                     .font(.system(size: 10, weight: .medium))
             }
             .foregroundStyle(DaddyTheme.textSecondary)
-        }
-    }
-
-    private var launchItems: [GlassDropdownItem] {
-        guard let project = store.selectedProject else { return [] }
-
-        return [AgentKind.claude, .codex, .cursor, .opencode].map { kind in
-            let installed = store.isInstalled(kind)
-            return GlassDropdownItem(
-                id: kind.rawValue,
-                title: kind.rawValue.capitalized,
-                note: installed ? nil : "not installed",
-                isEnabled: installed
-            ) {
-                store.launchReal(kind, in: project)
-            }
         }
     }
 }

@@ -1,6 +1,11 @@
 import Foundation
 
-public final class SessionManager {
+/// `@unchecked Sendable` for the same reason `PTYProcess` is: every mutable
+/// field below is guarded by `lock`, and this type has always been reached from
+/// more than one queue — the pty's read callbacks have called into it since
+/// launch callbacks existed. The deferred state-detection run made the compiler
+/// say so out loud.
+public final class SessionManager: @unchecked Sendable {
     private var sessions: [String: Session] = [:]
     private var ptyProcesses: [String: PTYProcess] = [:]
     private var adapters: [AgentKind: AgentAdapter] = [:]
@@ -11,6 +16,29 @@ public final class SessionManager {
     private let lock = NSLock()
     private let maxRetries = 3
     private let errorThresholdCount = 5
+
+    // MARK: State detection throttle
+    //
+    // Detection runs on the pty's own read queue, so whatever it costs is paid
+    // *before the next chunk can be delivered to the renderer*. Paying it per
+    // chunk meant an agent redrawing a status line several times a second was
+    // stripping ANSI out of the entire retained buffer several times a second,
+    // back-pressuring the read loop until the agent's own writes blocked.
+
+    private var lastDetectionAt: [String: Date] = [:]
+    /// Output that arrived inside the throttle window and is waiting for the
+    /// trailing run. Exactly one trailing run is ever scheduled per session.
+    private var pendingDetection: [String: String] = [:]
+    private let detectionQueue = DispatchQueue(label: "com.daddy.session.detection")
+
+    /// A state change is still noticed within a quarter second, which is far
+    /// faster than the one-second cadence the dashboard reads at.
+    private static let detectionInterval: TimeInterval = 0.25
+
+    /// `OutputHeuristics.recentWindow` keeps 24 lines whatever it is handed, so
+    /// handing it a 64KB buffer was stripping ~56KB of escape codes per chunk
+    /// to throw the result away.
+    private static let detectionWindowBytes = 8192
 
     public init() {
         self.adapters = [
@@ -245,6 +273,8 @@ public final class SessionManager {
         sessions.removeValue(forKey: sessionID)
         sessionErrors.removeValue(forKey: sessionID)
         retryAttempts.removeValue(forKey: sessionID)
+        lastDetectionAt.removeValue(forKey: sessionID)
+        pendingDetection.removeValue(forKey: sessionID)
     }
 
     /// Shuts down the pty attached to a session, leaving the session itself in
@@ -284,10 +314,14 @@ public final class SessionManager {
         return Array(sessions.values)
     }
 
+    /// Called on the pty's read queue for every chunk. Keeps the cheap part
+    /// (when did this agent last speak) exact, and rate-limits the expensive
+    /// part (what is it doing) to `detectionInterval`.
     private func updateSessionState(sessionID: String, newOutput: String) {
+        let window = String(newOutput.suffix(Self.detectionWindowBytes))
+
         lock.lock()
-        guard let session = sessions[sessionID],
-              let adapter = adapters[session.agent] else {
+        guard let session = sessions[sessionID], adapters[session.agent] != nil else {
             lock.unlock()
             return
         }
@@ -297,24 +331,83 @@ public final class SessionManager {
             lock.unlock()
             return
         }
+
+        // Free, and read by the dashboard every second, so keep it truthful at
+        // the moment the output actually arrived rather than when detection
+        // eventually gets around to it.
+        session.lastOutputAt = Date()
+
+        let now = Date()
+        let elapsed = lastDetectionAt[sessionID].map { now.timeIntervalSince($0) }
+            ?? .greatestFiniteMagnitude
+
+        if elapsed >= Self.detectionInterval {
+            lastDetectionAt[sessionID] = now
+            pendingDetection.removeValue(forKey: sessionID)
+            lock.unlock()
+            runStateDetection(sessionID: sessionID, window: window)
+            return
+        }
+
+        // Inside the window. Hold the newest output and make sure exactly one
+        // trailing run is queued — without it, the last chunk of a burst is
+        // precisely the one that gets dropped, and a session that finishes
+        // talking would sit on WORKING forever.
+        let alreadyScheduled = pendingDetection[sessionID] != nil
+        pendingDetection[sessionID] = window
         lock.unlock()
 
-        let newState = adapter.detectState(fromRecentOutput: newOutput)
+        guard !alreadyScheduled else { return }
+
+        detectionQueue.asyncAfter(deadline: .now() + (Self.detectionInterval - elapsed)) {
+            [weak self] in
+            guard let self else { return }
+
+            self.lock.lock()
+            let pending = self.pendingDetection.removeValue(forKey: sessionID)
+            if pending != nil { self.lastDetectionAt[sessionID] = Date() }
+            self.lock.unlock()
+
+            guard let pending else { return }
+            self.runStateDetection(sessionID: sessionID, window: pending)
+        }
+    }
+
+    /// The expensive half: ANSI stripping, windowing and pattern matching.
+    /// Never call this on every chunk — see `updateSessionState`.
+    private func runStateDetection(sessionID: String, window: String) {
+        lock.lock()
+        guard let session = sessions[sessionID],
+              let adapter = adapters[session.agent] else {
+            lock.unlock()
+            return
+        }
+        if case .exited = session.state {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+
+        let newState = adapter.detectState(fromRecentOutput: window)
 
         lock.lock()
         defer { lock.unlock() }
-        let updatedSession = session
+
+        // Re-checked, because detection now runs unlocked and the trailing run
+        // is deferred: the session can have exited in between.
+        guard let updatedSession = sessions[sessionID] else { return }
+        if case .exited = updatedSession.state { return }
+
         // `.unknown` means the output did not say, which is not a reason to
         // discard what it last did say. Keep the previous state instead.
         if newState != .unknown {
             updatedSession.state = newState
         }
-        updatedSession.lastOutputAt = Date()
 
         // Confirm pending model switch: if we see the agent back at a prompt
         // with no error, commit the model change.
         if let pendingModel = pendingModelSwitch[sessionID] {
-            let outputLower = newOutput.lowercased()
+            let outputLower = window.lowercased()
             let hasError = outputLower.contains("error") || outputLower.contains("failed") ||
                           outputLower.contains("unknown model") || outputLower.contains("not found")
             let isReady = newState == .ready || newState == .working

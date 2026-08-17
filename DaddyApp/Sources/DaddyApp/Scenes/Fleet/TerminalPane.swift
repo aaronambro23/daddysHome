@@ -49,8 +49,21 @@ struct TerminalPane: View {
             terminalBody
 
         }
-        .background(isFocused ? DaddyTheme.focusSurface : Color.clear)
-        .glassPanel(cornerRadius: isFocused ? 0 : 26)
+        // Solid, docked and focused alike — no glass under a terminal.
+        //
+        // A terminal repaints on its own schedule, not the app's: an agent
+        // rewriting a status footer dirties rows several times a second, and
+        // every one of those repaints used to force the glass beneath to
+        // re-blur an animating aurora. Clear glass costs nothing behind a
+        // static panel and everything behind a live one. The rounded corner
+        // and the panel's shape stay; only the material is gone.
+        .background(
+            RoundedRectangle(cornerRadius: isFocused ? 0 : 26, style: .continuous)
+                .fill(DaddyTheme.terminalSurface)
+        )
+        .clipShape(
+            RoundedRectangle(cornerRadius: isFocused ? 0 : 26, style: .continuous)
+        )
     }
 
     @ViewBuilder

@@ -63,7 +63,20 @@ enum DaddyTheme {
 
     /// Opaque ground for terminal focus mode. Unlike floating panels, the
     /// workspace must prioritize legibility over showing the aurora through it.
-    static var focusSurface: Color { Color(hex: "#0d111a").opacity(0.97) }
+    ///
+    /// Genuinely opaque, and it matters. At 0.97 this was *nearly* solid, which
+    /// is the worst of both: nobody could see the 3%, and the compositor still
+    /// had to keep the entire stack underneath alive — glass re-blurring an
+    /// animating aurora — behind every glyph the terminal repainted.
+    static var focusSurface: Color { Color(hex: "#0d111a") }
+
+    /// The terminal's own ground, docked and focused alike.
+    ///
+    /// SwiftTerm clears each dirty rect to transparent and lets the layer's
+    /// background show through for default-background cells, so a clear
+    /// terminal means every repaint punches a hole all the way down to the
+    /// aurora. Solid here; the glass lives everywhere else.
+    static var terminalSurface: Color { Color(hex: "#0d111a") }
 
     /// Rim behind a bubble in a stacked deck, so an overlapping neighbour reads
     /// as sitting in front of it rather than merging with it. Dark, because it

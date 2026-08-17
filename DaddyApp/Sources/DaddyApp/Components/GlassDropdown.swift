@@ -14,6 +14,10 @@ struct GlassDropdownItem: Identifiable {
     /// Shown dimmed to the right of the title — for "not installed" and similar.
     var note: String?
     var isEnabled: Bool = true
+    /// Optional mark before the title. Type-erased on purpose: the dropdown is
+    /// a generic component and has no business knowing about providers, but a
+    /// list of four products reads far faster with their logos on it.
+    var leading: AnyView?
     let action: () -> Void
 
     init(
@@ -21,12 +25,14 @@ struct GlassDropdownItem: Identifiable {
         title: String,
         note: String? = nil,
         isEnabled: Bool = true,
+        leading: AnyView? = nil,
         action: @escaping () -> Void
     ) {
         self.id = id
         self.title = title
         self.note = note
         self.isEnabled = isEnabled
+        self.leading = leading
         self.action = action
     }
 }
@@ -104,7 +110,12 @@ private struct GlassDropdownRow: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 8) {
+            HStack(spacing: 9) {
+                if let leading = item.leading {
+                    leading
+                        .opacity(item.isEnabled ? 1 : 0.4)
+                }
+
                 Text(item.title)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(

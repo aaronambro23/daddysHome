@@ -19,26 +19,63 @@ import DaddyCore
 struct TerminalSurface: NSViewRepresentable {
     let pty: PTYProcess
 
+    /// `DaddyTheme.terminalSurface` as AppKit sees it. Same `#0d111a`, so the
+    /// emulator's ground and the SwiftUI pane behind it are one flat colour
+    /// with no seam where the padding ends.
+    private static let surfaceColor = NSColor(
+        srgbRed: 0x0d / 255, green: 0x11 / 255, blue: 0x1a / 255, alpha: 1
+    )
+
     func makeCoordinator() -> Coordinator {
         Coordinator(pty: pty)
     }
 
     func makeNSView(context: Context) -> TerminalView {
-        let view = TerminalView(
+        let view = DroppableTerminalView(
             frame: CGRect(x: 0, y: 0, width: 640, height: 480),
             font: NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
         )
 
         view.terminalDelegate = context.coordinator
 
-        // Let the panel's Liquid Glass show through. SwiftTerm otherwise paints
-        // an opaque background, which would punch a solid rectangle through the
-        // glass — the exact mistake that flattened the original design.
-        view.nativeBackgroundColor = .clear
+        // Dropping a file types its path, exactly as Terminal.app and iTerm2
+        // do. The agent on the other end just sees a path arrive in its input.
+        view.onDropFiles = { [weak coordinator = context.coordinator] urls in
+            MainActor.assumeIsolated { coordinator?.insertDroppedFiles(urls) }
+        }
+
+        // Opaque, deliberately.
+        //
+        // This was `.clear`, to let the panel's Liquid Glass show through. The
+        // cost was invisible and enormous: SwiftTerm clears each dirty rect to
+        // transparent and relies on the layer's background colour showing
+        // through for default-background cells, so with a clear layer every
+        // repaint punched a hole straight down to the glass — which then had to
+        // re-blur an aurora that animates at 30Hz — and CoreText had no known
+        // ground to antialias glyphs against.
+        //
+        // Glass belongs to the panels, the sidebar and the chrome. The terminal
+        // is a terminal.
+        view.nativeBackgroundColor = Self.surfaceColor
         view.nativeForegroundColor = NSColor.white.withAlphaComponent(0.92)
         view.caretColor = NSColor.white.withAlphaComponent(0.75)
         view.allowMouseReporting = true
-        view.optionAsMetaKey = true
+
+        // Option is a compose/AltGr layer, not Meta.
+        //
+        // On non-US layouts Option is how you type characters the base layout
+        // has no key for — Spanish Option+2 is "@", and without it you cannot
+        // write an email address, an npm scope, or a git remote. With
+        // optionAsMetaKey on, SwiftTerm takes the Meta path and sends ESC plus
+        // `charactersIgnoringModifiers`, which is the *base* glyph ("2"), so
+        // the composed "@" is discarded before macOS ever produces it.
+        //
+        // Off matches every mainstream macOS terminal's default (Terminal.app,
+        // iTerm2, Ghostty) and enables SwiftTerm's AltGr path, which sends the
+        // composed text directly. Meta bindings — Option+B/F word jumps and the
+        // Emacs family — are the cost; Cmd+Option+O toggles this at runtime for
+        // anyone who wants them back.
+        view.optionAsMetaKey = false
 
         context.coordinator.attach(to: view)
         return view
@@ -75,6 +112,14 @@ struct TerminalSurface: NSViewRepresentable {
         private let generationLock = NSLock()
         private var generation: Int = 0
 
+        /// Whether this agent brackets its frames with DECSET 2026
+        /// (synchronized output). Latched true the first time we see it and
+        /// never re-examined — see `flushPending` for what it decides.
+        @MainActor private var usesFrameSync = false
+
+        /// `ESC [ ? 2026 h` — "a frame starts here".
+        private static let frameSyncBegin = "\u{1b}[?2026h"
+
         init(pty: PTYProcess) {
             self.pty = MainActor.assumeIsolated { pty }
         }
@@ -106,6 +151,10 @@ struct TerminalSurface: NSViewRepresentable {
             let backlog = pty.recentOutput
             if !backlog.isEmpty {
                 view.getTerminal().feed(text: backlog)
+                // Seed the frame-sync latch from what the session has already
+                // said, so re-opening a Claude/Codex/OpenCode session does not
+                // spend its first frames being repainted by hand.
+                if backlog.contains(Self.frameSyncBegin) { usesFrameSync = true }
             }
 
             // The chunk callback, not registerOutputCallback — the latter
@@ -168,8 +217,43 @@ struct TerminalSurface: NSViewRepresentable {
             pendingLock.unlock()
 
             guard !text.isEmpty, let view else { return }
+
             view.getTerminal().feed(text: text)
-            view.setNeedsDisplay(view.bounds)
+
+            // Whether we repaint by hand depends on whether the agent tells us
+            // where its frames are.
+            //
+            // `feed` schedules its own repaint via `queuePendingDisplay`, and
+            // that repaint is *surgical*: only the rows `getUpdateRange()`
+            // marked dirty, coalesced at 60Hz, and suppressed while the
+            // terminal is inside a DECSET 2026 synchronized-output frame. For
+            // an agent that brackets its frames with 2026 — Claude, Codex and
+            // OpenCode all do — that is exactly right, and forcing a
+            // whole-window repaint on top of it is what made their text flash:
+            // SwiftTerm clears a rect before painting it, so a full-view
+            // repaint that misses the frame deadline is presented
+            // cleared-but-not-yet-drawn.
+            //
+            // Cursor announces no frames at all. Its private modes are 25,
+            // 1004, 2004 and 2031 — no 2026 — and it redraws by erasing and
+            // rewinding: `ESC[2K ESC[1A` ten times, then reprinting ten lines,
+            // about four times a second. Row-level invalidation does not cover
+            // everything that pattern changes on screen, and left to it Cursor
+            // renders garbage. It needs the full repaint.
+            //
+            // So: latch onto 2026 the first time we see it and stop nudging
+            // forever after. Agents that sync their frames keep SwiftTerm's
+            // surgical path; agents that do not get one full repaint per flush.
+            // And a flush is a whole frame for Cursor — its ten-line redraw
+            // arrives in a single ~900 byte chunk — so this repaints once per
+            // frame rather than mid-frame.
+            guard !usesFrameSync else { return }
+
+            if text.contains(Self.frameSyncBegin) {
+                usesFrameSync = true
+            } else {
+                view.setNeedsDisplay(view.bounds)
+            }
         }
 
         @MainActor
@@ -183,6 +267,9 @@ struct TerminalSurface: NSViewRepresentable {
 
             pty = newPTY
             isAttached = false
+            // A different session may be a different agent with a different
+            // idea about frame synchronization, so the latch resets with it.
+            usesFrameSync = false
             view.getTerminal().resetToInitialState()
             attach(to: view)
         }
@@ -190,6 +277,54 @@ struct TerminalSurface: NSViewRepresentable {
         @MainActor
         func detach() {
             view = nil
+        }
+
+        // MARK: Dropped files
+
+        /// Types the dropped paths into the agent, the way a terminal does.
+        ///
+        /// Paths are backslash-escaped even though the receiver is a TUI input
+        /// box rather than a shell. That is deliberate: it is byte-for-byte
+        /// what these CLIs receive when someone drags a file into iTerm2 or
+        /// Terminal.app, so it is the form they are all written against. A path
+        /// with nothing special in it comes through untouched either way.
+        @MainActor
+        func insertDroppedFiles(_ urls: [URL]) {
+            guard !urls.isEmpty else { return }
+
+            // Trailing space so the next word you type is a new one.
+            let paths = urls.map { Self.escaped($0.path) }.joined(separator: " ") + " "
+
+            // Wrapped as a paste when the agent asked for bracketed paste, so a
+            // path is delivered as one pasted unit instead of a burst of
+            // keystrokes its input handler has to interpret one at a time.
+            let payload: String
+            if view?.getTerminal().bracketedPasteMode == true {
+                payload = "\u{1b}[200~" + paths + "\u{1b}[201~"
+            } else {
+                payload = paths
+            }
+
+            try? pty.write(payload)
+        }
+
+        /// Characters a shell would otherwise act on. Spelled out one per
+        /// entry rather than as a string literal, because a literal is exactly
+        /// where a stray `\t` stops meaning tab and starts meaning "escape
+        /// every letter t in the path".
+        private static let escapees: Set<Character> = [
+            " ", "\t", "\n", "\"", "'", "`", "\\", "$", "&", "|", ";",
+            "<", ">", "(", ")", "[", "]", "{", "}", "*", "?", "!", "#", "~", "^",
+        ]
+
+        private static func escaped(_ path: String) -> String {
+            var out = ""
+            out.reserveCapacity(path.count)
+            for character in path {
+                if escapees.contains(character) { out.append("\\") }
+                out.append(character)
+            }
+            return out
         }
 
         // MARK: TerminalViewDelegate

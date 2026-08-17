@@ -290,14 +290,44 @@ final class MockStore {
         mutate(agentID) { $0.lastOutputAt = Date() }
     }
 
+    /// Stop the agent and clear it away.
+    ///
+    /// Stopping used to leave the dead card sitting there so you could read how
+    /// the agent ended — but "Session ended" across the full width of the
+    /// window is not a reading experience, it is a dead end you can still click
+    /// into, get switched back to, and see in the focus switcher. Stopping is a
+    /// deliberate act; the agent goes.
+    ///
+    /// The cost, knowingly: a stopped agent can no longer be resumed, because
+    /// its session record goes with it. Agents that exit on their own still
+    /// leave a card behind, and those are the ones "Resume chat" is for.
     func stop(_ agentID: String) {
-        guard let id = agents.first(where: { $0.id == agentID })?.sessionID else { return }
-        try? sessionManager.terminateSession(id)
-        if let live = sessionManager.session(id) {
-            mutate(agentID) { agent in
-                agent.state = live.state
-                agent.lastOutputAt = Date()
-            }
+        guard let agent = agents.first(where: { $0.id == agentID }),
+              let sessionID = agent.sessionID else { return }
+
+        try? sessionManager.terminateSession(sessionID)
+
+        // Move the detail view somewhere real first, while the card still
+        // exists to be moved away from.
+        leaveDetailIfShowing(agentID)
+        discard(agentID, sessionID: sessionID)
+    }
+
+    /// Stopping the agent you are focused on leaves a workspace with nothing in
+    /// it. Move somewhere with something in it instead: the next live agent if
+    /// there is one, the fleet otherwise.
+    private func leaveDetailIfShowing(_ agentID: String) {
+        guard detailAgentID == agentID else { return }
+
+        // Same scope the focus switcher offers first, then anywhere — being
+        // thrown to another project's agent beats being thrown to nothing.
+        let successor = visibleAgents.first { $0.id != agentID && $0.isLive }
+            ?? agents.first { $0.id != agentID && $0.isLive }
+
+        if let successor {
+            openDetail(successor.id)
+        } else {
+            closeDetail()
         }
     }
 
@@ -362,10 +392,17 @@ final class MockStore {
     /// afterwards.
     func dismiss(_ agentID: String) {
         guard let agent = agents.first(where: { $0.id == agentID }) else { return }
+        discard(agentID, sessionID: agent.sessionID)
+    }
 
-        if let sessionID = agent.sessionID {
-            sessionManager.forgetSession(sessionID)
-        }
+    /// Take the card off the screen now; reap the session behind it later.
+    ///
+    /// `forgetSession` shuts the pty down *synchronously*, polling for up to
+    /// two seconds for the process group to die. This type is `@MainActor`, so
+    /// doing that inline is a frozen window — survivable when dismissing an
+    /// agent that died a while ago, not when stopping one that is still
+    /// exiting. The card is gone from the UI either way.
+    private func discard(_ agentID: String, sessionID: String?) {
         agents.removeAll { $0.id == agentID }
 
         if selectedAgentID == agentID {
@@ -373,6 +410,12 @@ final class MockStore {
         }
         if detailAgentID == agentID {
             detailAgentID = nil
+        }
+
+        guard let sessionID else { return }
+        let manager = sessionManager
+        Task.detached(priority: .utility) {
+            manager.forgetSession(sessionID)
         }
     }
 

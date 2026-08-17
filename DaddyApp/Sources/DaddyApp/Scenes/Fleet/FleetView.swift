@@ -66,6 +66,9 @@ struct FleetView: View {
         }
         .onAppear { installKeyboardMonitor() }
         .onDisappear { removeKeyboardMonitor() }
+        .onChange(of: store.detailAgentID) { _, detailID in
+            if detailID == nil { suppressSidebarHover() }
+        }
     }
 
     /// Docked on the right, or parked across the bottom of the content area.
@@ -132,14 +135,21 @@ struct FleetView: View {
         // Returning is navigation, not a showcase animation. Animating this
         // transition forces SwiftTerm's native view through a full-screen-to-
         // docked resize and makes a simple back action feel unresponsive.
-        sidebarHoverEnabled = false
+        suppressSidebarHover()
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) { store.closeDetail() }
+    }
 
-        // Layout changes under a stationary pointer can synthesize hover
-        // transitions. Ignore that brief teardown window, then restore normal
-        // sidebar hover behavior.
+    /// Layout changes under a stationary pointer can synthesize hover
+    /// transitions. Ignore that brief teardown window, then restore normal
+    /// sidebar hover behavior.
+    ///
+    /// Called on the way out of the detail view *and* from `onChange`, because
+    /// the store closes the detail view itself when the focused agent stops —
+    /// that route never passes through `closeDetail`.
+    private func suppressSidebarHover() {
+        sidebarHoverEnabled = false
         hoverRestoreTask?.cancel()
         hoverRestoreTask = Task {
             try? await Task.sleep(for: .milliseconds(220))

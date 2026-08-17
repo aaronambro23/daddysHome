@@ -6,6 +6,7 @@ import DaddyCore
 struct AgentDetailHeader: View {
     @Environment(MockStore.self) private var store
     @State private var backHovering = false
+    @State private var killHovering = false
 
     let agent: MockAgent
     let onOpenProgress: (String) -> Void
@@ -13,25 +14,24 @@ struct AgentDetailHeader: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            // Glyph only. The label spelled out what a back chevron already
+            // says, and the identity that follows it is the logo — the project
+            // and agent names were repeating what the sidebar and the bubble
+            // both show.
             Button(action: onBack) {
-                HStack(spacing: 6) {
-                    Image(systemName: "arrow.left")
-                        .font(.system(size: 11, weight: .bold))
-                    Text("Back to Fleet")
-                        .font(.system(size: 11.5, weight: .semibold))
-                }
-                .foregroundStyle(DaddyTheme.textPrimary)
-                .padding(.horizontal, 12)
-                .frame(height: 34)
-                .background {
-                    Capsule()
-                        .fill(Color.white.opacity(backHovering ? 0.16 : 0.10))
-                }
-                .overlay {
-                    Capsule()
-                        .strokeBorder(Color.white.opacity(backHovering ? 0.24 : 0.16))
-                }
-                .contentShape(Capsule())
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(DaddyTheme.textPrimary)
+                    .frame(width: 34, height: 34)
+                    .background {
+                        Circle()
+                            .fill(Color.white.opacity(backHovering ? 0.16 : 0.10))
+                    }
+                    .overlay {
+                        Circle()
+                            .strokeBorder(Color.white.opacity(backHovering ? 0.24 : 0.16))
+                    }
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .onHover { backHovering = $0 }
@@ -42,28 +42,19 @@ struct AgentDetailHeader: View {
             CompactAgentIcon(
                 agent: agent,
                 isSelected: false,
-                size: 24,
+                size: 32,
                 onTap: {}
             )
 
-            HStack(spacing: 6) {
-                Text(projectName)
-                    .foregroundStyle(DaddyTheme.textSecondary)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 7, weight: .bold))
-                    .foregroundStyle(DaddyTheme.textVeryDim)
-                Text(agent.displayName)
-                    .fontWeight(.bold)
-                    .foregroundStyle(DaddyTheme.textPrimary)
-            }
-            .font(.system(size: 11, design: .monospaced))
-            .lineLimit(1)
-            .truncationMode(.middle)
-
             Spacer(minLength: 10)
 
+            // Live agents only. Switching to a dead one lands you on "Session
+            // ended" — a full-window dead end — so a stopped agent has no
+            // business being one of the bubbles you can jump to. It is still
+            // reachable from the Fleet, which is where you go to resume or
+            // clear it.
             FocusAgentSwitcher(
-                agents: store.visibleAgents,
+                agents: store.visibleAgents.filter(\.isLive),
                 activeID: agent.id,
                 onSelect: { id in store.openDetail(id) }
             )
@@ -74,6 +65,23 @@ struct AgentDetailHeader: View {
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(DaddyTheme.textMuted)
 
+            // Starting a second agent used to mean leaving the first one's
+            // terminal to get back to the dashboard launcher. Same menu, same
+            // installed-state rules, now reachable from inside the session —
+            // and it sits with the other actions rather than in front of the
+            // identity it has nothing to do with.
+            ProviderLaunchMenu(project: launchTarget) {
+                HStack(spacing: 5) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("New")
+                        .font(.system(size: 11.5, weight: .semibold))
+                }
+                .foregroundStyle(DaddyTheme.textPrimary)
+                .frame(height: 24)
+            }
+            .help("Launch another agent in \(projectName)")
+
             GlassDropdown(items: menuItems, width: 250) {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 12, weight: .bold))
@@ -82,6 +90,35 @@ struct AgentDetailHeader: View {
                     .contentShape(Rectangle())
             }
             .help("Session details and actions")
+
+            // Ending a session was two levels deep in the overflow menu, which
+            // is the wrong depth for the thing you reach for most. `stop` also
+            // clears the card, so this is the whole gesture in one button.
+            Button {
+                if agent.isLive {
+                    store.stop(agent.id)
+                } else {
+                    store.dismiss(agent.id)
+                }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(DaddyTheme.failure)
+                    .frame(width: 30, height: 30)
+                    .background {
+                        Circle()
+                            .fill(DaddyTheme.failure.opacity(killHovering ? 0.24 : 0.13))
+                    }
+                    .overlay {
+                        Circle()
+                            .strokeBorder(DaddyTheme.failure.opacity(killHovering ? 0.6 : 0.35))
+                    }
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .onHover { killHovering = $0 }
+            .animation(.easeOut(duration: 0.14), value: killHovering)
+            .help(agent.isLive ? "Stop and dismiss this agent" : "Dismiss this agent")
         }
         .padding(.leading, 12)
         .padding(.trailing, 14)
@@ -92,6 +129,13 @@ struct AgentDetailHeader: View {
 
     private var projectName: String {
         store.project(agent.projectID)?.name ?? agent.projectID
+    }
+
+    /// The project of the agent you are looking at, not whatever the sidebar
+    /// happens to have selected — launching from inside a session should start
+    /// the new agent alongside it.
+    private var launchTarget: MockProject? {
+        store.project(agent.projectID) ?? store.selectedProject
     }
 
     private var menuItems: [GlassDropdownItem] {

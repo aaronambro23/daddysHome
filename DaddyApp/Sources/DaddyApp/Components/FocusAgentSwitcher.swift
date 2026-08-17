@@ -43,17 +43,17 @@ struct FocusAgentSwitcher: View {
 
     var body: some View {
         if !alternatives.isEmpty {
-            HStack(spacing: hoveredID == nil ? -7 : 4) {
+            HStack(spacing: hoveredID == nil ? -9 : 5) {
                 ForEach(Array(quick.enumerated()), id: \.element.id) { index, agent in
                     quickBubble(agent, index: index)
                 }
 
                 if overflowCount > 0 {
                     overflowButton
-                        .padding(.leading, hoveredID == nil ? 11 : 2)
+                        .padding(.leading, hoveredID == nil ? 13 : 2)
                 }
             }
-            .frame(height: 36)
+            .frame(height: 44)
             .animation(.smooth(duration: 0.18), value: hoveredID)
         }
     }
@@ -64,7 +64,10 @@ struct FocusAgentSwitcher: View {
         return CompactAgentIcon(
             agent: agent,
             isSelected: false,
-            size: 26,
+            // 34, not 26. These are the only way to jump between sessions
+            // without leaving focus mode, and at 26 the logo inside them was
+            // too small to tell one provider from another at a glance.
+            size: 34,
             ringsAgainstBackdrop: true,
             onTap: { onSelect(agent.id) }
         )
@@ -83,7 +86,7 @@ struct FocusAgentSwitcher: View {
             Text("+\(overflowCount)")
                 .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                 .foregroundStyle(DaddyTheme.textSecondary)
-                .frame(minWidth: 28, minHeight: 26)
+                .frame(minWidth: 32, minHeight: 32)
                 .insetCapsule(opacity: isOpen ? 0.16 : 0.08)
                 .contentShape(Capsule())
         }
@@ -142,20 +145,7 @@ struct FocusAgentSwitcher: View {
         } label: {
             HStack(spacing: 10) {
                 ZStack(alignment: .bottomTrailing) {
-                    Circle()
-                        .fill(CompactAgentIcon.tint(for: agent.agent).opacity(0.16))
-                        .overlay {
-                            Circle().strokeBorder(
-                                CompactAgentIcon.tint(for: agent.agent).opacity(0.4),
-                                lineWidth: 1
-                            )
-                        }
-                        .frame(width: 28, height: 28)
-                        .overlay {
-                            Text(CompactAgentIcon.monogram(for: agent.agent))
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(CompactAgentIcon.tint(for: agent.agent))
-                        }
+                    ProviderLogo.badge(for: agent.agent, diameter: 28)
 
                     Circle()
                         .fill(StateColors.accent(for: agent.state))

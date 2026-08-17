@@ -36,6 +36,20 @@ mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 
 cp "$BINARY" "${APP}/Contents/MacOS/${EXECUTABLE}"
 
+# The provider logos.
+#
+# SwiftPM puts a target's resources in a generated bundle next to the binary,
+# and `Bundle.module` finds it there when the bare executable runs. Inside an
+# .app that directory is Contents/MacOS, which `Bundle.module` does not search —
+# it looks in Contents/Resources — so without this copy the logos silently fall
+# back to letters in the bundled app and only in the bundled app.
+RESOURCE_BUNDLE=".build/${CONFIG}/DaddyApp_DaddyApp.bundle"
+if [ -d "$RESOURCE_BUNDLE" ]; then
+    cp -R "$RESOURCE_BUNDLE" "${APP}/Contents/Resources/"
+else
+    echo "  (no resource bundle at $RESOURCE_BUNDLE — provider logos will show as letters)"
+fi
+
 # Copy app icon if it exists
 if [ -f "DaddyApp.icns" ]; then
     cp "DaddyApp.icns" "${APP}/Contents/Resources/"

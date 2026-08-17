@@ -6,7 +6,19 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            AuroraBackground()
+            // A ground colour under everything, so nothing shows through in the
+            // frame between the aurora leaving and the terminal arriving.
+            DaddyTheme.focusSurface
+                .ignoresSafeArea()
+
+            // Not rendered in focus mode — and that is a performance decision,
+            // not a visual one. The focused terminal covers the window
+            // completely and is now opaque, so the aurora is invisible there
+            // while still driving a 30Hz TimelineView through eight blur and
+            // plusLighter passes, full-window, forever.
+            if !isAgentFocusMode {
+                AuroraBackground()
+            }
 
             VStack(spacing: 0) {
                 header

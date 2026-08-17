@@ -22,6 +22,12 @@ let package = Package(
             dependencies: [
                 .product(name: "DaddyCore", package: "daddycore-spm"),
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
+            ],
+            // The provider logos. `.process` rather than `.copy` so they are
+            // flattened into the generated resource bundle without the
+            // `Resources/` prefix, which is what `Bundle.module` looks for.
+            resources: [
+                .process("Resources")
             ]
         ),
     ]

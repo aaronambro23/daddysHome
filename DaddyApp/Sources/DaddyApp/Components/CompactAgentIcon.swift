@@ -34,9 +34,7 @@ struct CompactAgentIcon: View {
                     )
                     .frame(width: size, height: size)
                     .overlay {
-                        Text(Self.monogram(for: agent.agent))
-                            .font(.system(size: size * 0.4, weight: .bold))
-                            .foregroundStyle(Self.tint(for: agent.agent))
+                        ProviderLogo.mark(for: agent.agent, diameter: size)
                     }
 
                 // Trailing-bottom on purpose: in a stacked deck that is the one
@@ -72,6 +70,8 @@ struct CompactAgentIcon: View {
         }
     }
 
+    /// The fallback mark. Bubbles show `ProviderLogo` now; this is what they
+    /// fall back to when the resource bundle is missing.
     static func monogram(for kind: AgentKind) -> String {
         switch kind {
         case .claude: return "C"

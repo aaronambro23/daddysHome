@@ -437,8 +437,15 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
 
     /// Caller must hold `lock`.
     private func trimBufferLocked() {
-        // Cheap guard so we are not splitting a huge string on every chunk.
-        guard outputBuffer.utf8.count > 64 * 1024 else { return }
+        // Trim *above* the size we trim down to, so the buffer is not parked on
+        // the threshold.
+        //
+        // With a single limit, an agent whose output hovers around it paid a
+        // full split-and-rejoin of 64KB on every single chunk — and a TUI
+        // redrawing a status line produces a lot of chunks. Trimming at 96KB
+        // down to 200 lines means the work happens once per ~32KB of output
+        // instead of once per write.
+        guard outputBuffer.utf8.count > 96 * 1024 else { return }
 
         let lines = outputBuffer.split(separator: "\n", omittingEmptySubsequences: false)
         guard lines.count > retainedLines else { return }

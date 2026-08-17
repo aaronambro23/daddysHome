@@ -89,6 +89,11 @@ struct ProviderTile: View {
 
     private var header: some View {
         HStack(spacing: 8) {
+            // The provider's own mark, at title size. The tile below it is a
+            // deck of bubbles carrying the same logo, so the grid can be read
+            // by shape before any of the text is.
+            ProviderLogo.mark(for: kind, diameter: 26)
+
             Text(kind.rawValue.capitalized)
                 .font(.system(size: 11, weight: .semibold))
                 .tracking(0.7)
