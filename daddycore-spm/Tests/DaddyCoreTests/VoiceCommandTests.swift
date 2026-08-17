@@ -55,6 +55,20 @@ final class VoiceCommandTests: XCTestCase {
         XCTAssertNil(parser.parse("check the codexample file").agent)
     }
 
+    func testClaudeTranscriptionAliasesLaunchClaude() {
+        for alias in ["cloud", "claud", "clawed", "collade"] {
+            let result = parser.parse("launch \(alias)")
+            XCTAssertEqual(result.intent, .launch, "failed intent for \(alias)")
+            XCTAssertEqual(result.agent, .claude, "failed agent for \(alias)")
+        }
+    }
+
+    func testClaudeAliasDoesNotStripCloudFromClaudePrompt() {
+        let result = parser.parse("claude, fix cloud deployment")
+        XCTAssertEqual(result.agent, .claude)
+        XCTAssertEqual(result.prompt, "fix cloud deployment")
+    }
+
     func testHandoffPicksTheAgentBeingHandedTo() {
         let result = parser.parse("hand this to codex")
         XCTAssertEqual(result.intent, .handoff)

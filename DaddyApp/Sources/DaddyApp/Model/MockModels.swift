@@ -13,6 +13,8 @@ struct MockProject: Identifiable, Hashable {
     let id: String
     let name: String
     let path: String
+    /// Nil for sidebar roots; otherwise the selectable directory containing it.
+    let parentID: String?
 }
 
 struct MockAgent: Identifiable {
@@ -23,7 +25,18 @@ struct MockAgent: Identifiable {
     var model: String
     var state: AgentState
     var startedAt: Date
+
+    /// When the agent itself last printed something — not when you last clicked
+    /// a button at it. `MockStore.tick()` copies this from the live session
+    /// every second; the action methods seed it so a fresh card is not blank.
     var lastOutputAt: Date
+
+    /// The last line the agent actually printed, ANSI-stripped.
+    ///
+    /// Cached here rather than derived in a view body: `PTYProcess.recentOutput`
+    /// is up to 64KB and `stripANSI` walks all of it, and a tile would ask for
+    /// this once per agent per frame. `tick()` computes it once a second.
+    var lastLine: String = ""
 
     /// Non-nil when this card is backed by a real `SessionManager` session and
     /// a live pty. Nil means it is seeded demo data with a scripted transcript.

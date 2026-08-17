@@ -1,35 +1,6 @@
 import SwiftUI
 import DaddyCore
 
-// MARK: - Tabs
-
-enum DaddyTab: String, CaseIterable, Identifiable {
-    case fleet
-    case workUnits
-    case voice
-    case settings
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .fleet: return "Fleet"
-        case .workUnits: return "Work Units"
-        case .voice: return "Voice"
-        case .settings: return "Settings"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .fleet: return "square.grid.2x2"
-        case .workUnits: return "list.bullet.rectangle"
-        case .voice: return "waveform"
-        case .settings: return "slider.horizontal.3"
-        }
-    }
-}
-
 // MARK: - Store
 //
 // Everything on screen is driven from here. The data is seeded rather than
@@ -43,9 +14,16 @@ enum DaddyTab: String, CaseIterable, Identifiable {
 @MainActor
 final class MockStore {
     // Navigation
-    var tab: DaddyTab = .fleet
     var selectedProjectID: String?
     var selectedAgentID: String?
+
+    /// The agent being looked at in the drilled-in detail view, if any.
+    ///
+    /// Deliberately on the store rather than local to `AgentDashboard`: the old
+    /// expansion state was view-local, which let it drift out of step with
+    /// `selectedAgentID` and left the view with no reachable way back to the
+    /// grid. Selection and drill-in are now separate, and both live here.
+    var detailAgentID: String?
 
     // Data
     var projects: [MockProject] = []
@@ -61,14 +39,6 @@ final class MockStore {
     /// menu shows everything as unavailable for a moment rather than blocking.
     var installedAgents: Set<AgentKind> = []
 
-
-    // Voice
-    var isListening: Bool = false
-    var voiceLevel: Double = 0.2
-
-    /// What was dictated, before it is sent. Shown rather than run blind, so a
-    /// misheard command can be corrected instead of reaching an agent.
-    var voiceText: String = ""
 
     // Settings
     var defaultModel: String = "opus-5"
@@ -87,6 +57,10 @@ final class MockStore {
     /// before anything called it.
     @ObservationIgnored let commandParser = CommandParser()
 
+    /// Reads HEX's own recording history, so voice commands do not depend on
+    /// whichever SwiftUI control or embedded terminal currently owns focus.
+    @ObservationIgnored private var hexWatcher: HEXWatcher?
+
     /// Surfaced in the UI when a launch fails (missing binary, bad cwd).
     var launchError: String?
 
@@ -95,6 +69,11 @@ final class MockStore {
         selectedProjectID = projects.first?.id
         selectedAgentID = agents.first?.id
         refreshInstalledAgents()
+
+        hexWatcher = HEXWatcher()
+        hexWatcher?.start { [weak self] transcript in
+            self?.submitVoice(transcript)
+        }
     }
 
     // MARK: - Derived
@@ -108,8 +87,23 @@ final class MockStore {
         agents.first { $0.id == selectedAgentID }
     }
 
+    /// Resolved rather than stored, so a dismissed or vanished agent drops the
+    /// detail view instead of leaving it pointing at nothing.
+    var detailAgent: MockAgent? {
+        guard let id = detailAgentID else { return nil }
+        return agents.first { $0.id == id }
+    }
+
     var selectedProject: MockProject? {
         projects.first { $0.id == selectedProjectID }
+    }
+
+    var rootProjects: [MockProject] {
+        projects.filter { $0.parentID == nil }
+    }
+
+    func childProjects(for projectID: String) -> [MockProject] {
+        projects.filter { $0.parentID == projectID }
     }
 
     var liveAgentCount: Int {
@@ -152,15 +146,22 @@ final class MockStore {
     // MARK: - Selection
 
     func select(project id: String) {
-        selectedProjectID = (selectedProjectID == id) ? nil : id
+        guard selectedProjectID != id else { return }
+        selectedProjectID = id
         if let current = selectedAgent, let pid = selectedProjectID, current.projectID != pid {
             selectedAgentID = visibleAgents.first?.id
         }
     }
 
-    func select(agent id: String) {
-        guard selectedAgentID != id else { return }
+    /// Agent cards are navigation, not a two-stage preview. One click selects
+    /// the session and enters its terminal focus workspace.
+    func openDetail(_ id: String) {
         selectedAgentID = id
+        detailAgentID = id
+    }
+
+    func closeDetail() {
+        detailAgentID = nil
     }
 
     // MARK: - Actions
@@ -243,6 +244,10 @@ final class MockStore {
             agents.append(card)
             selectedProjectID = project.id
             selectedAgentID = card.id
+            // Launching from inside the detail view moves the detail view with
+            // you, rather than leaving it parked on the previous agent while
+            // the selection quietly moves underneath it.
+            if detailAgentID != nil { detailAgentID = card.id }
             return card
         } catch {
             launchError = "\(kind.rawValue): \(error.localizedDescription)"
@@ -366,6 +371,18 @@ final class MockStore {
         if selectedAgentID == agentID {
             selectedAgentID = visibleAgents.first?.id ?? agents.first?.id
         }
+        if detailAgentID == agentID {
+            detailAgentID = nil
+        }
+    }
+
+    /// Stop every live agent of one kind in the current scope. The tile menu's
+    /// one bulk action — killing four runaway Claudes one menu at a time is the
+    /// thing the old UI made tedious.
+    func stopAll(_ kind: AgentKind) {
+        for agent in visibleAgents where agent.agent == kind && agent.isLive {
+            stop(agent.id)
+        }
     }
 
     /// Clear every finished agent at once.
@@ -394,20 +411,8 @@ final class MockStore {
         }
     }
 
-    func toggleListening() {
-        isListening.toggle()
-        if isListening {
-            voiceLog.insert(
-                VoiceEntry(at: Date(), transcript: "listening…",
-                           resolution: "HEX armed", didSucceed: true),
-                at: 0
-            )
-        }
-    }
-
-    /// The one entry point for spoken input. Dictated text lands in the voice
-    /// composer (HEX pastes into whatever has focus, and Daddy only listens
-    /// while it is frontmost), and this routes it to a real agent.
+    /// The one entry point for spoken input. `HEXWatcher` supplies recordings
+    /// targeted at Daddy, and this routes them to a real agent.
     @MainActor
     func submitVoice(_ transcript: String) {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -420,7 +425,6 @@ final class MockStore {
                        resolution: outcome.summary, didSucceed: outcome.didSucceed),
             at: 0
         )
-        voiceText = ""
     }
 
     /// Switch the model on a live session. Returns false if the agent has no
@@ -449,12 +453,6 @@ final class MockStore {
     func tick() {
         tickCount += 1
 
-        if isListening {
-            voiceLevel = 0.25 + 0.6 * abs(sin(Double(tickCount) * 0.9))
-        } else {
-            voiceLevel = 0.18
-        }
-
         // Every card is a real session now, so state comes from the process and
         // nothing invents it. The dashboard sits still when nothing is happening,
         // which is correct: it used to shuffle states on a timer so it would look
@@ -462,13 +460,43 @@ final class MockStore {
         for agent in agents {
             guard let sessionID = agent.sessionID else { continue }
 
+            // `launchSession` marks a session `.ready` the moment `forkpty`
+            // returns, which is before the CLI has printed a single byte — so
+            // a card announced READY while its agent was still booting and
+            // could not be typed at. An agent that has said nothing is still
+            // launching, whatever the session says.
+            let hasSpoken = !(sessionManager.getPTYProcess(for: sessionID)?
+                .recentOutput.isEmpty ?? true)
+
             if let live = sessionManager.session(sessionID) {
-                mutate(agent.id) { $0.state = live.state }
+                mutate(agent.id) {
+                    if case .ready = live.state, !hasSpoken {
+                        $0.state = .launching
+                    } else {
+                        $0.state = live.state
+                    }
+                    // Without this the card's timestamp measured "time since you
+                    // last clicked something", not "time since the agent spoke".
+                    $0.lastOutputAt = live.lastOutputAt
+                }
             }
 
-            // The pty vanishing means the process died on its own.
-            if let pty = sessionManager.getPTYProcess(for: sessionID), !pty.isProcessRunning {
-                mutate(agent.id) { $0.state = .exited(exitCode: pty.exitCode ?? 0) }
+            if let pty = sessionManager.getPTYProcess(for: sessionID) {
+                // Only the tail is cleaned. `recentOutput` runs to 64KB and
+                // `stripANSI` walks every character of what it is given, and
+                // this loop runs for every agent every second.
+                let tail = String(pty.recentOutput.suffix(4096))
+                let line = OutputHeuristics.lastVisibleLine(
+                    OutputHeuristics.recentWindow(tail, lines: 3)
+                )
+                if line != agent.lastLine {
+                    mutate(agent.id) { $0.lastLine = line }
+                }
+
+                // The pty vanishing means the process died on its own.
+                if !pty.isProcessRunning {
+                    mutate(agent.id) { $0.state = .exited(exitCode: pty.exitCode ?? 0) }
+                }
             }
         }
 
@@ -522,9 +550,24 @@ extension MockStore {
     private static func scanProjects() async -> [MockProject] {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
-                continuation.resume(returning: ProjectScanner.scan().map {
-                    MockProject(id: $0.id, name: $0.name, path: $0.path)
-                })
+                let projects = ProjectScanner.scan().flatMap { root in
+                    [
+                        MockProject(
+                            id: root.id,
+                            name: root.name,
+                            path: root.path,
+                            parentID: nil
+                        )
+                    ] + root.children.map {
+                        MockProject(
+                            id: $0.id,
+                            name: $0.name,
+                            path: $0.path,
+                            parentID: root.id
+                        )
+                    }
+                }
+                continuation.resume(returning: projects)
             }
         }
     }

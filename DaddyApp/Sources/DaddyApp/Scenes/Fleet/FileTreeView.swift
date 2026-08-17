@@ -135,10 +135,26 @@ struct FileTreeView: View {
         .insetSurface(cornerRadius: 8)
     }
 
+    /// Where the handoff documents actually are.
+    ///
+    /// `WorkflowContract` tells every agent to write to `docs/handoffs`, and
+    /// they do — but `SessionManager` creates its own stubs under
+    /// `documents/handoffs`, and this panel only ever read the latter. So it
+    /// showed a list of empty generated files while the real, agent-authored
+    /// documents sat unread in the other directory. Prefer the contract's path
+    /// and fall back to the stubs for projects that only have those.
+    static func handoffsPath(for project: MockProject) -> String {
+        let contractPath = project.path + "/docs/handoffs"
+        if FileManager.default.fileExists(atPath: contractPath) {
+            return contractPath
+        }
+        return project.path + "/documents/handoffs"
+    }
+
     private func refreshFileTree() {
         guard let project = project else { return }
 
-        let handoffsPath = project.path + "/documents/handoffs"
+        let handoffsPath = Self.handoffsPath(for: project)
         let fm = FileManager.default
 
         var inProgress: [String] = []

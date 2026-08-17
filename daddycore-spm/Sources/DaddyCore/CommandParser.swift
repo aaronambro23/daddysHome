@@ -102,6 +102,10 @@ public final class CommandParser {
         ("opencode", .opencode),
         ("open code", .opencode),
         ("claude", .claude),
+        ("cloud", .claude),       // Transcription: "Claude" → "cloud"
+        ("claud", .claude),       // Transcription: dropped final sound
+        ("clawed", .claude),      // Transcription: phonetic spelling
+        ("collade", .claude),     // Transcription observed in HEX history
         ("codex", .codex),
         ("codecs", .codex),      // Transcription: "codex" → "codecs"
         ("codes", .codex),        // Transcription: "codex" → "codes"
@@ -136,15 +140,29 @@ public final class CommandParser {
     }
 
     private func removingAgentNames(from text: String) -> String {
-        var result = text
-        for (pattern, _) in Self.agentPatterns {
-            result = result.replacingOccurrences(
+        // Remove only the first mention of each agent. A transcription alias can
+        // also be meaningful prompt text: "Claude, fix cloud deployment" must
+        // retain "cloud" instead of stripping both same-agent matches.
+        var firstRangeByAgent: [AgentKind: NSRange] = [:]
+        for (pattern, agent) in Self.agentPatterns {
+            guard let range = text.range(
                 of: "\\b" + NSRegularExpression.escapedPattern(for: pattern) + "\\b",
-                with: " ",
                 options: .regularExpression
-            )
+            ) else { continue }
+
+            let nsRange = NSRange(range, in: text)
+            if let existing = firstRangeByAgent[agent], existing.location <= nsRange.location {
+                continue
+            }
+            firstRangeByAgent[agent] = nsRange
         }
-        return result
+
+        let result = NSMutableString(string: text)
+        for range in firstRangeByAgent.values.sorted(by: { $0.location > $1.location }) {
+            result.replaceCharacters(in: range, with: " ")
+        }
+
+        return String(result)
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
     }

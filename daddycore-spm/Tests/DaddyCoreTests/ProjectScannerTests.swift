@@ -62,7 +62,47 @@ final class ProjectScannerTests: XCTestCase {
         try "".write(to: nested.appendingPathComponent("Cargo.toml"),
                      atomically: true, encoding: .utf8)
 
-        XCTAssertEqual(ProjectScanner.scan(root: root).map(\.name), ["thing"])
+        let found = ProjectScanner.scan(root: root)
+        XCTAssertEqual(found.map(\.name), ["code"])
+        XCTAssertEqual(found[0].children.map(\.name), ["thing"])
+    }
+
+    func testContainerAndChildrenAreSelectableDirectories() throws {
+        let container = try makeDirectory("Elite Breathing")
+        let app = container.appendingPathComponent("app")
+        let assets = container.appendingPathComponent("assets")
+        let website = container.appendingPathComponent("website")
+
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: website, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: website.appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+
+        let found = ProjectScanner.scan(root: root)
+
+        XCTAssertEqual(found.map(\.name), ["Elite Breathing"])
+        XCTAssertEqual(found[0].path, container.path)
+        XCTAssertEqual(found[0].children.map(\.name), ["app", "assets", "website"])
+        XCTAssertEqual(found[0].children.map(\.children), [[], [], []],
+                       "discovery must stop after one child layer")
+    }
+
+    func testGeneratedChildDirectoriesAreHidden() throws {
+        let project = try makeDirectory("project", containing: ["Package.swift"])
+        for name in [".build", "node_modules", "Sources"] {
+            try FileManager.default.createDirectory(
+                at: project.appendingPathComponent(name),
+                withIntermediateDirectories: true
+            )
+        }
+
+        XCTAssertEqual(
+            ProjectScanner.scan(root: root)[0].children.map(\.name),
+            ["Sources"]
+        )
     }
 
     func testNoiseDirectoriesAreSkipped() throws {

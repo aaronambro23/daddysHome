@@ -61,6 +61,15 @@ enum DaddyTheme {
     static var insetStroke: Color { Color.white.opacity(0.10) }
     static var insetStrokeSelected: Color { Color.white.opacity(0.28) }
 
+    /// Opaque ground for terminal focus mode. Unlike floating panels, the
+    /// workspace must prioritize legibility over showing the aurora through it.
+    static var focusSurface: Color { Color(hex: "#0d111a").opacity(0.97) }
+
+    /// Rim behind a bubble in a stacked deck, so an overlapping neighbour reads
+    /// as sitting in front of it rather than merging with it. Dark, because it
+    /// stands in for the panel's own ground.
+    static var bubbleRim: Color { Color(hex: "#131722").opacity(0.92) }
+
     /// Fill for popovers we draw ourselves. A popover is its own window, so
     /// there is no panel behind it to tint — it needs an opaque ground of its
     /// own or the system's grey shows through.

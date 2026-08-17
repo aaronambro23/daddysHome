@@ -35,21 +35,35 @@ struct GlassDropdown<Label: View>: View {
     let items: [GlassDropdownItem]
     var width: CGFloat = 210
     var emptyMessage: String?
+
+    /// Keeps the popover up after a pick, for menus whose whole point is firing
+    /// several in a row — launching four agents should not mean opening the
+    /// same menu four times. Escape or a click outside still closes it.
+    var staysOpenOnPick: Bool = false
+
     @ViewBuilder let label: () -> Label
 
     @State private var isOpen = false
     @State private var hoveringTrigger = false
 
     var body: some View {
+        // Padding and the capsule belong *inside* the button.
+        //
+        // Applied outside it, as they were, the visible capsule was 9pt wider
+        // and 5pt taller on each side than the button's hit region: clicking
+        // the middle of the control worked and clicking its rim missed
+        // entirely, falling through to whatever was behind. On a provider tile
+        // that meant the card opened instead of the menu.
         Button {
             isOpen.toggle()
         } label: {
             label()
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .insetCapsule(opacity: hoveringTrigger || isOpen ? 0.16 : 0.08)
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .insetCapsule(opacity: hoveringTrigger || isOpen ? 0.16 : 0.08)
         .onHover { hoveringTrigger = $0 }
         .animation(.easeOut(duration: 0.15), value: hoveringTrigger)
         .popover(isPresented: $isOpen, arrowEdge: .bottom) {
@@ -68,7 +82,7 @@ struct GlassDropdown<Label: View>: View {
             } else {
                 ForEach(items) { item in
                     GlassDropdownRow(item: item) {
-                        isOpen = false
+                        if !staysOpenOnPick { isOpen = false }
                         item.action()
                     }
                 }

@@ -6,6 +6,7 @@ import DaddyCore
 
 struct TerminalPane: View {
     @Environment(MockStore.self) private var store
+    var isFocused = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -40,34 +41,41 @@ struct TerminalPane: View {
                     }
                 }
             }
+            .frame(height: isFocused ? 0 : nil)
+            .opacity(isFocused ? 0 : 1)
+            .clipped()
+            .allowsHitTesting(!isFocused)
 
-            if let agent = store.selectedAgent {
-                if let pty = store.pty(for: agent), pty.isProcessRunning {
-                    // Real pty: SwiftTerm renders it, including colour and any
-                    // interactive prompts the agent draws.
-                    TerminalSurface(pty: pty)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                } else {
-                    // A pty that has exited is *not* shown as a terminal. The
-                    // emulator keeps painting the last frame and a blinking
-                    // caret, so a dead session looked alive and half-drawn.
-                    endedState(pty: store.pty(for: agent))
-                }
-            } else if store.agents.isEmpty {
-                emptyState(
-                    "No agents running",
-                    detail: "Pick a project in the sidebar and launch one."
-                )
-            } else {
-                emptyState("Select an agent to view its output", detail: nil)
-            }
+            terminalBody
 
-            GlassHairline()
-
-            controls
         }
-        .glassPanel()
+        .background(isFocused ? DaddyTheme.focusSurface : Color.clear)
+        .glassPanel(cornerRadius: isFocused ? 0 : 26)
+    }
+
+    @ViewBuilder
+    private var terminalBody: some View {
+        if let agent = store.selectedAgent {
+            if let pty = store.pty(for: agent), pty.isProcessRunning {
+                // Real pty: SwiftTerm renders it, including colour and any
+                // interactive prompts the agent draws.
+                TerminalSurface(pty: pty)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+            } else {
+                // A pty that has exited is *not* shown as a terminal. The
+                // emulator keeps painting the last frame and a blinking
+                // caret, so a dead session looked alive and half-drawn.
+                endedState(pty: store.pty(for: agent))
+            }
+        } else if store.agents.isEmpty {
+            emptyState(
+                "No agents running",
+                detail: "Pick a project in the sidebar and launch one."
+            )
+        } else {
+            emptyState("Select an agent to view its output", detail: nil)
+        }
     }
 
     private func isRunning(_ agent: MockAgent) -> Bool {
@@ -137,49 +145,5 @@ struct TerminalPane: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: Controls
-    //
-    // There is deliberately no text field here.
-    //
-    // The pane above *is* the agent's input — it is a real terminal, so you type
-    // straight into it. A composer would send exactly what typing already sends,
-    // and it did something worse than duplicate: whenever it held focus,
-    // keystrokes meant for the agent went into the field instead and never
-    // arrived. What is left are the two things typing cannot express, because
-    // they are signals rather than text.
-
-    private var controls: some View {
-        let agent = store.selectedAgent
-        let live = agent.map(isRunning) ?? false
-
-        return HStack(spacing: 10) {
-            Text(hint(for: agent, live: live))
-                .font(.system(size: 10))
-                .foregroundStyle(DaddyTheme.textMuted)
-
-            Spacer(minLength: 8)
-
-            Button("go on") {
-                if let agent { store.resume(agent.id) }
-            }
-            .buttonStyle(.inset(DaddyTheme.working))
-            .disabled(!live)
-
-            Button("esc") {
-                if let agent { store.interrupt(agent.id) }
-            }
-            .buttonStyle(.inset(DaddyTheme.failure))
-            .disabled(!live)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-    }
-
-    private func hint(for agent: MockAgent?, live: Bool) -> String {
-        guard agent != nil else { return "no session selected" }
-        return live
-            ? "type in the terminal above to talk to this agent"
-            : "this session has ended"
-    }
 }
 

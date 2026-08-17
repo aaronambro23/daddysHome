@@ -2,53 +2,45 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(MockStore.self) private var store
-    @FocusState private var hiddenFieldFocused: Bool
-    @State private var hiddenVoiceInput = ""
-    @State private var isProcessingVoice = false
+    @State private var utilityPanel: UtilityPanel?
 
     var body: some View {
-        @Bindable var store = store
-
         ZStack {
             AuroraBackground()
 
             VStack(spacing: 0) {
                 header
+                    .frame(height: isAgentFocusMode ? 0 : nil)
+                    .opacity(isAgentFocusMode ? 0 : 1)
+                    .clipped()
+                    .allowsHitTesting(!isAgentFocusMode)
 
-                Group {
-                    switch store.tab {
-                    case .fleet: FleetView()
-                    case .workUnits: WorkUnitsView()
-                    case .voice: VoiceView()
-                    case .settings: SettingsView()
+                ZStack(alignment: .trailing) {
+                    FleetView()
+                        .padding(.horizontal, isAgentFocusMode ? 0 : 18)
+                        .padding(.bottom, isAgentFocusMode ? 0 : 18)
+
+                    if let utilityPanel, !isAgentFocusMode {
+                        Color.black.opacity(0.22)
+                            .contentShape(Rectangle())
+                            .onTapGesture { closeUtilityPanel() }
+                            .transition(.opacity)
+
+                        UtilityDrawer(panel: utilityPanel, onClose: closeUtilityPanel)
+                            .frame(width: 420)
+                            .frame(maxHeight: .infinity)
+                            .padding(.trailing, 18)
+                            .padding(.bottom, 18)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                 }
-                .padding(.horizontal, 18)
-                .padding(.bottom, 18)
-                .transition(.opacity)
             }
 
-            // Hidden text field that always has focus so HEX dictation is captured
-            // from any tab, not just the Voice tab. HEX just pastes; it doesn't
-            // send Return, so we auto-submit when text appears.
-            TextField("", text: $hiddenVoiceInput)
-                .focused($hiddenFieldFocused)
-                .onChange(of: hiddenVoiceInput) { oldValue, newValue in
-                    if !isProcessingVoice && !newValue.isEmpty && oldValue.isEmpty {
-                        isProcessingVoice = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                            store.submitVoice(hiddenVoiceInput)
-                            hiddenVoiceInput = ""
-                            isProcessingVoice = false
-                            hiddenFieldFocused = true
-                        }
-                    }
-                }
-                .frame(width: 0, height: 0)
-                .opacity(0)
         }
         .preferredColorScheme(.dark)
-        .onAppear { hiddenFieldFocused = true }
+        .onChange(of: store.detailAgentID) { _, detailID in
+            if detailID != nil { utilityPanel = nil }
+        }
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
@@ -57,54 +49,51 @@ struct RootView: View {
         }
     }
 
+    private var isAgentFocusMode: Bool {
+        store.detailAgent != nil
+    }
+
     // MARK: Header
     //
-    // The tab bar and the status pills are the only glass in the chrome, and
-    // they sit over the backdrop — never over another glass surface.
+    // Fleet is the product, not one destination among four. The only controls
+    // here open contextual utilities over the workspace without navigating away.
 
     private var header: some View {
-        @Bindable var store = store
-
-        return HStack(spacing: 18) {
+        HStack(spacing: 18) {
             HStack(spacing: 12) {
                 if let nsImage = NSImage(contentsOfFile: "/Users/aaronambrosi/Documents/daddy/DH-Logo.png") {
                     Image(nsImage: nsImage)
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 24, height: 24)
+                        .frame(width: 36, height: 36)
                         .clipShape(Circle())
                 } else {
                     Image(systemName: "diamond.fill")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(DaddyTheme.accent)
+                        .frame(width: 36, height: 36)
                 }
 
                 Text("DADDY'S HOME")
-                    .font(.system(size: 13, weight: .bold))
-                    .tracking(1.0)
+                    .font(.system(size: 15, weight: .bold))
+                    .tracking(0.7)
                     .foregroundStyle(DaddyTheme.textPrimary)
             }
-            .padding(.leading, 78)   // clears the traffic lights
-
-            Spacer(minLength: 12)
-
-            GlassTabBar(selection: $store.tab)
 
             Spacer(minLength: 12)
 
             GlassEffectContainer(spacing: 16) {
                 HStack(spacing: 8) {
                     Button {
-                        withAnimation(.smooth(duration: 0.35)) {
-                            store.tab = .voice
-                            store.toggleListening()
-                        }
+                        toggleUtilityPanel(.hex)
                     } label: {
                         HStack(spacing: 7) {
-                            BreathingDot(color: DaddyTheme.working, glowRadius: 7, size: 5)
+                            Image(systemName: "waveform")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(DaddyTheme.textSecondary)
 
-                            Text(store.isListening ? "HEX Listening" : "HEX Ready")
-                                .font(.system(size: 10, weight: .medium))
+                            Text("HEX")
+                                .font(.system(size: 10))
                                 .foregroundStyle(DaddyTheme.textSecondary)
                         }
                         .padding(.horizontal, 13)
@@ -112,7 +101,10 @@ struct RootView: View {
                         .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
-                    .glassPill(interactive: true)
+                    .glassPill(
+                        tint: utilityPanel == .hex ? DaddyTheme.accent.opacity(0.14) : nil,
+                        interactive: true
+                    )
 
                     HStack(spacing: 6) {
                         Text("\(store.liveAgentCount)")
@@ -126,10 +118,39 @@ struct RootView: View {
                     .padding(.horizontal, 13)
                     .padding(.vertical, 8)
                     .glassPill()
+
+                    Button {
+                        toggleUtilityPanel(.settings)
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(DaddyTheme.textSecondary)
+                            .frame(width: 30, height: 30)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .glassPill(
+                        tint: utilityPanel == .settings ? DaddyTheme.accent.opacity(0.14) : nil,
+                        interactive: true
+                    )
+                    .help("Settings")
                 }
             }
-            .padding(.trailing, 22)
         }
-        .padding(.vertical, 18)
+        .padding(.horizontal, 18)
+        // Hidden-titlebar traffic lights occupy the first ~22pt vertically.
+        // Put the brand below them so it can share the sidebar's true left edge.
+        .padding(.top, 26)
+        .padding(.bottom, 10)
+    }
+
+    private func toggleUtilityPanel(_ panel: UtilityPanel) {
+        withAnimation(.smooth(duration: 0.24)) {
+            utilityPanel = utilityPanel == panel ? nil : panel
+        }
+    }
+
+    private func closeUtilityPanel() {
+        withAnimation(.smooth(duration: 0.22)) { utilityPanel = nil }
     }
 }

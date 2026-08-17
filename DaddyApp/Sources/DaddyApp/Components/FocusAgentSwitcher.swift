@@ -1,0 +1,196 @@
+import SwiftUI
+
+/// Fast switching inside terminal focus mode.
+///
+/// The current agent is already named in the breadcrumb, so repeating its
+/// bubble wastes the most valuable toolbar space. Show the three most recently
+/// active alternatives instead; larger fleets collapse into a searchable list.
+struct FocusAgentSwitcher: View {
+    @Environment(MockStore.self) private var store
+
+    let agents: [MockAgent]
+    let activeID: String
+    let onSelect: (String) -> Void
+
+    @State private var hoveredID: String?
+    @State private var isOpen = false
+    @State private var query = ""
+
+    private var alternatives: [MockAgent] {
+        agents
+            .filter { $0.id != activeID }
+            .sorted { $0.lastOutputAt > $1.lastOutputAt }
+    }
+
+    private var quick: [MockAgent] {
+        Array(alternatives.prefix(3))
+    }
+
+    private var overflowCount: Int {
+        max(0, alternatives.count - quick.count)
+    }
+
+    private var matches: [MockAgent] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return alternatives }
+        return alternatives.filter { agent in
+            let project = store.project(agent.projectID)?.name ?? ""
+            return agent.displayName.lowercased().contains(needle)
+                || agent.workUnitID.lowercased().contains(needle)
+                || project.lowercased().contains(needle)
+        }
+    }
+
+    var body: some View {
+        if !alternatives.isEmpty {
+            HStack(spacing: hoveredID == nil ? -7 : 4) {
+                ForEach(Array(quick.enumerated()), id: \.element.id) { index, agent in
+                    quickBubble(agent, index: index)
+                }
+
+                if overflowCount > 0 {
+                    overflowButton
+                        .padding(.leading, hoveredID == nil ? 11 : 2)
+                }
+            }
+            .frame(height: 36)
+            .animation(.smooth(duration: 0.18), value: hoveredID)
+        }
+    }
+
+    private func quickBubble(_ agent: MockAgent, index: Int) -> some View {
+        let hovering = hoveredID == agent.id
+
+        return CompactAgentIcon(
+            agent: agent,
+            isSelected: false,
+            size: 26,
+            ringsAgainstBackdrop: true,
+            onTap: { onSelect(agent.id) }
+        )
+        .scaleEffect(hovering ? 1.14 : 1)
+        .offset(y: hovering ? -3 : 0)
+        .zIndex(hovering ? 100 : Double(quick.count - index))
+        .onHover { isHovering in
+            hoveredID = isHovering ? agent.id : (hoveredID == agent.id ? nil : hoveredID)
+        }
+    }
+
+    private var overflowButton: some View {
+        Button {
+            isOpen.toggle()
+        } label: {
+            Text("+\(overflowCount)")
+                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .foregroundStyle(DaddyTheme.textSecondary)
+                .frame(minWidth: 28, minHeight: 26)
+                .insetCapsule(opacity: isOpen ? 0.16 : 0.08)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Find another agent")
+        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+            switcherPopover
+        }
+        .onChange(of: isOpen) { _, open in
+            if !open { query = "" }
+        }
+    }
+
+    private var switcherPopover: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(DaddyTheme.textMuted)
+
+                TextField("Search agents, projects, or work units", text: $query)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundStyle(DaddyTheme.textPrimary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .insetSurface(cornerRadius: 9)
+
+            if matches.isEmpty {
+                Text("No matching agents")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DaddyTheme.textMuted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 20)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 3) {
+                        ForEach(matches) { agent in
+                            agentRow(agent)
+                        }
+                    }
+                }
+                .frame(maxHeight: 320)
+            }
+        }
+        .padding(8)
+        .frame(width: 330)
+        .background(DaddyTheme.popoverBackground)
+    }
+
+    private func agentRow(_ agent: MockAgent) -> some View {
+        Button {
+            isOpen = false
+            onSelect(agent.id)
+        } label: {
+            HStack(spacing: 10) {
+                ZStack(alignment: .bottomTrailing) {
+                    Circle()
+                        .fill(CompactAgentIcon.tint(for: agent.agent).opacity(0.16))
+                        .overlay {
+                            Circle().strokeBorder(
+                                CompactAgentIcon.tint(for: agent.agent).opacity(0.4),
+                                lineWidth: 1
+                            )
+                        }
+                        .frame(width: 28, height: 28)
+                        .overlay {
+                            Text(CompactAgentIcon.monogram(for: agent.agent))
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(CompactAgentIcon.tint(for: agent.agent))
+                        }
+
+                    Circle()
+                        .fill(StateColors.accent(for: agent.state))
+                        .frame(width: 7, height: 7)
+                        .overlay(Circle().strokeBorder(DaddyTheme.bubbleRim, lineWidth: 1))
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(agent.displayName) · \(store.project(agent.projectID)?.name ?? "")")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(DaddyTheme.textPrimary)
+                        .lineLimit(1)
+
+                    Text(agent.workUnitID)
+                        .font(.system(size: 9.5, design: .monospaced))
+                        .foregroundStyle(DaddyTheme.textMuted)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 6)
+
+                Text(StateColors.name(for: agent.state))
+                    .font(.system(size: 8.5, weight: .bold))
+                    .tracking(0.5)
+                    .foregroundStyle(StateColors.accent(for: agent.state))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(DaddyTheme.insetFill)
+        }
+    }
+}
