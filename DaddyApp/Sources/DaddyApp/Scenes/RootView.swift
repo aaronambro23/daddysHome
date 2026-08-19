@@ -27,7 +27,7 @@ struct RootView: View {
             AuroraBackground()
 
             VStack(spacing: 0) {
-                ZStack(alignment: .topTrailing) {
+                ZStack(alignment: .trailing) {
                     // Inset in both modes now. Focus used to run the terminal
                     // to the window edges because it *was* the window; with the
                     // rail permanently beside it, the rail would sit flush
@@ -53,24 +53,24 @@ struct RootView: View {
                         .padding(.bottom, 18)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
-
-                    // Settings button in top-right corner, outside the padding
-                    Button {
-                        toggleUtilityPanel(.settings)
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(DaddyTheme.textSecondary)
-                            .frame(width: 36, height: 36)
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .opacity(0.6)
-                    .padding(.top, 18)
-                    .padding(.trailing, 18)
-                    .help("Settings")
-                    .zIndex(1)
                 }
+            }
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    toggleUtilityPanel(.settings)
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(DaddyTheme.textSecondary)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .opacity(0.6)
+                .padding(.top, 18)
+                .padding(.trailing, 18)
+                .help("Settings")
+                .zIndex(1)
             }
 
         }

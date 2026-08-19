@@ -25,15 +25,11 @@ struct ProviderLaunchMenu<Label: View>: View {
                 .disabled(true)
                 .help("Select a project first")
         } else {
-            ZStack {
-                label()
-                    .zIndex(10)
-
-                RadialProviderMenu(
-                    items: providerItems,
-                    onDismiss: {}
-                )
-            }
+            RadialProviderMenu(
+                items: providerItems,
+                onDismiss: {},
+                label: label
+            )
         }
     }
 

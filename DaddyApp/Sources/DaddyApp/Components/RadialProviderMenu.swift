@@ -1,12 +1,13 @@
 import SwiftUI
 import DaddyCore
 
-struct RadialProviderMenu: View {
+struct RadialProviderMenu<Label: View>: View {
     @State private var isOpen = false
     @State private var hoveredKind: AgentKind?
 
     let items: [ProviderMenuItem]
     let onDismiss: () -> Void
+    @ViewBuilder let label: () -> Label
 
     var body: some View {
         ZStack {
@@ -18,26 +19,9 @@ struct RadialProviderMenu: View {
                     .transition(.opacity)
             }
 
-            // Center button (plus or X)
+            // Center button - the label wrapped in the toggle
             Button(action: { toggleMenu() }) {
-                Image(systemName: isOpen ? "xmark" : "plus")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(DaddyTheme.textPrimary)
-                    .frame(width: 40, height: 40)
-                    .background {
-                        Circle().fill(Color.white.opacity(isOpen ? 0.08 : 0.12))
-                    }
-                    .overlay {
-                        Circle().strokeBorder(
-                            Color.white.opacity(isOpen ? 0.16 : 0.20),
-                            lineWidth: 1
-                        )
-                    }
-                    .background {
-                        Circle()
-                            .fill(DaddyTheme.bubbleRim)
-                            .frame(width: 45, height: 45)
-                    }
+                label()
             }
             .buttonStyle(.plain)
             .zIndex(10)
