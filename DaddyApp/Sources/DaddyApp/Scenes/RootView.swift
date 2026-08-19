@@ -34,6 +34,7 @@ struct RootView: View {
                     // against the frame while every other panel floats.
                     FleetView()
                         .padding(.horizontal, 18)
+                        .padding(.vertical, 18)
 
                     if let utilityPanel, !isAgentFocusMode {
                         Color.black.opacity(0.22)

@@ -79,7 +79,7 @@ struct FleetView: View {
             ZStack(alignment: .topLeading) {
                 middleColumn(
                     width: isDetail ? contentWidth : max(0, contentWidth - terminalDockedWidth - gap),
-                    height: isDetail ? detailToolbarHeight : geo.size.height
+                    height: isDetail ? detailToolbarHeight : max(0, geo.size.height - topInset)
                 )
                 .offset(x: contentX, y: topInset)
 
