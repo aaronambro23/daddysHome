@@ -4,8 +4,8 @@ import DaddyCore
 /// Fast switching inside terminal focus mode.
 ///
 /// The current agent is already named in the breadcrumb, so repeating its
-/// bubble wastes the most valuable toolbar space. Show the three most recently
-/// active alternatives instead; larger fleets collapse into a searchable list.
+/// bubble wastes the most valuable toolbar space. Show the other live sessions
+/// as bubbles; a `+N` pill only appears past a cap nobody will hit.
 struct FocusAgentSwitcher: View {
     @Environment(MockStore.self) private var store
 
@@ -14,6 +14,7 @@ struct FocusAgentSwitcher: View {
     /// Where the plus at the end of the deck will launch. Nil disables it with
     /// an explanation rather than launching into a guess.
     let launchTarget: MockProject?
+    @Binding var launchMenuOpen: Bool
     let onSelect: (String) -> Void
 
     @State private var hoveredID: String?
@@ -26,8 +27,12 @@ struct FocusAgentSwitcher: View {
             .sorted { $0.lastOutputAt > $1.lastOutputAt }
     }
 
+    /// Header has the width. Three was a leftover from when this deck was
+    /// fighting the breadcrumb; 25 is a cap, not a design.
+    private let maxVisible = 25
+
     private var quick: [MockAgent] {
-        Array(alternatives.prefix(3))
+        Array(alternatives.prefix(maxVisible))
     }
 
     private var overflowCount: Int {
@@ -88,10 +93,7 @@ struct FocusAgentSwitcher: View {
     private var plusBubble: some View {
         let hovering = hoveredID == Self.plusID
 
-        return RadialProviderMenu(
-            items: launchTarget.map { radialItems(for: $0) } ?? [],
-            onDismiss: {}
-        ) {
+        return RadialProviderMenu(isOpen: $launchMenuOpen) {
             Image(systemName: "plus")
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(hovering ? DaddyTheme.textPrimary : DaddyTheme.textSecondary)
@@ -113,21 +115,10 @@ struct FocusAgentSwitcher: View {
         .offset(y: hovering ? -3 : 0)
         .zIndex(hovering ? 100 : 0)
         .onHover { isHovering in
+            guard !launchMenuOpen else { return }
             hoveredID = isHovering ? Self.plusID : (hoveredID == Self.plusID ? nil : hoveredID)
         }
         .help(launchName.map { "Launch another agent in \($0)" } ?? "Launch another agent")
-    }
-
-    private func radialItems(for project: MockProject) -> [ProviderMenuItem] {
-        [AgentKind.claude, .codex, .cursor, .opencode].map { kind in
-            let installed = store.isInstalled(kind)
-            return ProviderMenuItem(
-                kind: kind,
-                isEnabled: installed
-            ) {
-                store.launchReal(kind, in: project)
-            }
-        }
     }
 
     private var launchName: String? { launchTarget?.name }
@@ -143,12 +134,14 @@ struct FocusAgentSwitcher: View {
             // too small to tell one provider from another at a glance.
             size: 34,
             ringsAgainstBackdrop: true,
+            siblingIndex: MockAgent.siblingIndex(for: agent, among: agents),
             onTap: { onSelect(agent.id) }
         )
         .scaleEffect(hovering ? 1.14 : 1)
         .offset(y: hovering ? -3 : 0)
         .zIndex(hovering ? 100 : Double(quick.count - index))
         .onHover { isHovering in
+            guard !launchMenuOpen else { return }
             hoveredID = isHovering ? agent.id : (hoveredID == agent.id ? nil : hoveredID)
         }
     }

@@ -34,6 +34,8 @@ struct FleetView: View {
     @State private var keyboardMonitor: Any?
     @State private var sidebarHoverEnabled = true
     @State private var hoverRestoreTask: Task<Void, Never>?
+    @State private var providerLaunchOpen = false
+    @State private var plusLaunchFrame: CGRect = .zero
 
     private let gap: CGFloat = 16
     /// Shared with `WorkspaceRail`, which lays its content out at these widths
@@ -81,7 +83,12 @@ struct FleetView: View {
                     width: isDetail ? contentWidth : max(0, contentWidth - terminalDockedWidth - gap),
                     height: isDetail ? detailToolbarHeight : geo.size.height
                 )
-                .offset(x: contentX, y: topInset)
+                // Dashboard: same rect as the rail and docked OUTPUT — RootView
+                // already insets the fleet 18pt. The extra `topInset` offset was
+                // 023 leaving a 16pt shift on a full-height column, which ran
+                // the AGENTS panel off both edges. Focus toolbar still sits on
+                // `topInset` so the gap above it matches the gap below it.
+                .offset(x: contentX, y: isDetail ? topInset : 0)
 
                 // The one and only agent terminal. Only its rectangle changes.
                 TerminalPane(isFocused: isDetail)
@@ -122,7 +129,20 @@ struct FleetView: View {
                 // the collapsed strip for the length of the animation and take
                 // its hover region with it.
                 .clipped()
+
+                if let project = launchProject {
+                    RadialProviderMenuOverlay(
+                        project: project,
+                        plusFrame: plusLaunchFrame,
+                        isOpen: providerLaunchOpen,
+                        onDismiss: closeProviderLaunch
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(providerLaunchOpen)
+                }
             }
+            .coordinateSpace(name: FleetCoordinateSpace.name)
+            .onPreferenceChange(PlusLaunchFrameKey.self) { plusLaunchFrame = $0 }
             .frame(height: geo.size.height)
             // No implicit animation on `sidebarExpanded`: the rail already wraps
             // every change to it in a `withAnimation`, and `expanded` is a
@@ -134,7 +154,10 @@ struct FleetView: View {
         .onAppear { installKeyboardMonitor() }
         .onDisappear { removeKeyboardMonitor() }
         .onChange(of: store.detailAgentID) { _, detailID in
-            if detailID == nil { suppressSidebarHover() }
+            if detailID == nil {
+                providerLaunchOpen = false
+                suppressSidebarHover()
+            }
         }
     }
 
@@ -176,7 +199,8 @@ struct FleetView: View {
                 AgentDetailHeader(
                     agent: agent,
                     onOpenProgress: openProgress,
-                    onBack: closeDetail
+                    onBack: closeDetail,
+                    launchMenuOpen: $providerLaunchOpen
                 )
                 .transition(.move(edge: .top).combined(with: .opacity))
             } else {
@@ -199,6 +223,16 @@ struct FleetView: View {
         .clipped()
     }
 
+    /// Where the plus launches: the focused agent's project, same as the header.
+    private var launchProject: MockProject? {
+        guard let agent = store.detailAgent else { return nil }
+        return store.project(agent.projectID) ?? store.selectedProject
+    }
+
+    private func closeProviderLaunch() {
+        providerLaunchOpen = false
+    }
+
     private func openProgress(_ projectID: String) {
         progressPanelProjectID = projectID
         if isDetail { closeDetail() }
@@ -206,6 +240,7 @@ struct FleetView: View {
     }
 
     private func closeDetail() {
+        providerLaunchOpen = false
         suppressSidebarHover()
         withAnimation(.smooth(duration: 0.3)) {
             store.closeDetail()
@@ -239,6 +274,10 @@ struct FleetView: View {
                 && event.charactersIgnoringModifiers == "["
             guard isEscape || isCommandLeftBracket else { return event }
 
+            if providerLaunchOpen {
+                closeProviderLaunch()
+                return nil
+            }
             if progressPanelOpen {
                 var transaction = Transaction(animation: nil)
                 transaction.disablesAnimations = true

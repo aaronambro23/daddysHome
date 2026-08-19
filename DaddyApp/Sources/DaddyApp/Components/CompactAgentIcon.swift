@@ -15,6 +15,9 @@ struct CompactAgentIcon: View {
     var isDimmed: Bool = false
     /// Drawn around the bubble so a stacked neighbour reads as *in front*.
     var ringsAgainstBackdrop: Bool = false
+    /// 0-based start-order among live same-provider siblings. Nil when this
+    /// provider has only one live agent — the logo is enough.
+    var siblingIndex: Int? = nil
     let onTap: () -> Void
 
     @State private var hovering = false
@@ -34,7 +37,17 @@ struct CompactAgentIcon: View {
                     )
                     .frame(width: size, height: size)
                     .overlay {
-                        ProviderLogo.mark(for: agent.agent, diameter: size)
+                        ZStack {
+                            ProviderLogo.mark(for: agent.agent, diameter: size)
+                            if let siblingIndex {
+                                Text(MockAgent.romanNumeral(forZeroBased: siblingIndex))
+                                    .font(.custom("Didot", size: size * 0.38))
+                                    .fontWeight(.bold)
+                                    .tracking(0.8)
+                                    .foregroundStyle(DaddyTheme.textPrimary.opacity(0.9))
+                                    .shadow(color: .black.opacity(0.7), radius: 1, y: 0.5)
+                            }
+                        }
                     }
 
                 // Trailing-bottom on purpose: in a stacked deck that is the one

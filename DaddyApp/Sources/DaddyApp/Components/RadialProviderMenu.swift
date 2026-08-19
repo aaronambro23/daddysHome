@@ -1,79 +1,113 @@
 import SwiftUI
 import DaddyCore
 
-struct RadialProviderMenu<Label: View>: View {
-    @State private var isOpen = false
+enum FleetCoordinateSpace {
+    static let name = "fleet"
+}
 
-    let items: [ProviderMenuItem]
-    let onDismiss: () -> Void
+struct PlusLaunchFrameKey: PreferenceKey {
+    static let defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero { value = next }
+    }
+}
+
+/// Plus in the focus deck. Toggles the hoisted overlay; reports its frame in
+/// fleet space so the compass can sit on the plus without living in the header.
+struct RadialProviderMenu<Label: View>: View {
+    @Binding var isOpen: Bool
     @ViewBuilder let label: () -> Label
 
     var body: some View {
-        ZStack(alignment: .center) {
-            if isOpen {
-                Color.black.opacity(0.25)
-                    .contentShape(Rectangle())
-                    .ignoresSafeArea()
-                    .onTapGesture { closeMenu() }
-                    .transition(.opacity)
-                    .zIndex(5)
-            }
-
-            // Center button - the label wrapped in the toggle
-            Button(action: { toggleMenu() }) {
-                label()
-            }
-            .buttonStyle(.plain)
-            .zIndex(10)
-
-            // Provider circles in compass positions - rendered as overlay to avoid clipping
-            if isOpen {
-                ForEach(items, id: \.kind.rawValue) { item in
-                    let offset = compassOffset(for: item.kind)
-
-                    Button(action: { selectProvider(item) }) {
-                        VStack(spacing: 4) {
-                            ProviderLogo.mark(for: item.kind, diameter: 24)
-
-                            Text(item.kind.rawValue.capitalized)
-                                .font(.system(size: 8, weight: .semibold))
-                                .foregroundStyle(DaddyTheme.textPrimary)
-                        }
-                        .frame(width: 70, height: 70)
-                        .background {
-                            RoundedRectangle(cornerRadius: 35, style: .continuous)
-                                .fill(Color.white.opacity(0.12))
-                        }
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 35, style: .continuous)
-                                .strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .opacity(item.isEnabled ? 1 : 0.4)
-                    .allowsHitTesting(item.isEnabled)
-                    .offset(offset)
-                    .transition(.scale.combined(with: .opacity))
-                    .zIndex(6)
-                }
-            }
-        }
-        .animation(.smooth(duration: 0.24), value: isOpen)
-    }
-
-    private func toggleMenu() {
-        withAnimation(.smooth(duration: 0.24)) {
+        Button {
             isOpen.toggle()
+        } label: {
+            label()
+        }
+        .buttonStyle(.plain)
+        .background {
+            GeometryReader { g in
+                Color.clear.preference(
+                    key: PlusLaunchFrameKey.self,
+                    value: g.frame(in: .named(FleetCoordinateSpace.name))
+                )
+            }
+        }
+    }
+}
+
+/// Backdrop + compass, drawn in FleetView on top of the terminal/shell.
+struct RadialProviderMenuOverlay: View {
+    @Environment(MockStore.self) private var store
+
+    let project: MockProject
+    let plusFrame: CGRect
+    let isOpen: Bool
+    let onDismiss: () -> Void
+
+    /// 0 = parked on the plus, 1 = full compass. Drives travel *and* scale so
+    /// collapse can play; a transition would unmount before the inward move.
+    @State private var expansion: CGFloat = 0
+    /// Plus frame at the moment the menu opened. Hover on the deck must not
+    /// drag the compass.
+    @State private var frozenOrigin: CGPoint?
+
+    private var origin: CGPoint {
+        frozenOrigin ?? CGPoint(x: plusFrame.midX, y: plusFrame.midY)
+    }
+
+    private var items: [ProviderMenuItem] {
+        [AgentKind.claude, .codex, .cursor, .opencode].map { kind in
+            let installed = store.isInstalled(kind)
+            return ProviderMenuItem(
+                kind: kind,
+                isEnabled: installed
+            ) {
+                store.launchReal(kind, in: project)
+                onDismiss()
+            }
         }
     }
 
-    private func selectProvider(_ item: ProviderMenuItem) {
-        item.action()
-        closeMenu()
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.25 * expansion)
+                .contentShape(Rectangle())
+                .onTapGesture { onDismiss() }
+                .allowsHitTesting(expansion > 0.05)
+
+            ForEach(items, id: \.kind.rawValue) { item in
+                CompassLaunchBubble(
+                    kind: item.kind,
+                    isEnabled: item.isEnabled,
+                    expansion: expansion,
+                    origin: origin,
+                    travel: Self.compassOffset(for: item.kind),
+                    action: item.action
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(expansion > 0.05)
+        .onChange(of: isOpen) { _, open in
+            if open {
+                frozenOrigin = CGPoint(x: plusFrame.midX, y: plusFrame.midY)
+            }
+            withAnimation(.smooth(duration: 0.28)) {
+                expansion = open ? 1 : 0
+            }
+        }
+        .onAppear {
+            if isOpen {
+                frozenOrigin = CGPoint(x: plusFrame.midX, y: plusFrame.midY)
+                withAnimation(.smooth(duration: 0.28)) { expansion = 1 }
+            }
+        }
     }
 
-    private func compassOffset(for kind: AgentKind) -> CGSize {
-        let distance: CGFloat = 110
+    static func compassOffset(for kind: AgentKind) -> CGSize {
+        let distance: CGFloat = 40
         switch kind {
         case .claude:
             return CGSize(width: 0, height: -distance)
@@ -85,12 +119,52 @@ struct RadialProviderMenu<Label: View>: View {
             return CGSize(width: -distance, height: 0)
         }
     }
+}
 
-    private func closeMenu() {
-        withAnimation(.smooth(duration: 0.24)) {
-            isOpen = false
+/// One compass bubble. Hover lifts it along its cardinal, same 1.14 scale as
+/// the deck — local so it does not perturb expansion or the frozen origin.
+private struct CompassLaunchBubble: View {
+    let kind: AgentKind
+    let isEnabled: Bool
+    let expansion: CGFloat
+    let origin: CGPoint
+    let travel: CGSize
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            ProviderLogo.badge(for: kind, diameter: 34)
+                .background {
+                    Circle()
+                        .fill(DaddyTheme.bubbleRim)
+                        .frame(width: 39, height: 39)
+                }
+                .contentShape(Circle())
         }
-        onDismiss()
+        .buttonStyle(.plain)
+        .help(kind.rawValue.capitalized)
+        .opacity((isEnabled ? 1 : 0.4) * expansion)
+        .scaleEffect((0.2 + 0.8 * expansion) * (hovering && isEnabled ? 1.14 : 1))
+        .allowsHitTesting(expansion > 0.8 && isEnabled)
+        .onHover { hovering = isEnabled && $0 }
+        .position(
+            x: origin.x + travel.width * expansion + lift.width,
+            y: origin.y + travel.height * expansion + lift.height
+        )
+        .animation(.smooth(duration: 0.18), value: hovering)
+    }
+
+    private var lift: CGSize {
+        guard hovering, isEnabled else { return .zero }
+        let length = hypot(travel.width, travel.height)
+        guard length > 0 else { return .zero }
+        let extra: CGFloat = 6
+        return CGSize(
+            width: travel.width / length * extra,
+            height: travel.height / length * extra
+        )
     }
 }
 

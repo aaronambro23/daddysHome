@@ -11,6 +11,7 @@ struct AgentDetailHeader: View {
     let agent: MockAgent
     let onOpenProgress: (String) -> Void
     let onBack: () -> Void
+    @Binding var launchMenuOpen: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -43,6 +44,7 @@ struct AgentDetailHeader: View {
                 agent: agent,
                 isSelected: false,
                 size: 32,
+                siblingIndex: MockAgent.siblingIndex(for: agent, among: liveAgents),
                 onTap: {}
             )
 
@@ -75,6 +77,7 @@ struct AgentDetailHeader: View {
                 agents: liveAgents,
                 activeID: agent.id,
                 launchTarget: launchTarget,
+                launchMenuOpen: $launchMenuOpen,
                 onSelect: { id in store.openDetail(id) }
             )
 

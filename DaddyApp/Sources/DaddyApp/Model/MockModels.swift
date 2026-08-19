@@ -78,6 +78,35 @@ struct MockAgent: Identifiable {
         if case .working = state { return true }
         return false
     }
+
+    /// 0-based start-order among live same-provider siblings. Nil when this
+    /// provider has only one live agent — the logo is enough.
+    static func siblingIndex(for agent: MockAgent, among agents: [MockAgent]) -> Int? {
+        let siblings = agents
+            .filter { $0.isLive && $0.agent == agent.agent }
+            .sorted {
+                if $0.startedAt != $1.startedAt { return $0.startedAt < $1.startedAt }
+                return $0.id < $1.id
+            }
+        guard siblings.count >= 2 else { return nil }
+        return siblings.firstIndex { $0.id == agent.id }
+    }
+
+    /// I, II, III… from a 0-based sibling index. Roman has no zero.
+    static func romanNumeral(forZeroBased index: Int) -> String {
+        var n = index + 1
+        let table: [(Int, String)] = [
+            (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"),
+        ]
+        var out = ""
+        for (value, glyph) in table {
+            while n >= value {
+                out += glyph
+                n -= value
+            }
+        }
+        return out
+    }
 }
 
 struct MockWorkUnit: Identifiable {
