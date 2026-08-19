@@ -8,39 +8,40 @@ struct AgentDashboard: View {
     let onOpenProgress: (String) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SectionHeader(title: "AGENTS") {
-                HStack(spacing: 10) {
-                    HeaderCaption(text: scopeCaption)
+        ZStack(alignment: .topLeading) {
+            VStack(alignment: .leading, spacing: 0) {
+                SectionHeader(title: "AGENTS") {
+                    HStack(spacing: 10) {
+                        HeaderCaption(text: scopeCaption)
 
-                    if store.selectedProject != nil {
-                        Button {
-                            store.dismissAllActiveAgentsInSelectedProject()
-                        } label: {
-                            Label("Dismiss all agents", systemImage: "ladybug.fill")
-                                .font(.system(size: 9.5, weight: .semibold))
+                        if store.selectedProject != nil {
+                            Button {
+                                store.dismissAllActiveAgentsInSelectedProject()
+                            } label: {
+                                Label("Dismiss all agents", systemImage: "ladybug.fill")
+                                    .font(.system(size: 9.5, weight: .semibold))
+                            }
+                            .buttonStyle(.inset)
+                            .foregroundStyle(DaddyTheme.failure)
+                            .disabled(!store.visibleAgents.contains(where: \.isLive))
+                            .help("Debug: stop and dismiss every live agent in this project")
+                        }
+
+                        if store.agents.contains(where: { !$0.isLive }) {
+                            Button("clear finished") { store.dismissAllExited() }
+                                .buttonStyle(.inset)
+                        }
+
+                        Button(action: { withAnimation(.smooth(duration: 0.3)) { progressOpen.toggle() } }) {
+                            Image(systemName: "list.bullet.rectangle")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(progressOpen ? DaddyTheme.textPrimary : DaddyTheme.textSecondary)
                         }
                         .buttonStyle(.inset)
-                        .foregroundStyle(DaddyTheme.failure)
-                        .disabled(!store.visibleAgents.contains(where: \.isLive))
-                        .help("Debug: stop and dismiss every live agent in this project")
-                    }
 
-                    if store.agents.contains(where: { !$0.isLive }) {
-                        Button("clear finished") { store.dismissAllExited() }
-                            .buttonStyle(.inset)
+                        Spacer()
                     }
-
-                    Button(action: { withAnimation(.smooth(duration: 0.3)) { progressOpen.toggle() } }) {
-                        Image(systemName: "list.bullet.rectangle")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(progressOpen ? DaddyTheme.textPrimary : DaddyTheme.textSecondary)
-                    }
-                    .buttonStyle(.inset)
-
-                    launchMenu
                 }
-            }
 
             if let error = store.launchError {
                 HStack(spacing: 8) {
@@ -88,6 +89,11 @@ struct AgentDashboard: View {
                     .padding(16)
                 }
             }
+
+            launchMenu
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(.top, 56)
+                .padding(.trailing, 16)
         }
         .glassPanel()
     }

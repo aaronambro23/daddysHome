@@ -79,7 +79,7 @@ struct FleetView: View {
             ZStack(alignment: .topLeading) {
                 middleColumn(
                     width: isDetail ? contentWidth : max(0, contentWidth - terminalDockedWidth - gap),
-                    height: isDetail ? detailToolbarHeight : max(0, geo.size.height - topInset)
+                    height: isDetail ? detailToolbarHeight : geo.size.height
                 )
                 .offset(x: contentX, y: topInset)
 
@@ -123,6 +123,7 @@ struct FleetView: View {
                 // its hover region with it.
                 .clipped()
             }
+            .frame(height: geo.size.height)
             // No implicit animation on `sidebarExpanded`: the rail already wraps
             // every change to it in a `withAnimation`, and `expanded` is a
             // binding to this state, so one toggle used to run two nested

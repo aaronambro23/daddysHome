@@ -3,7 +3,6 @@ import DaddyCore
 
 struct RadialProviderMenu<Label: View>: View {
     @State private var isOpen = false
-    @State private var hoveredKind: AgentKind?
 
     let items: [ProviderMenuItem]
     let onDismiss: () -> Void
@@ -30,56 +29,36 @@ struct RadialProviderMenu<Label: View>: View {
             // Provider circles in compass positions - rendered as overlay to avoid clipping
             if isOpen {
                 ForEach(items, id: \.kind.rawValue) { item in
-                    let isHovering = hoveredKind == item.kind
                     let offset = compassOffset(for: item.kind)
 
                     Button(action: { selectProvider(item) }) {
-                        VStack(spacing: 8) {
-                            ProviderLogo.mark(for: item.kind, diameter: 36)
+                        VStack(spacing: 4) {
+                            ProviderLogo.mark(for: item.kind, diameter: 24)
 
                             Text(item.kind.rawValue.capitalized)
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.system(size: 8, weight: .semibold))
                                 .foregroundStyle(DaddyTheme.textPrimary)
                         }
-                        .frame(width: 100, height: 100)
+                        .frame(width: 70, height: 70)
                         .background {
-                            RoundedRectangle(cornerRadius: 50, style: .continuous)
-                                .fill(
-                                    Color.white.opacity(
-                                        isHovering ? 0.16 : 0.08
-                                    )
-                                )
-                                .blur(radius: 12)
+                            RoundedRectangle(cornerRadius: 35, style: .continuous)
+                                .fill(Color.white.opacity(0.12))
                         }
                         .overlay {
-                            RoundedRectangle(cornerRadius: 50, style: .continuous)
-                                .strokeBorder(
-                                    Color.white.opacity(isHovering ? 0.32 : 0.16),
-                                    lineWidth: 1.5
-                                )
+                            RoundedRectangle(cornerRadius: 35, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
                         }
-                        .shadow(
-                            color: Color.white.opacity(isHovering ? 0.25 : 0.1),
-                            radius: isHovering ? 16 : 8,
-                            x: 0,
-                            y: isHovering ? 4 : 0
-                        )
                     }
                     .buttonStyle(.plain)
                     .opacity(item.isEnabled ? 1 : 0.4)
                     .allowsHitTesting(item.isEnabled)
                     .offset(offset)
-                    .scaleEffect(isHovering ? 1.08 : 1)
-                    .onHover { hovering in
-                        hoveredKind = hovering ? item.kind : nil
-                    }
                     .transition(.scale.combined(with: .opacity))
                     .zIndex(6)
                 }
             }
         }
         .animation(.smooth(duration: 0.24), value: isOpen)
-        .animation(.easeOut(duration: 0.15), value: hoveredKind)
     }
 
     private func toggleMenu() {
@@ -110,7 +89,6 @@ struct RadialProviderMenu<Label: View>: View {
     private func closeMenu() {
         withAnimation(.smooth(duration: 0.24)) {
             isOpen = false
-            hoveredKind = nil
         }
         onDismiss()
     }
