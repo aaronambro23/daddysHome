@@ -57,13 +57,22 @@ struct TerminalPane: View {
         // re-blur an animating aurora. Clear glass costs nothing behind a
         // static panel and everything behind a live one. The rounded corner
         // and the panel's shape stay; only the material is gone.
-        .background(
-            RoundedRectangle(cornerRadius: isFocused ? 0 : 26, style: .continuous)
-                .fill(DaddyTheme.terminalSurface)
-        )
-        .clipShape(
-            RoundedRectangle(cornerRadius: isFocused ? 0 : 26, style: .continuous)
-        )
+        //
+        // Rounded in focus mode too, since batch 014. It was square because it
+        // ran to the window edges and had no corners to round; now it is one of
+        // three cards floating with a gap between them, and the shell beside it
+        // has been rounded all along.
+        .background(RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .fill(DaddyTheme.terminalSurface))
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .strokeBorder(DaddyTheme.insetStroke, lineWidth: 1)
+        }
+    }
+
+    private var radius: CGFloat {
+        isFocused ? DaddyTheme.focusedPaneRadius : 26
     }
 
     @ViewBuilder

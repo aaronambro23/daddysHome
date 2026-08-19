@@ -54,7 +54,14 @@ struct StatusBadge: View {
         let accent = StateColors.accent(for: state)
 
         HStack(spacing: 6) {
-            if let glyph = StateColors.glyph(for: state) {
+            // READY has a glyph in `StateColors`, so this must precede the
+            // generic glyph branch. The old order consumed READY as a static
+            // checkmark and made the bouncing indicator unreachable.
+            if state == .ready {
+                BouncingBadge(color: accent, glowRadius: 7, size: 5)
+            } else if state == .working {
+                BreathingDot(color: accent, glowRadius: 7, size: 5)
+            } else if let glyph = StateColors.glyph(for: state) {
                 Image(systemName: glyph)
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(accent)

@@ -13,6 +13,19 @@ struct AgentDashboard: View {
                 HStack(spacing: 10) {
                     HeaderCaption(text: scopeCaption)
 
+                    if store.selectedProject != nil {
+                        Button {
+                            store.dismissAllActiveAgentsInSelectedProject()
+                        } label: {
+                            Label("Dismiss all agents", systemImage: "ladybug.fill")
+                                .font(.system(size: 9.5, weight: .semibold))
+                        }
+                        .buttonStyle(.inset)
+                        .foregroundStyle(DaddyTheme.failure)
+                        .disabled(!store.visibleAgents.contains(where: \.isLive))
+                        .help("Debug: stop and dismiss every live agent in this project")
+                    }
+
                     if store.agents.contains(where: { !$0.isLive }) {
                         Button("clear finished") { store.dismissAllExited() }
                             .buttonStyle(.inset)

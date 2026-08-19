@@ -17,6 +17,19 @@ struct MockProject: Identifiable, Hashable {
     let parentID: String?
 }
 
+/// One of your own shells in the right-hand pane, as the tab strip sees it.
+///
+/// The pty itself lives in `ShellSessions`, keyed by this `id`. What is here is
+/// only what the interface needs: which project the tab belongs to and the
+/// number shown after the project name. `ordinal` counts up from the highest
+/// ever issued rather than from the tab count, so closing the middle tab never
+/// leaves two shells called "daddy 2".
+struct ShellTab: Identifiable, Hashable {
+    let id: String
+    let projectID: String
+    let ordinal: Int
+}
+
 struct MockAgent: Identifiable {
     let id: String
     let projectID: String

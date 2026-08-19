@@ -152,6 +152,155 @@ final class PTYIntegrationTests: XCTestCase {
         XCTAssert(capturedOutput.contains("hello world"), "Expected output to contain 'hello world', got: '\(capturedOutput)'")
     }
 
+    func testExitImmediatelyAfterControlCIsMarkedAsInterruptedExit() throws {
+        let pty = PTYProcess(
+            executablePath: "/bin/cat",
+            arguments: [],
+            cwd: FileManager.default.temporaryDirectory
+        )
+        try pty.launch()
+        defer { pty.terminateNow() }
+
+        try pty.writeControl(0x03)
+
+        XCTAssertTrue(
+            waitFor("cat exits after Ctrl-C") { pty.exitCode != nil },
+            "Ctrl-C did not terminate the test process"
+        )
+        XCTAssertTrue(pty.exitedAfterInterrupt)
+    }
+
+    func testPhysicalControlCMarkerDoesNotDependOnEncodedBytes() throws {
+        let pty = PTYProcess(
+            executablePath: "/bin/sh",
+            arguments: ["-c", "read ignored"],
+            cwd: FileManager.default.temporaryDirectory
+        )
+        try pty.launch()
+        defer { pty.terminateNow() }
+
+        // Enhanced-keyboard TUIs receive Kitty/CSI-u bytes rather than 0x03.
+        // The terminal view records the physical key independently; newline
+        // stands in for whatever encoded input then causes the child to exit.
+        pty.noteInterruptInput()
+        try pty.write("\n")
+
+        XCTAssertTrue(
+            waitFor("marked process exits") { pty.exitCode != nil },
+            "The test process did not exit"
+        )
+        XCTAssertTrue(pty.exitedAfterInterrupt)
+    }
+
+    func testUnrelatedExitIsNotMarkedAsInterruptedExit() throws {
+        let pty = PTYProcess(
+            executablePath: "/usr/bin/true",
+            arguments: [],
+            cwd: FileManager.default.temporaryDirectory
+        )
+        try pty.launch()
+
+        XCTAssertTrue(
+            waitFor("true exits") { pty.exitCode != nil },
+            "The test process did not exit"
+        )
+        XCTAssertFalse(pty.exitedAfterInterrupt)
+    }
+
+    /// The flag that lets a renderer ask a just-launched child to repaint once.
+    /// It must be true for exactly one caller, or the shell pane would send a
+    /// Ctrl-L over output the user wanted to keep.
+    func testFreshLaunchRedrawIsClaimedOnce() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let ptyProcess = PTYProcess(
+            executablePath: "/bin/echo",
+            arguments: ["ready"],
+            cwd: tempDir
+        )
+
+        XCTAssertFalse(
+            ptyProcess.consumeFreshLaunchRedraw(),
+            "Nothing has launched yet, so there is no prompt to redraw"
+        )
+
+        try ptyProcess.launch()
+
+        XCTAssertTrue(ptyProcess.consumeFreshLaunchRedraw())
+        XCTAssertFalse(ptyProcess.consumeFreshLaunchRedraw(), "The flag is one-shot")
+    }
+
+    /// A renderer that goes away must be able to take its registration with it.
+    /// The pty outlives the view, so a callback nobody can cancel runs for every
+    /// chunk for the rest of the process's life.
+    func testChunkCallbacksCanBeRemoved() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let ptyProcess = PTYProcess(
+            executablePath: "/bin/echo",
+            arguments: ["ready"],
+            cwd: tempDir
+        )
+
+        let lock = NSLock()
+        var removedSaw = 0
+        var keptSaw = 0
+
+        let removed = ptyProcess.registerChunkCallback { _ in
+            lock.lock(); removedSaw += 1; lock.unlock()
+        }
+        ptyProcess.registerChunkCallback { _ in
+            lock.lock(); keptSaw += 1; lock.unlock()
+        }
+
+        ptyProcess.removeChunkCallback(removed)
+
+        try ptyProcess.launch()
+
+        XCTAssertTrue(
+            waitFor("the surviving callback sees output") {
+                lock.lock(); defer { lock.unlock() }
+                return keptSaw > 0
+            }
+        )
+
+        lock.lock()
+        let strays = removedSaw
+        lock.unlock()
+        XCTAssertEqual(strays, 0, "A removed callback must never be called again")
+    }
+
+    /// Two shells in one project: distinct ptys, each reachable by its own id,
+    /// and closing one leaves the other running.
+    func testShellSessionsAreKeyedByShellID() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let shells = ShellSessions()
+        defer { shells.shutdownAll() }
+
+        let first = try shells.shell(id: "tab-1", cwd: tempDir)
+        let second = try shells.shell(id: "tab-2", cwd: tempDir)
+
+        XCTAssertFalse(first === second, "Each tab gets its own shell")
+        XCTAssertTrue(shells.existing(id: "tab-1") === first)
+        XCTAssertTrue(try shells.shell(id: "tab-1", cwd: tempDir) === first, "Asking twice reuses it")
+        XCTAssertNil(shells.existing(id: "tab-3"), "Never started, never invented")
+
+        shells.close(id: "tab-1")
+        XCTAssertNil(shells.existing(id: "tab-1"))
+        XCTAssertTrue(
+            waitFor("first shell exits") { !first.isProcessRunning },
+            "Closing a tab must kill its shell"
+        )
+        XCTAssertTrue(second.isProcessRunning, "Closing one tab must not touch the others")
+    }
+
     func testAdapterLaunchArgs() {
         let claudeAdapter = ClaudeAdapter()
         let args = claudeAdapter.launchArgs(

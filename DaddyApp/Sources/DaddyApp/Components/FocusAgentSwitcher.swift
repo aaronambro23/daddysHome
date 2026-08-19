@@ -10,6 +10,9 @@ struct FocusAgentSwitcher: View {
 
     let agents: [MockAgent]
     let activeID: String
+    /// Where the plus at the end of the deck will launch. Nil disables it with
+    /// an explanation rather than launching into a guess.
+    let launchTarget: MockProject?
     let onSelect: (String) -> Void
 
     @State private var hoveredID: String?
@@ -30,6 +33,14 @@ struct FocusAgentSwitcher: View {
         max(0, alternatives.count - quick.count)
     }
 
+    /// The plus is not an agent, so it needs a name of its own to take part in
+    /// the deck's one-at-a-time hover.
+    private static let plusID = "__new__"
+
+    /// The overlap the deck sits at, and the gap it opens to when a bubble is
+    /// hovered. Named because the plus has to ride the same two numbers.
+    private var deckSpacing: CGFloat { hoveredID == nil ? -9 : 5 }
+
     private var matches: [MockAgent] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return alternatives }
@@ -42,8 +53,8 @@ struct FocusAgentSwitcher: View {
     }
 
     var body: some View {
-        if !alternatives.isEmpty {
-            HStack(spacing: hoveredID == nil ? -9 : 5) {
+        if !alternatives.isEmpty || launchTarget != nil {
+            HStack(spacing: deckSpacing) {
                 ForEach(Array(quick.enumerated()), id: \.element.id) { index, agent in
                     quickBubble(agent, index: index)
                 }
@@ -52,11 +63,60 @@ struct FocusAgentSwitcher: View {
                     overflowButton
                         .padding(.leading, hoveredID == nil ? 13 : 2)
                 }
+
+                // Last in the row, so "one more agent" is the circle after the
+                // ones you already have. It is a peer of the bubbles rather
+                // than a button beside them: same 34pt, same backdrop rim, same
+                // lift — which is only true because it lives inside this HStack
+                // and rides its overlap and its hover curve.
+                if launchTarget != nil {
+                    plusBubble
+                        // Overlapped like a bubble, not spaced like the overflow
+                        // pill — it is meant to read as the next circle in the
+                        // row. The exception is when it *follows* that pill,
+                        // which is a capsule and has already stepped out of the
+                        // stack to say so.
+                        .padding(.leading, overflowCount > 0 ? (hoveredID == nil ? 13 : 2) : 0)
+                }
             }
             .frame(height: 44)
             .animation(.smooth(duration: 0.18), value: hoveredID)
         }
     }
+
+    private var plusBubble: some View {
+        let hovering = hoveredID == Self.plusID
+
+        return ProviderLaunchMenu(project: launchTarget, chromelessLabel: true) {
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(hovering ? DaddyTheme.textPrimary : DaddyTheme.textSecondary)
+                .frame(width: 34, height: 34)
+                .background {
+                    Circle().fill(Color.white.opacity(hovering ? 0.16 : 0.10))
+                }
+                .overlay {
+                    Circle().strokeBorder(Color.white.opacity(hovering ? 0.26 : 0.16), lineWidth: 1)
+                }
+                // The rim the bubbles carry, so an overlapping plus reads as
+                // depth rather than as two shapes bleeding into each other.
+                .background {
+                    Circle()
+                        .fill(DaddyTheme.bubbleRim)
+                        .frame(width: 39, height: 39)
+                }
+                .contentShape(Circle())
+        }
+        .scaleEffect(hovering ? 1.14 : 1)
+        .offset(y: hovering ? -3 : 0)
+        .zIndex(hovering ? 100 : 0)
+        .onHover { isHovering in
+            hoveredID = isHovering ? Self.plusID : (hoveredID == Self.plusID ? nil : hoveredID)
+        }
+        .help(launchName.map { "Launch another agent in \($0)" } ?? "Launch another agent")
+    }
+
+    private var launchName: String? { launchTarget?.name }
 
     private func quickBubble(_ agent: MockAgent, index: Int) -> some View {
         let hovering = hoveredID == agent.id

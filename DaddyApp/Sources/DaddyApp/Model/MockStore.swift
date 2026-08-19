@@ -25,10 +25,15 @@ final class MockStore {
     /// grid. Selection and drill-in are now separate, and both live here.
     var detailAgentID: String?
 
+    /// Agent IDs in the order they were last focused, most recent first. Drives
+    /// "put me back where I was" when you return to a project.
+    private var detailHistory: [String] = []
+
     // Data
     var projects: [MockProject] = []
     var agents: [MockAgent] = []
     var voiceLog: [VoiceEntry] = []
+    var providerUsage: [AgentKind: ProviderUsageSnapshot] = [:]
 
     /// Work units marked done by hand. The units themselves are derived from
     /// live sessions, so only this override needs storing.
@@ -53,6 +58,22 @@ final class MockStore {
     /// Owns every real pty. Seeded demo agents do not touch this.
     @ObservationIgnored let sessionManager = SessionManager()
 
+    /// Fetches provider quota windows and keeps the last successful snapshots.
+    @ObservationIgnored private let providerUsageService = ProviderUsageService()
+
+    /// Your own shells. Not agents — see `ShellSessions`. The ptys live in
+    /// there; which ones a project has, in what order, and which is on screen
+    /// live in `shellTabs`/`activeShellTabID` below, because this property is
+    /// `@ObservationIgnored` and a change inside the registry would never
+    /// redraw the tab strip.
+    @ObservationIgnored let shellSessions = ShellSessions()
+
+    /// The shells each project has open, in tab order.
+    var shellTabs: [String: [ShellTab]] = [:]
+
+    /// Which of them is on screen, per project.
+    var activeShellTabID: [String: String] = [:]
+
     /// Turns a spoken sentence into an intent. Existed and was unit-tested long
     /// before anything called it.
     @ObservationIgnored let commandParser = CommandParser()
@@ -69,6 +90,7 @@ final class MockStore {
         selectedProjectID = projects.first?.id
         selectedAgentID = agents.first?.id
         refreshInstalledAgents()
+        refreshProviderUsage()
 
         hexWatcher = HEXWatcher()
         hexWatcher?.start { [weak self] transcript in
@@ -145,23 +167,102 @@ final class MockStore {
 
     // MARK: - Selection
 
+    /// Switching project takes the terminal with you.
+    ///
+    /// It used to change `selectedProjectID` and nothing else. `detailAgentID`
+    /// kept pointing at an agent in the *old* project, so the toolbar went on
+    /// describing a session you had navigated away from, while `TerminalPane`
+    /// — which reads `selectedAgentID`, just cleared — dropped to "Select an
+    /// agent to view its output". A full window of nothing, with no way back to
+    /// the fleet except the chevron, and no docked terminal either, because you
+    /// had never actually left focus mode.
+    ///
+    /// So the detail view follows the project: to its best agent if it has one,
+    /// out to the fleet if it does not.
     func select(project id: String) {
         guard selectedProjectID != id else { return }
         selectedProjectID = id
-        if let current = selectedAgent, let pid = selectedProjectID, current.projectID != pid {
-            selectedAgentID = visibleAgents.first?.id
+
+        let target = bestAgent(in: id)
+        selectedAgentID = target?.id
+
+        // Only when already focused. Picking a project from the fleet should
+        // stay on the fleet.
+        guard detailAgentID != nil else { return }
+
+        if let target {
+            openDetail(target.id)
+        } else {
+            closeDetail()
         }
+    }
+
+    /// The agent to land on when you arrive at a project, in the order a person
+    /// would expect: the one you were last looking at, then whatever is most
+    /// recently running, then nothing — which means the fleet.
+    private func bestAgent(in projectID: String) -> MockAgent? {
+        let live = agents.filter { $0.projectID == projectID && $0.isLive }
+        guard !live.isEmpty else { return nil }
+
+        if let remembered = detailHistory.lazy
+            .compactMap({ id in live.first { $0.id == id } })
+            .first {
+            return remembered
+        }
+
+        return live.max { $0.lastOutputAt < $1.lastOutputAt }
     }
 
     /// Agent cards are navigation, not a two-stage preview. One click selects
     /// the session and enters its terminal focus workspace.
     func openDetail(_ id: String) {
+        guard agents.contains(where: { $0.id == id && $0.isLive }) else { return }
+
         selectedAgentID = id
         detailAgentID = id
+
+        // The rail lists live agents across every project, so opening one can
+        // mean crossing into a different project. Bring the selection with it,
+        // or the tree, the FOCUS footer and the switcher all keep describing
+        // the project you just left.
+        if let projectID = agents.first(where: { $0.id == id })?.projectID {
+            selectedProjectID = projectID
+        }
+
+        // Most recently opened first. This is what "the one I had open" means
+        // when you come back to a project — `lastOutputAt` answers a different
+        // question, since the agent you were reading may well be the quietest.
+        detailHistory.removeAll { $0 == id }
+        detailHistory.insert(id, at: 0)
     }
 
     func closeDetail() {
         detailAgentID = nil
+    }
+
+    /// An exited session should not keep owning a terminal pane. The workspace
+    /// returns to the fleet and docked output follows another live agent in the
+    /// same visible scope, if one exists. The caller separately decides whether
+    /// the finished card remains available for resume or is discarded.
+    private func repairSelectionAfterExit(_ agentID: String) {
+        if detailAgentID == agentID {
+            closeDetail()
+        }
+
+        guard selectedAgentID == agentID else { return }
+        selectedAgentID = liveSelectionFallback(excluding: agentID)?.id
+    }
+
+    private func liveSelectionFallback(excluding agentID: String) -> MockAgent? {
+        let scopedLive = visibleAgents.filter { $0.id != agentID && $0.isLive }
+        if let newestInScope = scopedLive.max(by: { $0.lastOutputAt < $1.lastOutputAt }) {
+            return newestInScope
+        }
+
+        guard selectedProjectID == nil else { return nil }
+        return agents
+            .filter { $0.id != agentID && $0.isLive }
+            .max(by: { $0.lastOutputAt < $1.lastOutputAt })
     }
 
     // MARK: - Actions
@@ -196,6 +297,12 @@ final class MockStore {
                 }
                 continuation.resume(returning: found)
             }
+        }
+    }
+
+    func refreshProviderUsage() {
+        Task {
+            providerUsage = await providerUsageService.refresh()
         }
     }
 
@@ -279,6 +386,91 @@ final class MockStore {
             if let id = agent.sessionID {
                 try? sessionManager.terminateSession(id)
             }
+        }
+        // A shell running a dev server owns a tree of node processes and a
+        // bound port. Leaving those behind would leak a server on every quit.
+        shellSessions.shutdownAll()
+    }
+
+    // MARK: - Shells
+
+    /// The shells a project has open, in tab order. Safe from a view body.
+    func shellTabs(for projectID: String) -> [ShellTab] {
+        self.shellTabs[projectID] ?? []
+    }
+
+    /// The tab on screen for a project. Safe from a view body.
+    func activeShellTab(for projectID: String) -> ShellTab? {
+        let tabs = shellTabs(for: projectID)
+        guard let id = activeShellTabID[projectID] else { return tabs.first }
+        return tabs.first { $0.id == id } ?? tabs.first
+    }
+
+    /// The pty behind a tab, if it has been started. Safe from a view body —
+    /// it never launches anything.
+    func shell(for tab: ShellTab) -> PTYProcess? {
+        shellSessions.existing(id: tab.id)
+    }
+
+    /// Gives a project its first shell if it has none.
+    ///
+    /// Call this from `onAppear`/`onChange`, never from a `body`: it spawns a
+    /// process, and spawning during layout is what crashed the launch menu.
+    func ensureShell(for project: MockProject) {
+        guard shellTabs(for: project.id).isEmpty else { return }
+        openShellTab(for: project)
+    }
+
+    /// Another shell in the same project, and focus moves to it. Spawns —
+    /// same rule as `ensureShell`.
+    @discardableResult
+    func openShellTab(for project: MockProject) -> ShellTab? {
+        let cwd = URL(fileURLWithPath: (project.path as NSString).expandingTildeInPath)
+
+        // Numbered from the highest so far rather than from the count, so
+        // closing the middle tab never produces two shells with the same name.
+        let existing = shellTabs(for: project.id)
+        let ordinal = (existing.map(\.ordinal).max() ?? 0) + 1
+        let tab = ShellTab(id: UUID().uuidString, projectID: project.id, ordinal: ordinal)
+
+        do {
+            try shellSessions.shell(id: tab.id, cwd: cwd)
+        } catch {
+            launchError = "shell: \(error.localizedDescription)"
+            return nil
+        }
+
+        self.shellTabs[project.id] = existing + [tab]
+        activeShellTabID[project.id] = tab.id
+        return tab
+    }
+
+    func selectShellTab(_ tab: ShellTab) {
+        activeShellTabID[tab.projectID] = tab.id
+    }
+
+    /// Closes a shell and everything it was running.
+    ///
+    /// The pane is never left empty: closing the last tab immediately opens a
+    /// fresh shell, which is what closing the last tab does everywhere else and
+    /// is better than a dead panel with no way back.
+    func closeShellTab(_ tab: ShellTab) {
+        var tabs = shellTabs(for: tab.projectID)
+        guard let index = tabs.firstIndex(of: tab) else { return }
+
+        shellSessions.close(id: tab.id)
+        tabs.remove(at: index)
+        self.shellTabs[tab.projectID] = tabs
+
+        guard activeShellTabID[tab.projectID] == tab.id else { return }
+
+        if tabs.isEmpty {
+            activeShellTabID[tab.projectID] = nil
+            if let project = project(tab.projectID) { openShellTab(for: project) }
+        } else {
+            // The neighbour on the left, or the new last one — never a jump to
+            // the far end of the strip.
+            activeShellTabID[tab.projectID] = tabs[min(index, tabs.count - 1)].id
         }
     }
 
@@ -404,6 +596,7 @@ final class MockStore {
     /// exiting. The card is gone from the UI either way.
     private func discard(_ agentID: String, sessionID: String?) {
         agents.removeAll { $0.id == agentID }
+        detailHistory.removeAll { $0 == agentID }
 
         if selectedAgentID == agentID {
             selectedAgentID = visibleAgents.first?.id ?? agents.first?.id
@@ -428,9 +621,37 @@ final class MockStore {
         }
     }
 
+    /// Debug escape hatch: terminate and remove every live agent in the
+    /// selected project, regardless of provider.
+    ///
+    /// IDs are snapshotted before `stop` mutates `agents`. No selected project
+    /// means no action; the all-projects scope must never become a global kill
+    /// switch by accident.
+    func dismissAllActiveAgentsInSelectedProject() {
+        guard let projectID = selectedProjectID else { return }
+        let agentIDs = agents
+            .filter { $0.projectID == projectID && $0.isLive }
+            .map(\.id)
+
+        for agentID in agentIDs {
+            stop(agentID)
+        }
+    }
+
     /// Clear every finished agent at once.
     func dismissAllExited() {
         for agent in agents where !agent.isLive {
+            dismiss(agent.id)
+        }
+    }
+
+    /// Clear finished cards for one provider in the selected project. A nil
+    /// project means the dashboard is in its explicit all-projects scope.
+    func dismissAllExited(_ kind: AgentKind, in projectID: String?) {
+        for agent in agents
+        where !agent.isLive
+            && agent.agent == kind
+            && (projectID == nil || agent.projectID == projectID) {
             dismiss(agent.id)
         }
     }
@@ -512,15 +733,31 @@ final class MockStore {
                 .recentOutput.isEmpty ?? true)
 
             if let live = sessionManager.session(sessionID) {
+                let oldState = agent.state
+                let newState: AgentState
+                if case .ready = live.state, !hasSpoken {
+                    newState = .launching
+                } else {
+                    newState = live.state
+                }
+
                 mutate(agent.id) {
-                    if case .ready = live.state, !hasSpoken {
-                        $0.state = .launching
-                    } else {
-                        $0.state = live.state
-                    }
-                    // Without this the card's timestamp measured "time since you
-                    // last clicked something", not "time since the agent spoke".
+                    $0.state = newState
                     $0.lastOutputAt = live.lastOutputAt
+                }
+
+                let becameReady: Bool
+                if case .ready = newState, case .ready = oldState {
+                    becameReady = false
+                } else if case .ready = newState {
+                    becameReady = true
+                } else {
+                    becameReady = false
+                }
+
+                if becameReady, notifyOnReady, !NSApplication.shared.isActive {
+                    updateDockBadge()
+                    NSApplication.shared.requestUserAttention(.criticalRequest)
                 }
             }
 
@@ -536,9 +773,20 @@ final class MockStore {
                     mutate(agent.id) { $0.lastLine = line }
                 }
 
-                // The pty vanishing means the process died on its own.
+                // The pty vanishing means the process died on its own. If
+                // Ctrl-C immediately preceded that exit, it was the user's
+                // deliberate CLI-exit gesture: repair navigation and remove
+                // the card as one lifecycle event. A Ctrl-C that only cancelled
+                // work leaves the process running and never reaches this path.
                 if !pty.isProcessRunning {
+                    if pty.exitedAfterInterrupt {
+                        repairSelectionAfterExit(agent.id)
+                        discard(agent.id, sessionID: sessionID)
+                        continue
+                    }
+
                     mutate(agent.id) { $0.state = .exited(exitCode: pty.exitCode ?? 0) }
+                    repairSelectionAfterExit(agent.id)
                 }
             }
         }
@@ -546,6 +794,11 @@ final class MockStore {
         // Rescan for projects occasionally — a repo cloned while Daddy is open
         // should show up without a restart.
         if tickCount % 30 == 0 { refreshProjects() }
+
+        // Provider quota endpoints are account-wide and some are aggressively
+        // rate-limited. Five minutes keeps the dashboard useful without turning
+        // four fleet cards into a polling storm.
+        if tickCount % 300 == 0 { refreshProviderUsage() }
     }
 
     // MARK: - Buffer plumbing
@@ -553,6 +806,12 @@ final class MockStore {
     private func mutate(_ agentID: String, _ body: (inout MockAgent) -> Void) {
         guard let idx = agents.firstIndex(where: { $0.id == agentID }) else { return }
         body(&agents[idx])
+    }
+
+    /// Updates the Dock icon badge to show the count of ready agents.
+    private func updateDockBadge() {
+        let readyCount = agents.filter { if case .ready = $0.state { return true } else { return false } }.count
+        NSApplication.shared.dockTile.badgeLabel = readyCount > 0 ? "\(readyCount)" : ""
     }
 
 }

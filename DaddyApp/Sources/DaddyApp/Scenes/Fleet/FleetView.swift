@@ -1,8 +1,17 @@
 import SwiftUI
 
-/// The fleet: projects on the left, agents in the middle, the agent's terminal
+/// The fleet: the rail on the left, agents in the middle, the agent's terminal
 /// on the right — until you drill into one agent, at which point the terminal
-/// becomes a focused workspace underneath one compact toolbar.
+/// takes the whole middle underneath one compact toolbar.
+///
+/// ## Focus is not a mode
+///
+/// It used to be: drilling into an agent hid the rail outright, so the project
+/// tree and every other agent's state disappeared exactly when you started
+/// working. Now the rail is permanent and focusing an agent only changes what
+/// occupies the space to the right of it. `store.detailAgentID` still means
+/// "which agent the middle column is showing" — it just no longer takes the
+/// window hostage.
 ///
 /// ## Why this is a ZStack over a GeometryReader rather than an HStack
 ///
@@ -27,42 +36,102 @@ struct FleetView: View {
     @State private var hoverRestoreTask: Task<Void, Never>?
 
     private let gap: CGFloat = 16
-    private let sidebarWide: CGFloat = 264
-    private let sidebarNarrow: CGFloat = 50
+    /// Shared with `WorkspaceRail`, which lays its content out at these widths
+    /// whatever the animating frame currently proposes.
+    private let sidebarWide = DaddyTheme.railWideWidth
+    private let sidebarNarrow = DaddyTheme.railNarrowWidth
     private let terminalDockedWidth: CGFloat = 496
     private let detailToolbarHeight: CGFloat = 58
 
+    /// The shell takes 30% and the agent keeps 70%, because the agent's
+    /// transcript is what you are reading and the shell is what you are
+    /// occasionally typing into. Floored so it stays usable on a narrow window
+    /// and capped so it does not become the main event on a wide one.
+    private let shellFraction: CGFloat = 0.30
+    private let shellMinWidth: CGFloat = 280
+    private let shellMaxWidth: CGFloat = 620
+
+    private func shellWidth(for contentWidth: CGFloat) -> CGFloat {
+        min(shellMaxWidth, max(shellMinWidth, contentWidth * shellFraction))
+    }
+
     private var isDetail: Bool { store.detailAgent != nil }
+
+    /// `RootView` collapses its own header in focus mode, which left the detail
+    /// toolbar flush against the titlebar while every other edge of the
+    /// workspace floats. The three cards get the same gap above them as they
+    /// have between them.
+    private var topInset: CGFloat { isDetail ? gap : 0 }
 
     var body: some View {
         GeometryReader { geo in
             let sidebarWidth = sidebarExpanded ? sidebarWide : sidebarNarrow
-            let contentX = isDetail ? 0 : sidebarWidth + gap
+
+            // With an agent focused the rail *floats* over the content instead
+            // of pushing it.
+            //
+            // Pushing would mean the terminal resizes every time the pointer
+            // brushes the left edge — and a terminal resize is a TIOCSWINSZ, a
+            // SIGWINCH, and a full TUI reflow at the far end. Hovering a
+            // sidebar must not make the agent redraw itself. On the dashboard
+            // it still pushes, because tiles reflowing is free.
+            let contentX = (isDetail ? sidebarNarrow : sidebarWidth) + gap
             let contentWidth = max(0, geo.size.width - contentX)
             let terminal = terminalFrame(in: geo.size, contentX: contentX, contentWidth: contentWidth)
 
             ZStack(alignment: .topLeading) {
-                ProjectsSidebar(
-                    expanded: $sidebarExpanded,
-                    hoverExpansionEnabled: sidebarHoverEnabled
-                )
-                    .frame(width: sidebarWidth, height: geo.size.height)
-                    .opacity(isDetail ? 0 : 1)
-                    .allowsHitTesting(!isDetail)
-
                 middleColumn(
                     width: isDetail ? contentWidth : max(0, contentWidth - terminalDockedWidth - gap),
                     height: isDetail ? detailToolbarHeight : geo.size.height
                 )
-                .offset(x: contentX, y: 0)
+                .offset(x: contentX, y: topInset)
 
-                // The one and only terminal. Only its rectangle changes.
+                // The one and only agent terminal. Only its rectangle changes.
                 TerminalPane(isFocused: isDetail)
                     .frame(width: terminal.width, height: terminal.height)
                     .offset(x: terminal.minX, y: terminal.minY)
+
+                // Your own shell, to the right of the agent's.
+                //
+                // Mounted permanently and moved *offscreen* when there is no
+                // agent focused, rather than being branched away or given a
+                // zero width. Same rule as the agent pane — rebuilding it would
+                // tear down SwiftTerm's NSView and truncate scrollback to the
+                // 200 lines `recentOutput` retains — and a zero-width frame
+                // would hand the child a 0-column TIOCSWINSZ, which is not a
+                // terminal size any shell should be asked to lay out for.
+                ShellPane(project: store.selectedProject)
+                    .frame(width: shellWidth(for: contentWidth), height: terminal.height)
+                    .offset(
+                        x: isDetail ? terminal.maxX + gap : geo.size.width,
+                        y: terminal.minY
+                    )
+                    // Keep the native terminal alive at a real size for
+                    // scrollback, but do not let its border or renderer bleed
+                    // past the Fleet's right edge while it is parked offscreen.
+                    .opacity(isDetail ? 1 : 0)
+                    .allowsHitTesting(isDetail)
+                    .accessibilityHidden(!isDetail)
+
+                // Last, so an expanded rail draws over the focused terminal
+                // rather than shoving it sideways.
+                WorkspaceRail(
+                    expanded: $sidebarExpanded,
+                    hoverExpansionEnabled: sidebarHoverEnabled
+                )
+                .frame(width: sidebarWidth, height: geo.size.height)
+                // The rail's content is laid out at its final width, so growing
+                // this frame reveals it. Without the clip it would spill out of
+                // the collapsed strip for the length of the animation and take
+                // its hover region with it.
+                .clipped()
             }
-            .animation(.smooth(duration: 0.3), value: sidebarExpanded)
+            // No implicit animation on `sidebarExpanded`: the rail already wraps
+            // every change to it in a `withAnimation`, and `expanded` is a
+            // binding to this state, so one toggle used to run two nested
+            // transactions on one property.
             .animation(.smooth(duration: 0.3), value: progressPanelOpen)
+            .animation(.smooth(duration: 0.3), value: isDetail)
         }
         .onAppear { installKeyboardMonitor() }
         .onDisappear { removeKeyboardMonitor() }
@@ -71,26 +140,33 @@ struct FleetView: View {
         }
     }
 
-    /// Docked on the right, or parked across the bottom of the content area.
+    /// Docked on the right, or — with an agent focused — sharing the content
+    /// area with your own shell: 70% agent, 30% shell.
     private func terminalFrame(
         in size: CGSize,
         contentX: CGFloat,
         contentWidth: CGFloat
     ) -> CGRect {
         if isDetail {
-            let top = detailToolbarHeight
+            // Below the toolbar, with the same gap under it that separates the
+            // two terminals from each other.
+            let top = topInset + detailToolbarHeight + gap
             return CGRect(
                 x: contentX,
                 y: top,
-                width: contentWidth,
+                width: max(0, contentWidth - shellWidth(for: contentWidth) - gap),
                 height: max(0, size.height - top)
             )
         }
 
+        // Docked: pinned to the right edge, but never wider than the content
+        // area — a narrow window with the rail pinned open must not put the
+        // terminal underneath it.
+        let width = min(terminalDockedWidth, contentWidth)
         return CGRect(
-            x: size.width - terminalDockedWidth,
+            x: size.width - width,
             y: 0,
-            width: terminalDockedWidth,
+            width: width,
             height: size.height
         )
     }
@@ -132,13 +208,10 @@ struct FleetView: View {
     }
 
     private func closeDetail() {
-        // Returning is navigation, not a showcase animation. Animating this
-        // transition forces SwiftTerm's native view through a full-screen-to-
-        // docked resize and makes a simple back action feel unresponsive.
         suppressSidebarHover()
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) { store.closeDetail() }
+        withAnimation(.smooth(duration: 0.3)) {
+            store.closeDetail()
+        }
     }
 
     /// Layout changes under a stationary pointer can synthesize hover
@@ -152,7 +225,8 @@ struct FleetView: View {
         sidebarHoverEnabled = false
         hoverRestoreTask?.cancel()
         hoverRestoreTask = Task {
-            try? await Task.sleep(for: .milliseconds(220))
+            // Stay suppressed through the 300ms detail-to-Fleet transition.
+            try? await Task.sleep(for: .milliseconds(360))
             guard !Task.isCancelled else { return }
             sidebarHoverEnabled = true
         }

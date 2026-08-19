@@ -30,6 +30,44 @@ final class StateDetectionTests: XCTestCase {
         XCTAssertEqual(adapter.detectState(fromRecentOutput: transcript), .working)
     }
 
+    func testClaudeCurrentFooterTransitionsFromWorkingToReady() {
+        let adapter = ClaudeAdapter()
+
+        XCTAssertEqual(
+            adapter.detectState(
+                fromRecentOutput: "✻ Working…\nesc to interrupt"
+            ),
+            .working
+        )
+
+        XCTAssertEqual(
+            adapter.detectState(
+                fromRecentOutput: """
+                ✻ Working… (esc to interrupt)
+                Finished the fix.
+                ❯
+                ⏵⏵ accept edits on (shift+tab to cycle) · ↔ for agents
+                """
+            ),
+            .ready,
+            "the current idle footer must override an older busy line in the same redraw"
+        )
+    }
+
+    func testClaudeIdleFooterDoesNotHideRateLimitOrFailure() {
+        let adapter = ClaudeAdapter()
+        let footer = "⏵⏵ accept edits on (shift+tab to cycle) · ↔ for agents"
+
+        XCTAssertEqual(
+            adapter.detectState(fromRecentOutput: "rate limit exceeded\n\(footer)"),
+            .rateLimited
+        )
+        XCTAssertEqual(
+            adapter.detectState(fromRecentOutput: "Error: invalid API key\n\(footer)"),
+            .error("Detected failure in recent output")
+        )
+    }
+
     func testRealFailureIsStillDetected() {
         let adapter = ClaudeAdapter()
 

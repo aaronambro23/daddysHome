@@ -117,6 +117,25 @@ public final class ClaudeAdapter: AgentAdapter {
 
     public func detectState(fromRecentOutput buffer: String) -> AgentState {
         let window = OutputHeuristics.recentWindow(buffer).lowercased()
+
+        // Claude Code 2.1.234 puts its idle signal in the footer below the
+        // composer rather than ending the stream on a bare prompt:
+        //
+        //   ⏵⏵ accept edits on (shift+tab to cycle) · ↔ for agents
+        //
+        // Check the last visible line specifically. A previous "esc to
+        // interrupt" can still exist earlier in the same redraw chunk; the
+        // footer is the newer screen state and must win or WORKING latches
+        // forever after Claude hands control back.
+        let lastLine = OutputHeuristics.lastVisibleLine(window)
+        let hasIdleFooter = lastLine.contains("accept edits on")
+            || lastLine.contains("shift+tab to cycle")
+        if hasIdleFooter,
+           !OutputHeuristics.indicatesRateLimit(window),
+           !OutputHeuristics.indicatesFailure(window) {
+            return .ready
+        }
+
         return OutputHeuristics.resolve(window: window) { text in
             text.contains(">>>")
                 || text.contains("claude >")

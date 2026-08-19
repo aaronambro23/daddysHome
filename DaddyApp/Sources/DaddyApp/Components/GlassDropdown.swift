@@ -14,10 +14,16 @@ struct GlassDropdownItem: Identifiable {
     /// Shown dimmed to the right of the title — for "not installed" and similar.
     var note: String?
     var isEnabled: Bool = true
+    /// The row that ends the session. Drawn as a filled red block rather than a
+    /// line of text, so the one item you cannot undo never reads as a peer of
+    /// the ones you can.
+    var isDestructive: Bool = false
     /// Optional mark before the title. Type-erased on purpose: the dropdown is
     /// a generic component and has no business knowing about providers, but a
     /// list of four products reads far faster with their logos on it.
     var leading: AnyView?
+    /// One nested level, shown in a popover attached to this row on hover.
+    var children: [GlassDropdownItem]
     let action: () -> Void
 
     init(
@@ -25,14 +31,18 @@ struct GlassDropdownItem: Identifiable {
         title: String,
         note: String? = nil,
         isEnabled: Bool = true,
+        isDestructive: Bool = false,
         leading: AnyView? = nil,
-        action: @escaping () -> Void
+        children: [GlassDropdownItem] = [],
+        action: @escaping () -> Void = {}
     ) {
         self.id = id
         self.title = title
         self.note = note
         self.isEnabled = isEnabled
+        self.isDestructive = isDestructive
         self.leading = leading
+        self.children = children
         self.action = action
     }
 }
@@ -46,6 +56,13 @@ struct GlassDropdown<Label: View>: View {
     /// several in a row — launching four agents should not mean opening the
     /// same menu four times. Escape or a click outside still closes it.
     var staysOpenOnPick: Bool = false
+
+    /// Hands the trigger's whole appearance to the caller: no padding, no
+    /// capsule, no hit shape of our own. For a trigger that has to *be* a
+    /// specific shape — the plus circle that sits in the agent deck as a peer of
+    /// the bubbles — chrome wrapped around the label is the one thing that stops
+    /// it matching.
+    var chromelessLabel: Bool = false
 
     @ViewBuilder let label: () -> Label
 
@@ -63,11 +80,15 @@ struct GlassDropdown<Label: View>: View {
         Button {
             isOpen.toggle()
         } label: {
-            label()
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .insetCapsule(opacity: hoveringTrigger || isOpen ? 0.16 : 0.08)
-                .contentShape(Capsule())
+            if chromelessLabel {
+                label()
+            } else {
+                label()
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .insetCapsule(opacity: hoveringTrigger || isOpen ? 0.16 : 0.08)
+                    .contentShape(Capsule())
+            }
         }
         .buttonStyle(.plain)
         .onHover { hoveringTrigger = $0 }
@@ -87,9 +108,9 @@ struct GlassDropdown<Label: View>: View {
                     .padding(.vertical, 9)
             } else {
                 ForEach(items) { item in
-                    GlassDropdownRow(item: item) {
+                    GlassDropdownRow(item: item) { selected in
                         if !staysOpenOnPick { isOpen = false }
-                        item.action()
+                        selected.action()
                     }
                 }
             }
@@ -104,44 +125,133 @@ struct GlassDropdown<Label: View>: View {
 
 private struct GlassDropdownRow: View {
     let item: GlassDropdownItem
-    let onTap: () -> Void
+    let onSelect: (GlassDropdownItem) -> Void
 
     @State private var hovering = false
+    @State private var submenuOpen = false
+    @State private var submenuCloseTask: Task<Void, Never>?
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 9) {
-                if let leading = item.leading {
-                    leading
-                        .opacity(item.isEnabled ? 1 : 0.4)
-                }
-
-                Text(item.title)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(
-                        item.isEnabled ? DaddyTheme.textPrimary : DaddyTheme.textVeryDim
-                    )
-
-                Spacer(minLength: 6)
-
-                if let note = item.note {
-                    Text(note)
-                        .font(.system(size: 9.5, design: .monospaced))
-                        .foregroundStyle(DaddyTheme.textMuted)
-                }
+        Button {
+            if item.children.isEmpty {
+                onSelect(item)
+            } else {
+                submenuOpen = true
             }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        } label: {
+            rowLabel
         }
         .buttonStyle(.plain)
         .disabled(!item.isEnabled)
         .background {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(hovering && item.isEnabled ? DaddyTheme.insetFill : Color.clear)
+                .fill(rowFill)
         }
-        .onHover { hovering = $0 }
+        .overlay {
+            if item.isDestructive {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(
+                        DaddyTheme.failure.opacity(hovering && item.isEnabled ? 0.55 : 0.32)
+                    )
+            }
+        }
+        .onHover(perform: handleRowHover)
         .animation(.easeOut(duration: 0.12), value: hovering)
+        .popover(
+            isPresented: $submenuOpen,
+            attachmentAnchor: .rect(.bounds),
+            arrowEdge: .leading
+        ) {
+            submenu
+        }
+        .onDisappear { submenuCloseTask?.cancel() }
+    }
+
+    private var rowLabel: some View {
+        HStack(spacing: 9) {
+            if let leading = item.leading {
+                leading
+                    .opacity(item.isEnabled ? 1 : 0.4)
+            }
+
+            Text(item.title)
+                .font(.system(size: 12, weight: item.isDestructive ? .semibold : .medium))
+                .foregroundStyle(titleColor)
+
+            Spacer(minLength: 6)
+
+            if let note = item.note {
+                Text(note)
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundStyle(DaddyTheme.textMuted)
+            }
+
+            if !item.children.isEmpty {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(DaddyTheme.textMuted)
+            }
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    /// Destructive rows carry their fill at rest — that is the whole point of
+    /// them — and only deepen on hover; everything else lights up from nothing.
+    private var rowFill: Color {
+        guard item.isEnabled else { return .clear }
+        if item.isDestructive {
+            return DaddyTheme.failure.opacity(hovering ? 0.26 : 0.15)
+        }
+        return hovering ? DaddyTheme.insetFill : .clear
+    }
+
+    private var titleColor: Color {
+        guard item.isEnabled else { return DaddyTheme.textVeryDim }
+        return item.isDestructive ? DaddyTheme.failure : DaddyTheme.textPrimary
+    }
+
+    private var submenu: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(item.children) { child in
+                GlassDropdownRow(item: child) { selected in
+                    submenuOpen = false
+                    onSelect(selected)
+                }
+            }
+        }
+        .padding(6)
+        .frame(width: 190)
+        .background(DaddyTheme.popoverBackground)
+        .onHover { inside in
+            if inside {
+                submenuCloseTask?.cancel()
+            } else {
+                scheduleSubmenuClose()
+            }
+        }
+    }
+
+    private func handleRowHover(_ inside: Bool) {
+        hovering = inside
+        guard item.isEnabled, !item.children.isEmpty else { return }
+
+        if inside {
+            submenuCloseTask?.cancel()
+            submenuOpen = true
+        } else {
+            scheduleSubmenuClose()
+        }
+    }
+
+    private func scheduleSubmenuClose() {
+        submenuCloseTask?.cancel()
+        submenuCloseTask = Task {
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled else { return }
+            submenuOpen = false
+        }
     }
 }

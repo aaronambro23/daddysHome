@@ -17,6 +17,8 @@ struct ProviderLaunchMenu<Label: View>: View {
     /// Wider than the plain dropdown default: the rows carry a logo now, and
     /// "not installed" has to sit beside the name without wrapping.
     var width: CGFloat = 240
+    /// Passed through, for a trigger that draws itself — see `GlassDropdown`.
+    var chromelessLabel: Bool = false
 
     @ViewBuilder let label: () -> Label
 
@@ -28,6 +30,7 @@ struct ProviderLaunchMenu<Label: View>: View {
             // Launching four agents should not mean opening the same menu four
             // times.
             staysOpenOnPick: true,
+            chromelessLabel: chromelessLabel,
             label: label
         )
     }

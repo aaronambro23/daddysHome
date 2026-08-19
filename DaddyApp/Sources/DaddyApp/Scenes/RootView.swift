@@ -11,14 +11,20 @@ struct RootView: View {
             DaddyTheme.focusSurface
                 .ignoresSafeArea()
 
-            // Not rendered in focus mode — and that is a performance decision,
-            // not a visual one. The focused terminal covers the window
-            // completely and is now opaque, so the aurora is invisible there
-            // while still driving a 30Hz TimelineView through eight blur and
-            // plusLighter passes, full-window, forever.
-            if !isAgentFocusMode {
-                AuroraBackground()
-            }
+            // Rendered again in focus mode, and that reverses a decision from
+            // batch 009 on purpose.
+            //
+            // Suppressing it there was justified by one fact: the focused
+            // terminal covered the window completely, so the aurora was
+            // animating where nobody could see it. The permanent rail ends
+            // that — it is glass, it is always on screen, and glass with a flat
+            // colour behind it is just a grey box. The backdrop is the design.
+            //
+            // The performance work that actually mattered survives untouched:
+            // the terminal no longer forces a full-window repaint per chunk,
+            // and it is opaque, so its repaints do not drag the aurora and the
+            // glass through a recomposite.
+            AuroraBackground()
 
             VStack(spacing: 0) {
                 header
@@ -28,9 +34,13 @@ struct RootView: View {
                     .allowsHitTesting(!isAgentFocusMode)
 
                 ZStack(alignment: .trailing) {
+                    // Inset in both modes now. Focus used to run the terminal
+                    // to the window edges because it *was* the window; with the
+                    // rail permanently beside it, the rail would sit flush
+                    // against the frame while every other panel floats.
                     FleetView()
-                        .padding(.horizontal, isAgentFocusMode ? 0 : 18)
-                        .padding(.bottom, isAgentFocusMode ? 0 : 18)
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, 18)
 
                     if let utilityPanel, !isAgentFocusMode {
                         Color.black.opacity(0.22)

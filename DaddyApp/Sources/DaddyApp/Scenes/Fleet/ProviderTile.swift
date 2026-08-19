@@ -27,10 +27,13 @@ struct ProviderTile: View {
     @State private var hovering = false
 
     /// The agent this tile is describing: the selected one when it belongs to
-    /// this provider, otherwise the first. Never nil — the tile is not rendered
-    /// for an empty provider.
+    /// this provider and still live, otherwise the newest live one, otherwise
+    /// the first finished one. Never nil — the tile is not rendered for an
+    /// empty provider.
     private var active: MockAgent? {
-        agents.first { $0.id == store.selectedAgentID } ?? agents.first
+        agents.first { $0.id == store.selectedAgentID && $0.isLive }
+            ?? agents.filter(\.isLive).max(by: { $0.lastOutputAt < $1.lastOutputAt })
+            ?? agents.first
     }
 
     var body: some View {
@@ -48,7 +51,7 @@ struct ProviderTile: View {
                 .fill(Color.white.opacity(0.001))
                 .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .onTapGesture {
-                    guard let active else { return }
+                    guard let active, active.isLive else { return }
                     withAnimation(.smooth(duration: 0.2)) {
                         store.openDetail(active.id)
                     }
@@ -62,6 +65,7 @@ struct ProviderTile: View {
                         agents: agents,
                         activeID: active.id,
                         onSelect: { id in
+                            guard agents.contains(where: { $0.id == id && $0.isLive }) else { return }
                             withAnimation(.smooth(duration: 0.2)) {
                                 store.openDetail(id)
                             }
@@ -75,7 +79,7 @@ struct ProviderTile: View {
             }
         }
         .padding(13)
-        .frame(maxWidth: .infinity, minHeight: 168, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 184, maxHeight: .infinity, alignment: .topLeading)
         .insetSurface(cornerRadius: 16, selected: isSelectedTile, filled: hovering)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.15), value: hovering)
@@ -143,6 +147,8 @@ struct ProviderTile: View {
                     .foregroundStyle(DaddyTheme.textMuted)
             }
 
+            ProviderUsageBattery(snapshot: store.providerUsage[kind], compact: true)
+
             secondLine(for: agent)
 
             HStack(spacing: 6) {
@@ -175,7 +181,7 @@ struct ProviderTile: View {
                     code == 0 ? "ended cleanly" : "ended · exit \(code)",
                     color: DaddyTheme.textMuted
                 )
-            } else if !agent.lastLine.isEmpty {
+            } else if agent.agent != .opencode, !agent.lastLine.isEmpty {
                 label("› " + agent.lastLine, color: DaddyTheme.textTertiary)
             } else if case .launching = agent.state {
                 // A booting CLI says nothing for a few seconds. Saying so beats
@@ -188,9 +194,10 @@ struct ProviderTile: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                // Nothing true to say yet. Hold the line's height rather than
-                // inventing filler, so the tile does not resize when the agent
-                // starts talking.
+                // OpenCode's last terminal line is TUI block art, not prose.
+                // Do not put renderer fragments in its card. For every provider,
+                // hold the line's height rather than inventing filler, so the
+                // tile does not resize when the agent starts talking.
                 Color.clear
             }
         }
@@ -212,11 +219,13 @@ struct ProviderTile: View {
     // grid. Everything acts on this tile's active agent, except Stop all.
 
     private func menuItems(for agent: MockAgent) -> [GlassDropdownItem] {
-        var items: [GlassDropdownItem] = [
-            GlassDropdownItem(id: "detail", title: "Open detail") {
+        var items: [GlassDropdownItem] = []
+
+        if agent.isLive {
+            items.append(GlassDropdownItem(id: "detail", title: "Open detail") {
                 withAnimation(.smooth(duration: 0.36)) { store.openDetail(agent.id) }
-            }
-        ]
+            })
+        }
 
         if !agent.isLive {
             if store.canResumeChat(agent.agent) {
@@ -251,21 +260,42 @@ struct ProviderTile: View {
             onOpenProgress(agent.projectID)
         })
 
-        for target in [AgentKind.claude, .codex, .cursor, .opencode]
-        where target != agent.agent && store.isInstalled(target) {
+        let handoffTargets = [AgentKind.claude, .codex, .cursor, .opencode]
+            .filter { $0 != agent.agent && store.isInstalled($0) }
+        if !handoffTargets.isEmpty {
             items.append(
                 GlassDropdownItem(
-                    id: "handoff-\(target.rawValue)",
-                    title: "Hand off → \(target.rawValue.capitalized)"
-                ) {
-                    store.handOff(agent.id, to: target)
-                }
+                    id: "handoff",
+                    title: "Hand off",
+                    children: handoffTargets.map { target in
+                        GlassDropdownItem(
+                            id: "handoff-\(target.rawValue)",
+                            title: target.rawValue.capitalized,
+                            leading: AnyView(ProviderLogo.badge(for: target, diameter: 16))
+                        ) {
+                            store.handOff(agent.id, to: target)
+                        }
+                    }
+                )
             )
         }
 
         items.append(GlassDropdownItem(id: "dismiss", title: "Dismiss") {
             store.dismiss(agent.id)
         })
+
+        let finishedCount = agents.filter { !$0.isLive }.count
+        if finishedCount > 0 {
+            items.append(
+                GlassDropdownItem(
+                    id: "dismiss-all",
+                    title: "Dismiss all \(kind.rawValue.capitalized)",
+                    note: "\(finishedCount)"
+                ) {
+                    store.dismissAllExited(kind, in: store.selectedProjectID)
+                }
+            )
+        }
 
         if agents.filter(\.isLive).count > 1 {
             items.append(

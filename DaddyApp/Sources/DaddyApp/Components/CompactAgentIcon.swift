@@ -41,11 +41,16 @@ struct CompactAgentIcon: View {
                 // edge the next bubble never covers. It sits *just inside* the
                 // circle rather than hanging off it — pushed outside, a row of
                 // overlapping bubbles grows a row of loose crumbs underneath.
-                Circle()
-                    .fill(StateColors.accent(for: agent.state))
-                    .frame(width: dotSize, height: dotSize)
-                    .overlay(Circle().strokeBorder(DaddyTheme.bubbleRim, lineWidth: 1.5))
-                    .offset(x: -0.5, y: -0.5)
+                if agent.state == .ready {
+                    BouncingBadge(color: StateColors.accent(for: agent.state), glowRadius: 5, size: dotSize)
+                        .offset(x: -0.5, y: -0.5)
+                } else {
+                    Circle()
+                        .fill(StateColors.accent(for: agent.state))
+                        .frame(width: dotSize, height: dotSize)
+                        .overlay(Circle().strokeBorder(DaddyTheme.bubbleRim, lineWidth: 1.5))
+                        .offset(x: -0.5, y: -0.5)
+                }
             }
         }
         .buttonStyle(.plain)

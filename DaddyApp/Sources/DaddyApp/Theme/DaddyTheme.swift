@@ -32,8 +32,13 @@ enum DaddyTheme {
     // Semantic state colors. Desaturated on purpose: these mark information,
     // they are not decoration. Only ever applied to dots, glyphs and labels —
     // never as a surface fill.
-    static var working: Color { Color(hex: "#8fe9bb") }
-    static var ready: Color { Color(hex: "#cfe0ee") }
+    //
+    // `.ready` is saturated green — the loudest colour in the palette, reserved
+    // for the one state that needs to jump out: the agent is done and waiting
+    // for you. `.working` is amber — a warm "still processing" signal that
+    // stands apart from both the success-green and the error-red.
+    static var working: Color { Color(hex: "#ffb545") }
+    static var ready: Color { Color(hex: "#00dd77") }
     static var limited: Color { Color(hex: "#ecca8f") }
     static var failure: Color { Color(hex: "#f0a6a6") }
     static var launching: Color { Color(hex: "#aecdf2") }
@@ -77,6 +82,20 @@ enum DaddyTheme {
     /// terminal means every repaint punches a hole all the way down to the
     /// aurora. Solid here; the glass lives everywhere else.
     static var terminalSurface: Color { Color(hex: "#0d111a") }
+
+    /// The corner of a card in the focused workspace — the toolbar, the agent's
+    /// terminal and your shell. One number, in one place, because the three sit
+    /// side by side with a gap between them and nothing gives a layout away
+    /// faster than three corners that nearly match.
+    static let focusedPaneRadius: CGFloat = 22
+
+    /// The rail's two widths. Shared, because `FleetView` sizes the frame and
+    /// `WorkspaceRail` has to lay its expanded content out at the *wide* one
+    /// whatever the frame currently says — otherwise the content is squeezed
+    /// into a 50pt frame for the length of the animation, overflows it (a
+    /// `.frame(width:)` does not clip), and drags the hover region out with it.
+    static let railWideWidth: CGFloat = 264
+    static let railNarrowWidth: CGFloat = 50
 
     /// Rim behind a bubble in a stacked deck, so an overlapping neighbour reads
     /// as sitting in front of it rather than merging with it. Dark, because it
