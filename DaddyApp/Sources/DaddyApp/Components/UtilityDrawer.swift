@@ -12,6 +12,7 @@ struct UtilityDrawer: View {
 
     let panel: UtilityPanel
     let onClose: () -> Void
+    let onSwitchPanel: (UtilityPanel) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -46,7 +47,7 @@ struct UtilityDrawer: View {
             case .hex:
                 HEXUtilityPanel()
             case .settings:
-                SettingsUtilityPanel()
+                SettingsUtilityPanel(onOpenHEX: { onSwitchPanel(.hex) })
             }
         }
         .background {
@@ -143,6 +144,8 @@ private struct HEXHistoryRow: View {
 private struct SettingsUtilityPanel: View {
     @Environment(MockStore.self) private var store
 
+    let onOpenHEX: () -> Void
+
     private static let claudeModels = ["opus-5", "sonnet-5", "haiku-4-5"]
 
     var body: some View {
@@ -150,6 +153,27 @@ private struct SettingsUtilityPanel: View {
 
         return ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                section("UTILITIES") {
+                    Button(action: onOpenHEX) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "waveform")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(DaddyTheme.accent)
+                            Text("Transcript history")
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .foregroundStyle(DaddyTheme.textPrimary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(DaddyTheme.textSecondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .insetSurface(cornerRadius: 12)
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 section("AGENT DEFAULTS") {
                     setting("Default Claude model", "Used for new Claude sessions.") {
                         Picker("", selection: $store.defaultModel) {

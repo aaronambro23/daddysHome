@@ -79,7 +79,7 @@ struct ProviderTile: View {
             }
         }
         .padding(13)
-        .frame(maxWidth: .infinity, minHeight: 184, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 240, maxHeight: .infinity, alignment: .topLeading)
         .insetSurface(cornerRadius: 16, selected: isSelectedTile, filled: hovering)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.15), value: hovering)

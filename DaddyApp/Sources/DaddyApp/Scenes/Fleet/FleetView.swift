@@ -57,11 +57,8 @@ struct FleetView: View {
 
     private var isDetail: Bool { store.detailAgent != nil }
 
-    /// `RootView` collapses its own header in focus mode, which left the detail
-    /// toolbar flush against the titlebar while every other edge of the
-    /// workspace floats. The three cards get the same gap above them as they
-    /// have between them.
-    private var topInset: CGFloat { isDetail ? gap : 0 }
+    /// Consistent gap at the top.
+    private var topInset: CGFloat { gap }
 
     var body: some View {
         GeometryReader { geo in
