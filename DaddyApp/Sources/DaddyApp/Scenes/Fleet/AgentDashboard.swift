@@ -89,6 +89,7 @@ struct AgentDashboard: View {
                     .padding(16)
                 }
             }
+            }
 
             launchMenu
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
