@@ -44,6 +44,7 @@ struct RadialProviderMenuOverlay: View {
     let project: MockProject
     let plusFrame: CGRect
     let isOpen: Bool
+    var armedKind: AgentKind? = nil
     let onDismiss: () -> Void
 
     /// 0 = parked on the plus, 1 = full compass. Drives travel *and* scale so
@@ -84,6 +85,7 @@ struct RadialProviderMenuOverlay: View {
                     expansion: expansion,
                     origin: origin,
                     travel: Self.compassOffset(for: item.kind),
+                    isArmed: armedKind == item.kind,
                     action: item.action
                 )
             }
@@ -119,6 +121,24 @@ struct RadialProviderMenuOverlay: View {
             return CGSize(width: -distance, height: 0)
         }
     }
+
+    /// Same map as `compassOffset`: up Claude, right Codex, down Cursor, left OpenCode.
+    static func kind(for event: NSEvent) -> AgentKind? {
+        switch event.keyCode {
+        case 126: return .claude
+        case 124: return .codex
+        case 125: return .cursor
+        case 123: return .opencode
+        default: break
+        }
+        switch event.specialKey {
+        case .upArrow: return .claude
+        case .rightArrow: return .codex
+        case .downArrow: return .cursor
+        case .leftArrow: return .opencode
+        default: return nil
+        }
+    }
 }
 
 /// One compass bubble. Hover lifts it along its cardinal, same 1.14 scale as
@@ -129,6 +149,7 @@ private struct CompassLaunchBubble: View {
     let expansion: CGFloat
     let origin: CGPoint
     let travel: CGSize
+    var isArmed: Bool = false
     let action: () -> Void
 
     @State private var hovering = false
@@ -146,7 +167,7 @@ private struct CompassLaunchBubble: View {
         .buttonStyle(.plain)
         .help(kind.rawValue.capitalized)
         .opacity((isEnabled ? 1 : 0.4) * expansion)
-        .scaleEffect((0.2 + 0.8 * expansion) * (hovering && isEnabled ? 1.14 : 1))
+        .scaleEffect((0.2 + 0.8 * expansion) * (lifted ? 1.14 : 1))
         .allowsHitTesting(expansion > 0.8 && isEnabled)
         .onHover { hovering = isEnabled && $0 }
         .position(
@@ -154,10 +175,13 @@ private struct CompassLaunchBubble: View {
             y: origin.y + travel.height * expansion + lift.height
         )
         .animation(.smooth(duration: 0.18), value: hovering)
+        .animation(.smooth(duration: 0.18), value: isArmed)
     }
 
+    private var lifted: Bool { isEnabled && (hovering || isArmed) }
+
     private var lift: CGSize {
-        guard hovering, isEnabled else { return .zero }
+        guard lifted else { return .zero }
         let length = hypot(travel.width, travel.height)
         guard length > 0 else { return .zero }
         let extra: CGFloat = 6

@@ -15,6 +15,10 @@ struct FocusAgentSwitcher: View {
     /// an explanation rather than launching into a guess.
     let launchTarget: MockProject?
     @Binding var launchMenuOpen: Bool
+    /// Ctrl+Tab preview. The plus uses `plusID`.
+    var highlightID: String? = nil
+    var stripIDs: [String] = []
+    var deckNamespace: Namespace.ID
     let onSelect: (String) -> Void
 
     @State private var hoveredID: String?
@@ -22,7 +26,13 @@ struct FocusAgentSwitcher: View {
     @State private var query = ""
 
     private var alternatives: [MockAgent] {
-        agents
+        if !stripIDs.isEmpty {
+            return stripIDs.compactMap { id in
+                guard id != activeID else { return nil }
+                return agents.first { $0.id == id }
+            }
+        }
+        return agents
             .filter { $0.id != activeID }
             .sorted { $0.lastOutputAt > $1.lastOutputAt }
     }
@@ -40,12 +50,14 @@ struct FocusAgentSwitcher: View {
     }
 
     /// The plus is not an agent, so it needs a name of its own to take part in
-    /// the deck's one-at-a-time hover.
-    private static let plusID = "__new__"
+    /// the deck's one-at-a-time hover / Ctrl+Tab preview.
+    static let plusID = "__new__"
 
     /// The overlap the deck sits at, and the gap it opens to when a bubble is
     /// hovered. Named because the plus has to ride the same two numbers.
-    private var deckSpacing: CGFloat { hoveredID == nil ? -9 : 5 }
+    private var deckSpacing: CGFloat {
+        hoveredID == nil && highlightID == nil ? -9 : 5
+    }
 
     private var matches: [MockAgent] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -87,11 +99,13 @@ struct FocusAgentSwitcher: View {
             }
             .frame(height: 44)
             .animation(.smooth(duration: 0.18), value: hoveredID)
+            .animation(.smooth(duration: 0.18), value: highlightID)
+            .animation(.smooth(duration: 0.36), value: activeID)
         }
     }
 
     private var plusBubble: some View {
-        let hovering = hoveredID == Self.plusID
+        let hovering = hoveredID == Self.plusID || highlightID == Self.plusID
 
         return RadialProviderMenu(isOpen: $launchMenuOpen) {
             Image(systemName: "plus")
@@ -124,7 +138,7 @@ struct FocusAgentSwitcher: View {
     private var launchName: String? { launchTarget?.name }
 
     private func quickBubble(_ agent: MockAgent, index: Int) -> some View {
-        let hovering = hoveredID == agent.id
+        let hovering = hoveredID == agent.id || highlightID == agent.id
 
         return CompactAgentIcon(
             agent: agent,
@@ -140,6 +154,7 @@ struct FocusAgentSwitcher: View {
         .scaleEffect(hovering ? 1.14 : 1)
         .offset(y: hovering ? -3 : 0)
         .zIndex(hovering ? 100 : Double(quick.count - index))
+        .matchedGeometryEffect(id: agent.id, in: deckNamespace, properties: .position)
         .onHover { isHovering in
             guard !launchMenuOpen else { return }
             hoveredID = isHovering ? agent.id : (hoveredID == agent.id ? nil : hoveredID)

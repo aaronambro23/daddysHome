@@ -1,4 +1,5 @@
 import SwiftUI
+import DaddyCore
 
 /// The fleet: the rail on the left, agents in the middle, the agent's terminal
 /// on the right — until you drill into one agent, at which point the terminal
@@ -36,6 +37,23 @@ struct FleetView: View {
     @State private var hoverRestoreTask: Task<Void, Never>?
     @State private var providerLaunchOpen = false
     @State private var plusLaunchFrame: CGRect = .zero
+    /// Frozen left-to-right agent ids for a Ctrl+Tab burst. Empty when idle.
+    @State private var focusCycleIDs: [String] = []
+    /// Index into `focusCycleIDs`, or `focusCycleIDs.count` when the plus is the stop.
+    @State private var focusCycleIndex = 0
+    @State private var focusCycleHasPlus = false
+    @State private var focusCycleCommitTask: Task<Void, Never>?
+    @State private var compassArmedKind: AgentKind?
+    /// Live agents in header order: identity, then bubbles left-to-right.
+    @State private var focusStripIDs: [String] = []
+
+    private var focusHighlightID: String? {
+        guard !focusCycleIDs.isEmpty else { return nil }
+        if focusCycleIndex < focusCycleIDs.count {
+            return focusCycleIDs[focusCycleIndex]
+        }
+        return FocusAgentSwitcher.plusID
+    }
 
     private let gap: CGFloat = 16
     /// Shared with `WorkspaceRail`, which lays its content out at these widths
@@ -135,6 +153,7 @@ struct FleetView: View {
                         project: project,
                         plusFrame: plusLaunchFrame,
                         isOpen: providerLaunchOpen,
+                        armedKind: compassArmedKind,
                         onDismiss: closeProviderLaunch
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -154,10 +173,15 @@ struct FleetView: View {
         .onAppear { installKeyboardMonitor() }
         .onDisappear { removeKeyboardMonitor() }
         .onChange(of: store.detailAgentID) { _, detailID in
-            if detailID == nil {
+            if let detailID {
+                syncFocusStrip(current: detailID)
+            } else {
+                focusStripIDs = []
                 providerLaunchOpen = false
                 suppressSidebarHover()
             }
+            // A click, launch, or commit restacked identity — drop the burst.
+            clearFocusCycle()
         }
     }
 
@@ -200,7 +224,9 @@ struct FleetView: View {
                     agent: agent,
                     onOpenProgress: openProgress,
                     onBack: closeDetail,
-                    launchMenuOpen: $providerLaunchOpen
+                    launchMenuOpen: $providerLaunchOpen,
+                    highlightID: focusHighlightID,
+                    stripIDs: focusStripIDs
                 )
                 .transition(.move(edge: .top).combined(with: .opacity))
             } else {
@@ -231,6 +257,10 @@ struct FleetView: View {
 
     private func closeProviderLaunch() {
         providerLaunchOpen = false
+        compassArmedKind = nil
+        if !focusCycleIDs.isEmpty {
+            scheduleFocusCycleCommit()
+        }
     }
 
     private func openProgress(_ projectID: String) {
@@ -241,6 +271,7 @@ struct FleetView: View {
 
     private func closeDetail() {
         providerLaunchOpen = false
+        clearFocusCycle()
         suppressSidebarHover()
         withAnimation(.smooth(duration: 0.3)) {
             store.closeDetail()
@@ -266,9 +297,12 @@ struct FleetView: View {
     }
 
     /// Escape and Command-[ back out of whatever is open, innermost first.
+    /// Ctrl+Tab walks focus sessions; arrows pick a compass slot while it is open.
     private func installKeyboardMonitor() {
         guard keyboardMonitor == nil else { return }
         keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if handleFocusShortcut(event) { return nil }
+
             let isEscape = event.keyCode == 53
             let isCommandLeftBracket = event.modifierFlags.contains(.command)
                 && event.charactersIgnoringModifiers == "["
@@ -292,9 +326,195 @@ struct FleetView: View {
         }
     }
 
+    private func handleFocusShortcut(_ event: NSEvent) -> Bool {
+        let chords = event.modifierFlags.intersection([.command, .option, .control, .shift])
+
+        if store.detailAgent != nil,
+           chords.contains(.control),
+           !chords.contains(.command),
+           !chords.contains(.option),
+           !chords.contains(.shift),
+           event.charactersIgnoringModifiers?.lowercased() == "q" {
+            dismissFocusedSession()
+            return true
+        }
+
+        if providerLaunchOpen,
+           chords.isEmpty,
+           let kind = RadialProviderMenuOverlay.kind(for: event) {
+            compassArmedKind = kind
+            launchCompassKind(kind)
+            return true
+        }
+
+        let isControlTab = event.keyCode == 48
+            && chords.contains(.control)
+            && !chords.contains(.command)
+            && !chords.contains(.option)
+            && !chords.contains(.shift)
+        guard isControlTab, store.detailAgent != nil else { return false }
+
+        if providerLaunchOpen {
+            providerLaunchOpen = false
+            compassArmedKind = nil
+            advanceFocusCycle(fromPlus: true)
+            return true
+        }
+
+        advanceFocusCycle()
+        return true
+    }
+
+    private func launchCompassKind(_ kind: AgentKind) {
+        guard let project = launchProject else { return }
+        guard store.isInstalled(kind) else { return }
+        clearFocusCycle()
+        providerLaunchOpen = false
+        compassArmedKind = nil
+        store.launchReal(kind, in: project)
+    }
+
+    private func beginFocusCycleIfNeeded() {
+        guard focusCycleIDs.isEmpty, let current = store.detailAgent else { return }
+        syncFocusStrip(current: current.id)
+        focusCycleIDs = focusStripIDs
+        focusCycleIndex = 0
+        focusCycleHasPlus = launchProject != nil
+    }
+
+    private func advanceFocusCycle(fromPlus: Bool = false) {
+        beginFocusCycleIfNeeded()
+        guard !focusCycleIDs.isEmpty else { return }
+
+        if fromPlus, focusCycleHasPlus {
+            focusCycleIndex = focusCycleIDs.count
+        }
+
+        let plusIndex = focusCycleHasPlus ? focusCycleIDs.count : nil
+        let lastIndex = plusIndex ?? (focusCycleIDs.count - 1)
+        guard lastIndex >= 0 else { return }
+
+        var next = focusCycleIndex + 1
+        if next > lastIndex {
+            next = 0
+        }
+        focusCycleIndex = next
+
+        if let plusIndex, next == plusIndex {
+            focusCycleCommitTask?.cancel()
+            compassArmedKind = nil
+            providerLaunchOpen = true
+            return
+        }
+
+        store.previewDetail(focusCycleIDs[next])
+        scheduleFocusCycleCommit()
+    }
+
+    /// Keep identity as strip[0]; bubbles stay in this sequence, not recency.
+    private func syncFocusStrip(current: String) {
+        let live = store.visibleAgents.filter(\.isLive)
+        let liveIDs = Set(live.map(\.id))
+        focusStripIDs.removeAll { !liveIDs.contains($0) }
+
+        let newcomers = live
+            .filter { !focusStripIDs.contains($0.id) }
+            .sorted { $0.lastOutputAt > $1.lastOutputAt }
+            .map(\.id)
+        focusStripIDs.append(contentsOf: newcomers)
+
+        if focusStripIDs.isEmpty {
+            let others = live
+                .filter { $0.id != current }
+                .sorted { $0.lastOutputAt > $1.lastOutputAt }
+            focusStripIDs = [current] + others.map(\.id)
+        }
+
+        rotateFocusStrip(to: current)
+    }
+
+    private func rotateFocusStrip(to id: String) {
+        guard let i = focusStripIDs.firstIndex(of: id) else { return }
+        focusStripIDs = Array(focusStripIDs[i...]) + Array(focusStripIDs[..<i])
+    }
+
+    private func successorStripID(after id: String) -> String? {
+        let remaining = focusStripIDs.filter { $0 != id }
+        guard !remaining.isEmpty else { return nil }
+        if let i = focusStripIDs.firstIndex(of: id) {
+            let right = focusStripIDs[(i + 1)...].first { $0 != id && remaining.contains($0) }
+            return right ?? remaining[0]
+        }
+        return remaining[0]
+    }
+
+    private func dismissFocusedSession() {
+        let id: String?
+        if !focusCycleIDs.isEmpty, focusCycleIndex < focusCycleIDs.count {
+            id = focusCycleIDs[focusCycleIndex]
+        } else {
+            id = store.selectedAgentID ?? store.detailAgentID
+        }
+        guard let id, let agent = store.agents.first(where: { $0.id == id }) else { return }
+
+        let successor = successorStripID(after: id)
+        providerLaunchOpen = false
+        compassArmedKind = nil
+        clearFocusCycle()
+        focusStripIDs.removeAll { $0 == id }
+
+        if agent.isLive {
+            store.stop(id)
+        } else {
+            store.dismiss(id)
+        }
+
+        if let successor, store.detailAgentID != nil {
+            withAnimation(.smooth(duration: 0.36)) {
+                store.openDetail(successor)
+            }
+        }
+    }
+
+    private func scheduleFocusCycleCommit() {
+        focusCycleCommitTask?.cancel()
+        focusCycleCommitTask = Task {
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            commitFocusCycle()
+        }
+    }
+
+    private func commitFocusCycle() {
+        guard !focusCycleIDs.isEmpty else { return }
+        let id: String
+        if focusCycleIndex < focusCycleIDs.count {
+            id = focusCycleIDs[focusCycleIndex]
+        } else {
+            id = store.selectedAgentID ?? focusCycleIDs[0]
+        }
+        focusCycleCommitTask?.cancel()
+        focusCycleCommitTask = nil
+        withAnimation(.smooth(duration: 0.36)) {
+            store.openDetail(id)
+            focusCycleIDs = []
+            focusCycleIndex = 0
+            focusCycleHasPlus = false
+        }
+    }
+
+    private func clearFocusCycle() {
+        focusCycleCommitTask?.cancel()
+        focusCycleCommitTask = nil
+        focusCycleIDs = []
+        focusCycleIndex = 0
+        focusCycleHasPlus = false
+    }
+
     private func removeKeyboardMonitor() {
         hoverRestoreTask?.cancel()
         hoverRestoreTask = nil
+        clearFocusCycle()
         if let keyboardMonitor {
             NSEvent.removeMonitor(keyboardMonitor)
             self.keyboardMonitor = nil

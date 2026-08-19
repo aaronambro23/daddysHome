@@ -236,6 +236,14 @@ final class MockStore {
         detailHistory.insert(id, at: 0)
     }
 
+    /// Switch the terminal to another live session without restacking focus
+    /// chrome. `openDetail` is what moves the identity slot; this is the hop
+    /// during a Ctrl+Tab burst.
+    func previewDetail(_ id: String) {
+        guard agents.contains(where: { $0.id == id && $0.isLive }) else { return }
+        selectedAgentID = id
+    }
+
     func closeDetail() {
         detailAgentID = nil
     }

@@ -12,6 +12,11 @@ struct AgentDetailHeader: View {
     let onOpenProgress: (String) -> Void
     let onBack: () -> Void
     @Binding var launchMenuOpen: Bool
+    /// Ctrl+Tab preview. Nil when idle. `FocusAgentSwitcher.plusID` means the plus.
+    var highlightID: String? = nil
+    var stripIDs: [String] = []
+
+    @Namespace private var deckNamespace
 
     var body: some View {
         HStack(spacing: 10) {
@@ -47,6 +52,11 @@ struct AgentDetailHeader: View {
                 siblingIndex: MockAgent.siblingIndex(for: agent, among: liveAgents),
                 onTap: {}
             )
+            .scaleEffect(highlightID == agent.id ? 1.14 : 1)
+            .offset(y: highlightID == agent.id ? -3 : 0)
+            .zIndex(highlightID == agent.id ? 20 : 0)
+            .matchedGeometryEffect(id: agent.id, in: deckNamespace, properties: .position)
+            .animation(.smooth(duration: 0.18), value: highlightID)
 
             // The others sit *beside* the one you are in, not across the
             // toolbar from it — they are the same kind of thing, and reading
@@ -78,7 +88,14 @@ struct AgentDetailHeader: View {
                 activeID: agent.id,
                 launchTarget: launchTarget,
                 launchMenuOpen: $launchMenuOpen,
-                onSelect: { id in store.openDetail(id) }
+                highlightID: highlightID,
+                stripIDs: stripIDs,
+                deckNamespace: deckNamespace,
+                onSelect: { id in
+                    withAnimation(.smooth(duration: 0.36)) {
+                        store.openDetail(id)
+                    }
+                }
             )
 
             Spacer(minLength: 10)
@@ -133,6 +150,7 @@ struct AgentDetailHeader: View {
         .padding(.leading, 12)
         .padding(.trailing, 14)
         .frame(maxWidth: .infinity, minHeight: 58, maxHeight: 58)
+        .animation(.smooth(duration: 0.36), value: agent.id)
         // A card, not a bar. The hairline that used to run along the bottom was
         // there to separate this from the terminal it sat directly on top of;
         // there is a gap between them now, and a border does that job better
