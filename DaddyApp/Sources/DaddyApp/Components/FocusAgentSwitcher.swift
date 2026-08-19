@@ -1,4 +1,5 @@
 import SwiftUI
+import DaddyCore
 
 /// Fast switching inside terminal focus mode.
 ///
@@ -87,7 +88,10 @@ struct FocusAgentSwitcher: View {
     private var plusBubble: some View {
         let hovering = hoveredID == Self.plusID
 
-        return ProviderLaunchMenu(project: launchTarget, chromelessLabel: true) {
+        return RadialProviderMenu(
+            items: launchTarget.map { radialItems(for: $0) } ?? [],
+            onDismiss: {}
+        ) {
             Image(systemName: "plus")
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(hovering ? DaddyTheme.textPrimary : DaddyTheme.textSecondary)
@@ -98,8 +102,6 @@ struct FocusAgentSwitcher: View {
                 .overlay {
                     Circle().strokeBorder(Color.white.opacity(hovering ? 0.26 : 0.16), lineWidth: 1)
                 }
-                // The rim the bubbles carry, so an overlapping plus reads as
-                // depth rather than as two shapes bleeding into each other.
                 .background {
                     Circle()
                         .fill(DaddyTheme.bubbleRim)
@@ -114,6 +116,18 @@ struct FocusAgentSwitcher: View {
             hoveredID = isHovering ? Self.plusID : (hoveredID == Self.plusID ? nil : hoveredID)
         }
         .help(launchName.map { "Launch another agent in \($0)" } ?? "Launch another agent")
+    }
+
+    private func radialItems(for project: MockProject) -> [ProviderMenuItem] {
+        [AgentKind.claude, .codex, .cursor, .opencode].map { kind in
+            let installed = store.isInstalled(kind)
+            return ProviderMenuItem(
+                kind: kind,
+                isEnabled: installed
+            ) {
+                store.launchReal(kind, in: project)
+            }
+        }
     }
 
     private var launchName: String? { launchTarget?.name }

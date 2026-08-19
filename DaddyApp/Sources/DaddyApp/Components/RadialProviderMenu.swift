@@ -10,13 +10,14 @@ struct RadialProviderMenu<Label: View>: View {
     @ViewBuilder let label: () -> Label
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .center) {
             if isOpen {
-                Color.black.opacity(0.3)
+                Color.black.opacity(0.25)
                     .contentShape(Rectangle())
                     .ignoresSafeArea()
                     .onTapGesture { closeMenu() }
                     .transition(.opacity)
+                    .zIndex(5)
             }
 
             // Center button - the label wrapped in the toggle
@@ -26,47 +27,54 @@ struct RadialProviderMenu<Label: View>: View {
             .buttonStyle(.plain)
             .zIndex(10)
 
-            // Provider circles in compass positions
+            // Provider circles in compass positions - rendered as overlay to avoid clipping
             if isOpen {
                 ForEach(items, id: \.kind.rawValue) { item in
                     let isHovering = hoveredKind == item.kind
+                    let offset = compassOffset(for: item.kind)
 
                     Button(action: { selectProvider(item) }) {
-                        VStack(spacing: 6) {
-                            ProviderLogo.badge(for: item.kind, diameter: 28)
+                        VStack(spacing: 8) {
+                            ProviderLogo.mark(for: item.kind, diameter: 36)
 
                             Text(item.kind.rawValue.capitalized)
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(DaddyTheme.textSecondary)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(DaddyTheme.textPrimary)
                         }
-                        .frame(width: 56, height: 56)
+                        .frame(width: 100, height: 100)
                         .background {
-                            Circle().fill(
-                                Color.white.opacity(isHovering ? 0.14 : 0.08)
-                            )
+                            RoundedRectangle(cornerRadius: 50, style: .continuous)
+                                .fill(
+                                    Color.white.opacity(
+                                        isHovering ? 0.16 : 0.08
+                                    )
+                                )
+                                .blur(radius: 12)
                         }
                         .overlay {
-                            Circle().strokeBorder(
-                                Color.white.opacity(isHovering ? 0.24 : 0.14),
-                                lineWidth: 1
-                            )
+                            RoundedRectangle(cornerRadius: 50, style: .continuous)
+                                .strokeBorder(
+                                    Color.white.opacity(isHovering ? 0.32 : 0.16),
+                                    lineWidth: 1.5
+                                )
                         }
                         .shadow(
-                            color: Color.white.opacity(isHovering ? 0.2 : 0.08),
-                            radius: isHovering ? 12 : 6,
+                            color: Color.white.opacity(isHovering ? 0.25 : 0.1),
+                            radius: isHovering ? 16 : 8,
                             x: 0,
-                            y: isHovering ? 2 : 0
+                            y: isHovering ? 4 : 0
                         )
                     }
                     .buttonStyle(.plain)
                     .opacity(item.isEnabled ? 1 : 0.4)
                     .allowsHitTesting(item.isEnabled)
-                    .offset(compassOffset(for: item.kind))
-                    .scaleEffect(isHovering ? 1.1 : 1)
+                    .offset(offset)
+                    .scaleEffect(isHovering ? 1.08 : 1)
                     .onHover { hovering in
                         hoveredKind = hovering ? item.kind : nil
                     }
                     .transition(.scale.combined(with: .opacity))
+                    .zIndex(6)
                 }
             }
         }
@@ -86,7 +94,7 @@ struct RadialProviderMenu<Label: View>: View {
     }
 
     private func compassOffset(for kind: AgentKind) -> CGSize {
-        let distance: CGFloat = 90
+        let distance: CGFloat = 110
         switch kind {
         case .claude:
             return CGSize(width: 0, height: -distance)
