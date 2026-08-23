@@ -81,7 +81,7 @@ struct TerminalPane: View {
             if let pty = store.pty(for: agent), pty.isProcessRunning {
                 // Real pty: SwiftTerm renders it, including colour and any
                 // interactive prompts the agent draws.
-                TerminalSurface(pty: pty)
+                TerminalSurface(pty: pty, fontSize: store.terminalFontSize)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
             } else {

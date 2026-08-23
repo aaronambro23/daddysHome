@@ -8,12 +8,15 @@ import SwiftUI
 /// panel. Here the overlap plus a hard cap of `maxVisible` means the deck is the
 /// same width at three agents or thirty.
 ///
-/// Clicking a bubble selects that agent. It never changes the layout.
+/// Clicking a bubble selects that agent; double-clicking opens it. It never
+/// changes the layout.
 struct AgentBubbleRow: View {
     let agents: [MockAgent]
     let activeID: String?
     var bubbleSize: CGFloat = 30
     let onSelect: (String) -> Void
+    /// Double click. Defaults to selecting, for callers with nowhere to open to.
+    var onOpen: ((String) -> Void)?
 
     /// Past this the deck stops growing and the rest collapse into a `+N` pill.
     private let maxVisible = 7
@@ -64,6 +67,12 @@ struct AgentBubbleRow: View {
             isDimmed: !isActive,
             ringsAgainstBackdrop: true,
             onTap: { onSelect(agent.id) }
+        )
+        // Simultaneous, not `.onTapGesture`: the bubble is a `Button`, which
+        // takes the click first. The button still selects on the way past, so a
+        // double click reads as select-then-open.
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded { (onOpen ?? onSelect)(agent.id) }
         )
         .scaleEffect(isHovered ? 1.18 : 1)
         .offset(y: isHovered ? -6 : 0)

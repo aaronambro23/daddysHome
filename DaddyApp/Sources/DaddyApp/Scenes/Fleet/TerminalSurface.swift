@@ -29,6 +29,13 @@ struct TerminalSurface: NSViewRepresentable {
     /// True only for a plain shell; see `Coordinator.scheduleFirstRedraw`.
     var redrawsOnFirstAttach = false
 
+    /// Point size of the monospaced face. Owned by settings, not by the pane.
+    var fontSize: CGFloat = 11.5
+
+    private var terminalFont: NSFont {
+        NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+    }
+
     /// `DaddyTheme.terminalSurface` as AppKit sees it. Same `#0d111a`, so the
     /// emulator's ground and the SwiftUI pane behind it are one flat colour
     /// with no seam where the padding ends.
@@ -52,7 +59,7 @@ struct TerminalSurface: NSViewRepresentable {
     func makeNSView(context: Context) -> TerminalView {
         let view = DroppableTerminalView(
             frame: CGRect(x: 0, y: 0, width: 640, height: 480),
-            font: NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
+            font: terminalFont
         )
 
         view.terminalDelegate = context.coordinator
@@ -79,6 +86,57 @@ struct TerminalSurface: NSViewRepresentable {
         view.nativeForegroundColor = NSColor.white.withAlphaComponent(0.92)
         view.caretColor = NSColor.white.withAlphaComponent(0.75)
         view.allowMouseReporting = true
+
+        // One frame from the agent must land as one repaint, not two.
+        //
+        // Measured, from a 60fps capture of a Claude session being scrolled:
+        // every step arrived on screen as *two* paints, the top half and then
+        // the bottom half 50-67ms behind it, alternating for the whole gesture
+        // (top diff 20.8 / bottom 0.05, then top 1.3 / bottom 21.2, and so on
+        // for four straight seconds). Two halves of one frame, permanently out
+        // of phase at an effective 15-20fps. That is what "it nudges" and
+        // "reloading every inch it moves" actually were — not the agent being
+        // slow, and not corruption.
+        //
+        // The cause is SwiftTerm's partial-repaint optimisation. On Big Sur+
+        // AppKit redraws a layer-backed view in full whenever any part of it is
+        // invalidated, unless the layer opts into a preserved backing store —
+        // which is what `disableFullRedrawOnAnyChanges` does, stamping
+        // `layer.contentsFormat = .RGBA8Uint` in `viewWillDraw`. With it
+        // preserved, only the invalidated rows are repainted, so the picture is
+        // only ever as correct as the invalidation was. And the invalidation is
+        // computed in `updateDisplay` from `getUpdateRange()`, while the draw
+        // itself happens later in the runloop — our own flush feeds more rows
+        // in between, and those rows are live in the buffer but outside the
+        // rect, so they wait for the *next* tick. Hence the split, every time.
+        //
+        // Off, every repaint redraws the whole visible grid straight from the
+        // buffer, so it cannot be half a frame behind. It costs redrawing ~40
+        // rows of CoreText rather than a few; AppKit still coalesces to one
+        // draw per runloop pass, and SwiftTerm's own source notes AppKit sends
+        // full exposes most of the time anyway.
+        view.disableFullRedrawOnAnyChanges = false
+        // Six times the scrollback SwiftTerm ships with.
+        //
+        // `TerminalOptions.default.scrollback` is 500 lines, which is about a
+        // dozen screens in a pane this size — an agent that reads four files
+        // and explains itself can push its own first answer out of the buffer
+        // while you are still reading the last one. There is nowhere else to
+        // find it: the transcript only exists in the emulator, and
+        // `PTYProcess.recentOutput` keeps a 200-line tail for state detection,
+        // not for you.
+        //
+        // Set through `changeScrollback` rather than a `TerminalOptions` at
+        // construction, because it also writes `options.scrollback` — which is
+        // what `resetToInitialState` rebuilds the normal buffer from, and
+        // `rebindIfNeeded` calls that every time this surface is pointed at a
+        // different session. Passed as an option to the initializer instead, it
+        // would survive exactly until the first rebind.
+        //
+        // Costs nothing up front: the cap only raises `CircularList.maxLength`,
+        // and lines are still allocated as the child produces them. A session
+        // that actually fills all 3000 pays a few MB, and only that session.
+        view.changeScrollback(3000)
 
         // Option is a compose/AltGr layer, not Meta.
         //
@@ -108,6 +166,25 @@ struct TerminalSurface: NSViewRepresentable {
         // that just became active claims focus — the others are mounted, not
         // shown, and must not fight over first responder every update.
         context.coordinator.setActive(isActive, view: view)
+        context.coordinator.enableMetalIfNeeded(view)
+
+        // Self-heal, because the cost of this being wrong is a session you have
+        // to throw away. Nothing in the app leaves mouse reporting off — the
+        // scroll monitor's window is one synchronous call — so observing it off
+        // here means something got away from us, and the honest response is to
+        // put it back rather than let the pane stay quietly broken.
+        if !view.allowMouseReporting {
+            view.allowMouseReporting = true
+        }
+
+        // Guarded, because SwiftTerm's `font` setter rebuilds the font set,
+        // resets every cached glyph run, drops the selection and reflows the
+        // grid — which is a TIOCSWINSZ at the far end. `updateNSView` runs on
+        // any observed change, so an unguarded assignment would do all of that
+        // every time the agent's state badge ticked.
+        if view.font.pointSize != fontSize {
+            view.font = terminalFont
+        }
     }
 
     static func dismantleNSView(_ view: TerminalView, coordinator: Coordinator) {
@@ -125,6 +202,7 @@ struct TerminalSurface: NSViewRepresentable {
         @MainActor private var isAttached = false
         @MainActor private var controlCMonitor: Any?
         @MainActor private var scrollMonitor: Any?
+        @MainActor private var mouseUpMonitor: Any?
 
         /// Output accumulated since the last flush. Written from the pty queue,
         /// drained on main.
@@ -148,6 +226,79 @@ struct TerminalSurface: NSViewRepresentable {
         @MainActor private var lastReportedSize: (cols: Int, rows: Int)?
         @MainActor private var pendingResize: DispatchWorkItem?
 
+        /// Bytes of a synchronized-output frame the agent has opened and not
+        /// yet closed. See `flushPending`.
+        @MainActor private var metalEnabled = false
+        @MainActor private var heldFrame = ""
+        @MainActor private var heldFrameRelease: DispatchWorkItem?
+
+        private static let frameOpen = "\u{1b}[?2026h"
+        private static let frameClose = "\u{1b}[?2026l"
+        private static let heldFrameDeadline: TimeInterval = 0.25
+        private static let heldFrameLimit = 1 << 20
+
+        /// Splits output at the end of the last *closed* frame.
+        ///
+        /// Returns what is safe to draw and what must wait. With no frame open
+        /// at the end everything is safe, which is the ordinary case and the
+        /// one that must stay cheap.
+        static func splitAtFrameBoundary(_ s: String) -> (ready: String, unclosed: String) {
+            var depth = 0
+            var lastClose: String.Index?
+            var cursor = s.startIndex
+
+            while cursor < s.endIndex {
+                let open = s.range(of: frameOpen, range: cursor..<s.endIndex)
+                let close = s.range(of: frameClose, range: cursor..<s.endIndex)
+
+                switch (open, close) {
+                case (nil, nil):
+                    cursor = s.endIndex
+                case (let o?, nil):
+                    depth += 1
+                    cursor = o.upperBound
+                case (nil, let c?):
+                    depth = max(0, depth - 1)
+                    lastClose = c.upperBound
+                    cursor = c.upperBound
+                case (let o?, let c?):
+                    if o.lowerBound < c.lowerBound {
+                        depth += 1
+                        cursor = o.upperBound
+                    } else {
+                        depth = max(0, depth - 1)
+                        lastClose = c.upperBound
+                        cursor = c.upperBound
+                    }
+                }
+            }
+
+            guard depth > 0 else { return (s, "") }
+            guard let lastClose else { return ("", s) }
+            return (String(s[..<lastClose]), String(s[lastClose...]))
+        }
+
+        /// Draws an unclosed frame anyway, once it has waited too long.
+        @MainActor
+        private func scheduleHeldFrameRelease(_ view: TerminalView) {
+            guard heldFrameRelease == nil else { return }
+            let work = DispatchWorkItem { [weak self, weak view] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.heldFrameRelease = nil
+                    guard let view, !self.heldFrame.isEmpty else { return }
+                    let overdue = self.heldFrame
+                    self.heldFrame = ""
+                    view.feed(text: overdue)
+                }
+            }
+            heldFrameRelease = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + Self.heldFrameDeadline,
+                execute: work
+            )
+        }
+
         private let redrawsOnFirstAttach: Bool
 
         /// Whether this surface is the one on screen, and therefore the one
@@ -169,6 +320,7 @@ struct TerminalSurface: NSViewRepresentable {
             self.view = view
             installControlCMonitor(for: view)
             installScrollMonitor(for: view)
+            installMouseUpMonitor(for: view)
             guard !isAttached else { return }
             isAttached = true
 
@@ -207,6 +359,15 @@ struct TerminalSurface: NSViewRepresentable {
             scheduleFirstRedraw()
 
             if isActive { takeKeyboardFocus(view) }
+
+            // Deferred for the same reason focus is: there is no window yet
+            // when the view is first made, and Metal needs one.
+            DispatchQueue.main.async { [weak self, weak view] in
+                MainActor.assumeIsolated {
+                    guard let self, let view else { return }
+                    self.enableMetalRenderer(view)
+                }
+            }
         }
 
         /// One Ctrl-L, once, to a child that has only just started.
@@ -243,6 +404,34 @@ struct TerminalSurface: NSViewRepresentable {
             guard active != isActive else { return }
             isActive = active
             if active { takeKeyboardFocus(view) }
+        }
+
+        /// Draw the grid on the GPU instead of rasterising it with CoreText.
+        ///
+        /// The frame-gating fix made every paint a whole, coherent frame — but
+        /// measured on the capture, a whole-screen repaint costs two to four
+        /// vsync intervals (gaps of 33/50/67ms, never 16), while a paint that
+        /// only touches a line or two holds a clean 60fps. That is the shape of
+        /// a CPU-bound rasteriser: `buildAttributedString` runs per row, per
+        /// paint, with no cache, so ~50 rows of CoreText blows a 16.67ms budget
+        /// and the scroll settles at ~18fps.
+        ///
+        /// SwiftTerm's Metal renderer rasterises glyphs once into a texture
+        /// atlas and draws cells as GPU quads, which is what makes a full-grid
+        /// repaint affordable at all. Failure is not interesting — the
+        /// CoreGraphics path stays exactly as it was — so it is not propagated.
+        @MainActor
+        func enableMetalIfNeeded(_ view: TerminalView) { enableMetalRenderer(view) }
+
+        @MainActor
+        private func enableMetalRenderer(_ view: TerminalView) {
+            guard !metalEnabled, view.window != nil else { return }
+            do {
+                try view.setUseMetal(true)
+                metalEnabled = true
+            } catch {
+                metalEnabled = false
+            }
         }
 
         /// Puts the caret in the terminal, since that is where you talk to the
@@ -306,6 +495,53 @@ struct TerminalSurface: NSViewRepresentable {
 
             guard !text.isEmpty, let view else { return }
 
+            // Never hand the emulator half a frame.
+            //
+            // Photographed, at 60fps: a row reading "…adipiscing p" followed by
+            // "i ut tincidunt orci quis…" — the left of the row rewritten and
+            // the right still holding the tail of what used to be there, then
+            // correct again 33ms later. That is not stale pixels and not a wrap
+            // bug. It is the agent's redraw caught in the middle, painted, and
+            // finished afterwards.
+            //
+            // Claude Code brackets every redraw in DECSET 2026 precisely so a
+            // terminal can avoid this (confirmed in the 2.1.241 binary, which
+            // emits `[?2026h` and `[?2026l`), and SwiftTerm does suppress its
+            // own painting while a frame is open. But suppression is a race:
+            // every paint request resolves at the end of the runloop, and any
+            // feed landing in between reopens a frame behind its back.
+            //
+            // So the frame boundary is enforced one level lower, where it is
+            // not a race — the bytes. Everything up to the last *closed* frame
+            // is fed; an unclosed one is held until its `[?2026l` arrives. The
+            // emulator therefore never holds a partially drawn frame at all, so
+            // no paint from any path can show one.
+            let combined = heldFrame + text
+            heldFrame = ""
+            var (ready, unclosed) = Self.splitAtFrameBoundary(combined)
+
+            if unclosed.isEmpty {
+                heldFrameRelease?.cancel()
+                heldFrameRelease = nil
+            } else if unclosed.utf8.count > Self.heldFrameLimit {
+                // Too big to be a frame any more — something is streaming
+                // without ever closing it. Draw it rather than hoard it, in
+                // order, as part of this same feed.
+                ready += unclosed
+                unclosed = ""
+                heldFrameRelease?.cancel()
+                heldFrameRelease = nil
+            } else {
+                // A frame that never closes must not freeze the pane. SwiftTerm's
+                // own escape hatch is a full second; a quarter of that is still
+                // far longer than any real frame takes to arrive and short enough
+                // to read as a hitch rather than a hang.
+                heldFrame = unclosed
+                scheduleHeldFrameRelease(view)
+            }
+
+            guard !ready.isEmpty else { return }
+
             // Through the **view**, never `view.getTerminal().feed(...)`.
             //
             // `TerminalView.feed(text:)` is `feedPrepare()` → `terminal.feed`
@@ -330,7 +566,7 @@ struct TerminalSurface: NSViewRepresentable {
             // paints are dropped and rows keep stale pixels.
             //
             // So there is no repaint code here any more. There should not be.
-            view.feed(text: text)
+            view.feed(text: ready)
         }
 
         @MainActor
@@ -347,6 +583,10 @@ struct TerminalSurface: NSViewRepresentable {
                 pty.removeChunkCallback(chunkToken)
                 self.chunkToken = nil
             }
+
+            heldFrame = ""
+            heldFrameRelease?.cancel()
+            heldFrameRelease = nil
 
             pty = newPTY
             isAttached = false
@@ -368,6 +608,9 @@ struct TerminalSurface: NSViewRepresentable {
 
             pendingResize?.cancel()
             pendingResize = nil
+            heldFrameRelease?.cancel()
+            heldFrameRelease = nil
+            heldFrame = ""
 
             view = nil
             if let controlCMonitor {
@@ -377,6 +620,10 @@ struct TerminalSurface: NSViewRepresentable {
             if let scrollMonitor {
                 NSEvent.removeMonitor(scrollMonitor)
                 self.scrollMonitor = nil
+            }
+            if let mouseUpMonitor {
+                NSEvent.removeMonitor(mouseUpMonitor)
+                self.mouseUpMonitor = nil
             }
         }
 
@@ -400,6 +647,39 @@ struct TerminalSurface: NSViewRepresentable {
         /// `scrollWheel` is `public`, not `open`. The flag is put back on the
         /// next turn of the runloop, by which time this one event has been
         /// dispatched.
+        /// Puts mouse reporting back after any drag, wherever it ended.
+        ///
+        /// A selection drag that leaves the pane is the one gesture that still
+        /// reproduces the stuck state, and the difference is not the selection
+        /// — it is where the mouse was when the buttons came up. AppKit routes
+        /// a drag's events to the view that received the press, but only while
+        /// it keeps routing them: a release over another window, another app,
+        /// or off the screen edge can land somewhere this surface never hears
+        /// about, and any state that was supposed to be restored on the way out
+        /// simply is not.
+        ///
+        /// So the restore is repeated somewhere it cannot be missed. This is a
+        /// repair, not a policy — nothing in the app leaves mouse reporting
+        /// off, so if this ever fires, something got away from us. It says so
+        /// in debug builds, because "the pane went slow an hour ago" is not a
+        /// bug report anyone can act on.
+        @MainActor
+        private func installMouseUpMonitor(for view: TerminalView) {
+            guard mouseUpMonitor == nil else { return }
+            mouseUpMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseUp, .rightMouseUp, .otherMouseUp]
+            ) { [weak view] event in
+                guard let view, event.window === view.window else { return event }
+                if !view.allowMouseReporting {
+                    view.allowMouseReporting = true
+                    #if DEBUG
+                    print("Daddy: repaired stuck allowMouseReporting after a drag")
+                    #endif
+                }
+                return event
+            }
+        }
+
         @MainActor
         private func installScrollMonitor(for view: TerminalView) {
             guard scrollMonitor == nil else { return }
@@ -413,9 +693,32 @@ struct TerminalSurface: NSViewRepresentable {
                       !view.getTerminal().isCurrentBufferAlternate
                 else { return event }
 
+                // Dispatched by hand, so the flag is restored on the same call
+                // stack that cleared it.
+                //
+                // This used to clear the flag, return the event for AppKit to
+                // deliver, and restore it on a later turn of the runloop. That
+                // restore is a promise made to a global: miss it once — the
+                // block lost, reordered behind another that reads the flag,
+                // the surface torn down mid-flight — and mouse reporting is off
+                // for the rest of the session, with nothing anywhere to turn it
+                // back on. Its symptoms do not look like a scroll bug at all,
+                // which is what makes it expensive: `feedPrepare` and
+                // `linefeed` both clear the selection only `if
+                // allowMouseReporting`, so a highlight suddenly survives output
+                // forever, and `scrollWheel` stops reporting the wheel and
+                // falls into its alternate-screen branch, which sends arrow
+                // keys instead — a slower, coarser scroll that no amount of
+                // clicking recovers.
+                //
+                // Calling `scrollWheel` directly makes the window in which the
+                // flag is false exactly one synchronous call long. Nothing can
+                // observe it, and there is no restore left to lose. The event
+                // is swallowed afterwards because it has already been handled.
                 view.allowMouseReporting = false
-                DispatchQueue.main.async { view.allowMouseReporting = true }
-                return event
+                view.scrollWheel(with: event)
+                view.allowMouseReporting = true
+                return nil
             }
         }
 

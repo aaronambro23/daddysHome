@@ -46,12 +46,31 @@ final class MockStore {
 
 
     // Settings
-    var defaultModel: String = "opus-5"
+    //
+    // Every one of these reaches something. `defaultModel`, `launchAtLogin`,
+    // `notifyOnRateLimit` and `notifyOnError` used to sit here too, wired to
+    // controls in the settings drawer and to nothing else — a picker that
+    // moved and changed no behavior is worse than no picker.
+
+    /// Handed to `SessionManager` at launch; decides the CLI's approval flags.
     var approvalPolicy: ApprovalPolicy = .safeAuto
+
+    /// Posts a notification when a background session wants input.
     var notifyOnReady: Bool = true
-    var notifyOnRateLimit: Bool = true
-    var notifyOnError: Bool = true
-    var launchAtLogin: Bool = false
+
+    /// Point size for both terminals. A change is a real font reset and a
+    /// TIOCSWINSZ at the far end, so surfaces apply it only when it moves.
+    var terminalFontSize: Double = 11.5
+
+    static let terminalFontRange: ClosedRange<Double> = 9...20
+
+    func nudgeTerminalFont(by delta: Double) {
+        let next = terminalFontSize + delta
+        terminalFontSize = min(
+            Self.terminalFontRange.upperBound,
+            max(Self.terminalFontRange.lowerBound, next)
+        )
+    }
 
     private var tickCount: Int = 0
 
@@ -213,8 +232,20 @@ final class MockStore {
         return live.max { $0.lastOutputAt < $1.lastOutputAt }
     }
 
-    /// Agent cards are navigation, not a two-stage preview. One click selects
-    /// the session and enters its terminal focus workspace.
+    /// Point the docked terminal at a session without leaving the fleet.
+    ///
+    /// A card click used to call `openDetail` directly, so glancing at another
+    /// agent's output cost you the whole grid and a trip back. Selecting is now
+    /// the cheap half of that gesture and `openDetail` is the deliberate one:
+    /// double click, ⌘→, or the tile menu. Finished agents are selectable —
+    /// their output is still worth reading — but only live ones can be opened.
+    func select(agent id: String) {
+        guard agents.contains(where: { $0.id == id }) else { return }
+        selectedAgentID = id
+    }
+
+    /// Enter the focus workspace for a session. Deliberate by design; see
+    /// `select(agent:)` for the one-click half.
     func openDetail(_ id: String) {
         guard agents.contains(where: { $0.id == id && $0.isLive }) else { return }
 

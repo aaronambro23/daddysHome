@@ -17,9 +17,25 @@ struct UtilityDrawer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 9) {
-                Image(systemName: panel == .hex ? "waveform" : "gearshape")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(DaddyTheme.textSecondary)
+                // The transcripts panel is *inside* settings, reached by a row
+                // with a chevron on it, so it needs the way back out. The icon
+                // slot is where a back button belongs.
+                if panel == .hex {
+                    Button { onSwitchPanel(.settings) } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(DaddyTheme.textSecondary)
+                            .frame(width: 26, height: 26)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .insetSurface(cornerRadius: 13)
+                    .help("Back to settings")
+                } else {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(DaddyTheme.textSecondary)
+                }
 
                 Text(panel == .hex ? "TRANSCRIPTS" : "SETTINGS")
                     .font(.system(size: 12, weight: .bold))
@@ -146,13 +162,82 @@ private struct SettingsUtilityPanel: View {
 
     let onOpenHEX: () -> Void
 
-    private static let claudeModels = ["opus-5", "sonnet-5", "haiku-4-5"]
+    /// Every shortcut that does something Daddy owns, in one place. The app
+    /// binds Command chords and Control chords; everything else — Escape
+    /// included — belongs to the agent in the terminal, which is worth saying
+    /// out loud, because Escape used to leave the focus view.
+    private static let shortcuts: [(String, String)] = [
+        ("⌘←", "Back to the fleet"),
+        ("⌘→", "Open the selected session"),
+        ("⌃⇥", "Cycle sessions in focus"),
+        ("⌃Q", "Stop or dismiss the session"),
+        ("⎋", "Goes to the agent, not to Daddy"),
+    ]
 
     var body: some View {
         @Bindable var store = store
 
         return ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                section("TERMINAL") {
+                    setting(
+                        "Font size",
+                        "Both terminals. Resizes the grid the agent draws into."
+                    ) {
+                        fontSizeStepper(store: store)
+                    }
+                }
+
+                section("AGENTS") {
+                    setting(
+                        "Approval policy",
+                        store.approvalPolicy == .safeAuto
+                            ? "Pause before writes outside the work unit."
+                            : "Run without approval pauses."
+                    ) {
+                        Picker("", selection: $store.approvalPolicy) {
+                            Text("safe-auto").tag(ApprovalPolicy.safeAuto)
+                            Text("full-bypass").tag(ApprovalPolicy.fullBypass)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+
+                    toggleSetting(
+                        "Notify when ready",
+                        "Only while Daddy is in the background.",
+                        binding: $store.notifyOnReady
+                    )
+                }
+
+                section("SHORTCUTS") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Self.shortcuts, id: \.0) { chord, meaning in
+                            HStack(spacing: 11) {
+                                Text(chord)
+                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(DaddyTheme.textPrimary)
+                                    .frame(width: 34, height: 22)
+                                    .insetSurface(cornerRadius: 7)
+
+                                Text(meaning)
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(DaddyTheme.textSecondary)
+
+                                Spacer(minLength: 0)
+                            }
+                        }
+                    }
+                }
+
+                section("STATE") {
+                    HStack(spacing: 10) {
+                        stateTile("\(store.projects.count)", "projects")
+                        stateTile("\(store.liveAgentCount)", "live")
+                        stateTile("session", "storage")
+                    }
+                }
+
                 section("UTILITIES") {
                     Button(action: onOpenHEX) {
                         HStack(spacing: 10) {
@@ -173,63 +258,55 @@ private struct SettingsUtilityPanel: View {
                     }
                     .buttonStyle(.plain)
                 }
-
-                section("AGENT DEFAULTS") {
-                    setting("Default Claude model", "Used for new Claude sessions.") {
-                        Picker("", selection: $store.defaultModel) {
-                            ForEach(Self.claudeModels, id: \.self) { Text($0).tag($0) }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                    }
-
-                    setting(
-                        "Approval policy",
-                        store.approvalPolicy == .safeAuto
-                            ? "Pause before writes outside the work unit."
-                            : "Run without approval pauses."
-                    ) {
-                        Picker("", selection: $store.approvalPolicy) {
-                            Text("safe-auto").tag(ApprovalPolicy.safeAuto)
-                            Text("full-bypass").tag(ApprovalPolicy.fullBypass)
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                    }
-
-                    toggleSetting(
-                        "Launch at login",
-                        "Keep Daddy available after login.",
-                        binding: $store.launchAtLogin
-                    )
-                }
-
-                section("NOTIFICATIONS") {
-                    toggleSetting(
-                        "Agent ready",
-                        "Notify when a session wants input.",
-                        binding: $store.notifyOnReady
-                    )
-                    toggleSetting(
-                        "Rate limited",
-                        "Notify when a provider blocks progress.",
-                        binding: $store.notifyOnRateLimit
-                    )
-                    toggleSetting(
-                        "Session error",
-                        "Notify when an adapter exits unexpectedly.",
-                        binding: $store.notifyOnError
-                    )
-                }
-
-                section("CURRENT STATE") {
-                    MetricRow(label: "projects", value: "\(store.projects.count)")
-                    MetricRow(label: "sessions", value: "\(store.liveAgentCount) live")
-                    MetricRow(label: "storage", value: "session-only")
-                }
             }
             .padding(16)
         }
+    }
+
+    /// Numbers first, labels under them — three tiles read at a glance where
+    /// three `label value` rows had to be read one at a time.
+    private func stateTile(_ value: String, _ label: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(value)
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .foregroundStyle(DaddyTheme.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            Text(label)
+                .font(.system(size: 9, weight: .medium))
+                .tracking(0.5)
+                .foregroundStyle(DaddyTheme.textMuted)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .insetSurface(cornerRadius: 12)
+    }
+
+    private func fontSizeStepper(store: MockStore) -> some View {
+        HStack(spacing: 0) {
+            stepperButton("minus") { store.nudgeTerminalFont(by: -1) }
+
+            Text(store.terminalFontSize.formatted(.number.precision(.fractionLength(0...1))))
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(DaddyTheme.textPrimary)
+                .frame(width: 46)
+
+            stepperButton("plus") { store.nudgeTerminalFont(by: 1) }
+        }
+        .insetSurface(cornerRadius: 11)
+    }
+
+    private func stepperButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(DaddyTheme.textSecondary)
+                .frame(width: 30, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func section<Content: View>(

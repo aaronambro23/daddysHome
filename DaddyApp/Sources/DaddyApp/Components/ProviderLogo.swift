@@ -9,12 +9,19 @@ import DaddyCore
 /// product. A logo is recognised at a glance, which is the whole point of the
 /// bubble.
 ///
-/// Loaded through `Bundle.module`, so the files live in
-/// `Sources/DaddyApp/Resources/` and SwiftPM puts them in a resource bundle. The
-/// lookup is cached and every call site has a monogram fallback, because a
-/// missing resource bundle must degrade to the old letter rather than to an
-/// empty circle. (`bundle.sh` copies that bundle into the .app — if the letters
-/// come back after a build, that copy is what broke.)
+/// The files live in `Sources/DaddyApp/Resources/` and SwiftPM puts them in a
+/// resource bundle next to the built binary. The lookup is cached and every call
+/// site has a monogram fallback, because a missing resource bundle must degrade
+/// to the old letter rather than to an empty circle. (`bundle.sh` copies that
+/// bundle into the .app — if the letters come back after a build, that copy is
+/// what broke.)
+///
+/// `Bundle.module` is deliberately *not* used. For an executable target SwiftPM
+/// generates an accessor that looks only at `Bundle.main.bundleURL` — which for
+/// an .app is the .app directory itself, not `Contents/Resources` — and then at
+/// a hardcoded *debug* `.build` path, and calls `fatalError` when neither hits.
+/// Inside a release .app that trap fired on the first logo draw and took the
+/// whole app down at launch, defeating the fallback below.
 enum ProviderLogo {
     /// Filenames as they are on disk, casing included — `codexlogo` really is
     /// spelled without the capital.
@@ -31,13 +38,45 @@ enum ProviderLogo {
     private static let cache: [AgentKind: Image] = {
         var loaded: [AgentKind: Image] = [:]
         for (kind, name) in filenames {
-            guard let url = Bundle.module.url(forResource: name, withExtension: "png"),
+            guard let url = url(forResource: name),
                   let image = NSImage(contentsOf: url)
             else { continue }
             loaded[kind] = Image(nsImage: image)
         }
         return loaded
     }()
+
+    /// Every place the resource bundle can legitimately be, in the order we
+    /// prefer them. Returning `nil` rather than trapping is the whole point.
+    ///
+    /// - `Contents/Resources/…` — the bundled .app, as `bundle.sh` assembles it.
+    /// - `<executable dir>/…` — a bare `swift run` / `.build/<config>/DaddyApp`.
+    /// - loose in `Contents/Resources` — a flattened copy, belt and braces.
+    private static let searchRoots: [URL] = {
+        let bundleName = "DaddyApp_DaddyApp.bundle"
+        var roots: [URL] = []
+        if let resources = Bundle.main.resourceURL {
+            roots.append(resources.appendingPathComponent(bundleName))
+            roots.append(resources)
+        }
+        roots.append(Bundle.main.bundleURL.appendingPathComponent(bundleName))
+        roots.append(Bundle.main.bundleURL)
+        return roots
+    }()
+
+    private static func url(forResource name: String) -> URL? {
+        for root in searchRoots {
+            // SwiftPM's macOS resource bundles are flat, but a bundle that has
+            // been through a copy step may have picked up the wrapped layout.
+            for candidate in [
+                root.appendingPathComponent("\(name).png"),
+                root.appendingPathComponent("Contents/Resources/\(name).png"),
+            ] where FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return nil
+    }
 
     static func image(for kind: AgentKind) -> Image? {
         cache[kind]

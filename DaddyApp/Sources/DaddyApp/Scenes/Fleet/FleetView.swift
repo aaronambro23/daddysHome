@@ -77,36 +77,48 @@ struct FleetView: View {
 
     private var isDetail: Bool { store.detailAgent != nil }
 
-    /// Consistent gap at the top.
-    private var topInset: CGFloat { gap }
-
     var body: some View {
         GeometryReader { geo in
             let sidebarWidth = sidebarExpanded ? sidebarWide : sidebarNarrow
 
-            // With an agent focused the rail *floats* over the content instead
-            // of pushing it.
+            // An open rail pushes focus mode aside — but by *translation*, not
+            // by resizing it.
             //
-            // Pushing would mean the terminal resizes every time the pointer
-            // brushes the left edge — and a terminal resize is a TIOCSWINSZ, a
-            // SIGWINCH, and a full TUI reflow at the far end. Hovering a
-            // sidebar must not make the agent redraw itself. On the dashboard
-            // it still pushes, because tiles reflowing is free.
-            let contentX = (isDetail ? sidebarNarrow : sidebarWidth) + gap
-            let contentWidth = max(0, geo.size.width - contentX)
+            // The rail used to float over the terminal here, because pushing
+            // meant the terminal resized every time the pointer brushed the
+            // left edge, and a terminal resize is a TIOCSWINSZ, a SIGWINCH and
+            // a full TUI reflow at the far end. It also meant the rail covered
+            // the left of the transcript, which is where the text is.
+            //
+            // So focus lays out against the *narrow* rail and the whole column
+            // slides right by the difference when the rail opens. The agent
+            // pane keeps its width to the pixel — no reflow, ever — and the
+            // room it moves into is made by parking your own shell offscreen
+            // for as long as the rail is open.
+            let layoutX = (isDetail ? sidebarNarrow : sidebarWidth) + gap
+            let contentWidth = max(0, geo.size.width - layoutX)
+            let railPush = isDetail && sidebarExpanded ? sidebarWide - sidebarNarrow : 0
+            let contentX = layoutX + railPush
             let terminal = terminalFrame(in: geo.size, contentX: contentX, contentWidth: contentWidth)
+            // Focus keeps its own shell only while the rail is out of the way.
+            let shellVisible = isDetail && !sidebarExpanded
 
             ZStack(alignment: .topLeading) {
                 middleColumn(
-                    width: isDetail ? contentWidth : max(0, contentWidth - terminalDockedWidth - gap),
+                    // Focus: the toolbar spans the content area it was laid out
+                    // for, minus whatever the open rail pushed it by, so its
+                    // right edge stays on the window rather than sliding off.
+                    width: isDetail
+                        ? max(0, contentWidth - railPush)
+                        : max(0, contentWidth - terminalDockedWidth - gap),
                     height: isDetail ? detailToolbarHeight : geo.size.height
                 )
-                // Dashboard: same rect as the rail and docked OUTPUT — RootView
-                // already insets the fleet 18pt. The extra `topInset` offset was
-                // 023 leaving a 16pt shift on a full-height column, which ran
-                // the AGENTS panel off both edges. Focus toolbar still sits on
-                // `topInset` so the gap above it matches the gap below it.
-                .offset(x: contentX, y: isDetail ? topInset : 0)
+                // Same top edge as the rail and the docked OUTPUT column —
+                // RootView already insets the fleet 18pt, and that inset is the
+                // gap. The focus toolbar used to carry an extra 16pt here,
+                // which is what left it sitting visibly below the top of the
+                // rail beside it.
+                .offset(x: contentX)
 
                 // The one and only agent terminal. Only its rectangle changes.
                 TerminalPane(isFocused: isDetail)
@@ -124,19 +136,23 @@ struct FleetView: View {
                 // terminal size any shell should be asked to lay out for.
                 ShellPane(project: store.selectedProject)
                     .frame(width: shellWidth(for: contentWidth), height: terminal.height)
+                    // Offscreen on the fleet, and offscreen again while an open
+                    // rail is borrowing its space. Its width never changes, so
+                    // it comes back to the same shell it left.
                     .offset(
-                        x: isDetail ? terminal.maxX + gap : geo.size.width,
+                        x: shellVisible ? terminal.maxX + gap : geo.size.width,
                         y: terminal.minY
                     )
                     // Keep the native terminal alive at a real size for
                     // scrollback, but do not let its border or renderer bleed
                     // past the Fleet's right edge while it is parked offscreen.
-                    .opacity(isDetail ? 1 : 0)
-                    .allowsHitTesting(isDetail)
-                    .accessibilityHidden(!isDetail)
+                    .opacity(shellVisible ? 1 : 0)
+                    .allowsHitTesting(shellVisible)
+                    .accessibilityHidden(!shellVisible)
 
-                // Last, so an expanded rail draws over the focused terminal
-                // rather than shoving it sideways.
+                // Last, so the rail owns its edge outright: nothing can draw
+                // over it mid-animation, while the column it displaces slides
+                // out from under it.
                 WorkspaceRail(
                     expanded: $sidebarExpanded,
                     hoverExpansionEnabled: sidebarHoverEnabled
@@ -195,7 +211,7 @@ struct FleetView: View {
         if isDetail {
             // Below the toolbar, with the same gap under it that separates the
             // two terminals from each other.
-            let top = topInset + detailToolbarHeight + gap
+            let top = detailToolbarHeight + gap
             return CGRect(
                 x: contentX,
                 y: top,
@@ -296,17 +312,38 @@ struct FleetView: View {
         }
     }
 
-    /// Escape and Command-[ back out of whatever is open, innermost first.
+    /// Command-[ and Command-Left back out of whatever is open, innermost first.
     /// Ctrl+Tab walks focus sessions; arrows pick a compass slot while it is open.
+    ///
+    /// Escape dismisses Daddy's own overlays and nothing else. It deliberately
+    /// does *not* leave the focus view: inside the pty, Escape belongs to the
+    /// agent CLI, where it cancels a running generation and steps back through
+    /// inline menus (`/model` → model → thinking effort). Leaving on Escape
+    /// meant backing out of one of those menus threw away the whole view.
+    /// The replacement is a Command chord because macOS terminals never
+    /// transmit Command to the pty, so no CLI can ever see it — no timers, no
+    /// buffered first keystroke, no per-provider special-casing.
     private func installKeyboardMonitor() {
         guard keyboardMonitor == nil else { return }
         keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if handleFocusShortcut(event) { return nil }
 
-            let isEscape = event.keyCode == 53
-            let isCommandLeftBracket = event.modifierFlags.contains(.command)
-                && event.charactersIgnoringModifiers == "["
-            guard isEscape || isCommandLeftBracket else { return event }
+            let chords = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            // Modified escapes (Option-Escape is Meta-Escape) stay the pty's.
+            let isEscape = event.keyCode == 53 && chords.isEmpty
+            let isCommandBack = chords == [.command]
+                && (event.charactersIgnoringModifiers == "[" || event.keyCode == 123)
+            let isCommandForward = chords == [.command] && event.keyCode == 124
+
+            // ⌘→ is ⌘←'s mirror: into the selected session's focus view, from
+            // the fleet only. Inside focus there is nothing further right to go.
+            if isCommandForward, !providerLaunchOpen, store.detailAgent == nil {
+                guard let id = store.selectedAgentID else { return event }
+                withAnimation(.smooth(duration: 0.2)) { store.openDetail(id) }
+                return nil
+            }
+
+            guard isEscape || isCommandBack else { return event }
 
             if providerLaunchOpen {
                 closeProviderLaunch()
@@ -318,7 +355,9 @@ struct FleetView: View {
                 withTransaction(transaction) { progressPanelOpen = false }
                 return nil
             }
-            if store.detailAgent != nil {
+            // Escape stops here — with no overlay of ours open it is the
+            // agent's key, so it falls through to the terminal untouched.
+            if isCommandBack, store.detailAgent != nil {
                 closeDetail()
                 return nil
             }

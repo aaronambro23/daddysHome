@@ -184,7 +184,8 @@ struct ShellPane: View {
                             isActive: isActive,
                             // The one place that sends Ctrl-L to fix a prompt
                             // printed before the pane's real width was known.
-                            redrawsOnFirstAttach: true
+                            redrawsOnFirstAttach: true,
+                            fontSize: store.terminalFontSize
                         )
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)

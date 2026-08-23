@@ -43,7 +43,7 @@ struct AgentDetailHeader: View {
             .onHover { backHovering = $0 }
             .animation(.easeOut(duration: 0.14), value: backHovering)
             .keyboardShortcut("[", modifiers: .command)
-            .help("Back to Fleet (⌘[ or Esc)")
+            .help("Back to Fleet (⌘[ or ⌘←)")
 
             CompactAgentIcon(
                 agent: agent,

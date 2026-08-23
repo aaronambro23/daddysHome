@@ -26,7 +26,7 @@ struct ProjectsSection: View {
                         sessionCount: store.agentCount(for: project.id),
                         hasChildren: !children.isEmpty,
                         isExpanded: isTreeExpanded,
-                        onDisclosure: { toggleTree(project.id) }
+                        onDisclosure: { collapseTree(project.id) }
                     ) {
                         // The row is the disclosure. Tapping a project opened it
                         // and nothing else closed it again, so the only way back
@@ -75,6 +75,13 @@ struct ProjectsSection: View {
             } else {
                 expandedProjectIDs.insert(projectID)
             }
+        }
+    }
+
+    private func collapseTree(_ projectID: String) {
+        guard expandedProjectIDs.contains(projectID) else { return }
+        withAnimation(.smooth(duration: 0.22)) {
+            _ = expandedProjectIDs.remove(projectID)
         }
     }
 }

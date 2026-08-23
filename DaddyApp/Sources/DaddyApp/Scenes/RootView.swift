@@ -36,7 +36,11 @@ struct RootView: View {
                         .padding(.horizontal, 18)
                         .padding(.vertical, 18)
 
-                    if let utilityPanel, !isAgentFocusMode {
+                    // Focus is not a mode: the drawer opens over the terminal
+                    // the same way it opens over the grid. It used to be
+                    // suppressed here, which meant the settings button in focus
+                    // set the state and rendered nothing at all.
+                    if let utilityPanel {
                         Color.black.opacity(0.22)
                             .contentShape(Rectangle())
                             .onTapGesture { closeUtilityPanel() }
@@ -55,29 +59,20 @@ struct RootView: View {
                     }
                 }
             }
-            .overlay(alignment: .topTrailing) {
-                Button {
-                    toggleUtilityPanel(.settings)
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(DaddyTheme.textSecondary)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .opacity(0.6)
-                .padding(.top, 18)
-                .padding(.trailing, 18)
-                .help("Settings")
-                .zIndex(1)
+            // In the titlebar, not over the content.
+            //
+            // As a `.topTrailing` overlay it landed on the top-right corner of
+            // whatever panel was below it — in focus that is the toolbar, so it
+            // sat on the kill button. The window's top strip is the only place
+            // in the app that belongs to no panel, and reaching it means
+            // `TitlebarAccessory`; content drawn under a transparent titlebar
+            // does not receive clicks.
+            TitlebarAccessory(size: CGSize(width: 44, height: 28)) {
+                settingsButton
             }
-
+            .frame(width: 0, height: 0)
         }
         .preferredColorScheme(.dark)
-        .onChange(of: store.detailAgentID) { _, detailID in
-            if detailID != nil { utilityPanel = nil }
-        }
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
@@ -86,8 +81,20 @@ struct RootView: View {
         }
     }
 
-    private var isAgentFocusMode: Bool {
-        store.detailAgent != nil
+    private var settingsButton: some View {
+        Button {
+            toggleUtilityPanel(.settings)
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(DaddyTheme.textSecondary)
+                .frame(width: 28, height: 28)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .opacity(utilityPanel == .settings ? 1 : 0.6)
+        .padding(.trailing, 12)
+        .help("Settings")
     }
 
     private func toggleUtilityPanel(_ panel: UtilityPanel) {

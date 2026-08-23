@@ -50,11 +50,18 @@ struct ProviderTile: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color.white.opacity(0.001))
                 .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .onTapGesture {
+                // Double before single: SwiftUI resolves the two-click gesture
+                // first, and the single still fires on the way in, so a double
+                // click is select-then-open rather than a separate path.
+                .onTapGesture(count: 2) {
                     guard let active, active.isLive else { return }
                     withAnimation(.smooth(duration: 0.2)) {
                         store.openDetail(active.id)
                     }
+                }
+                .onTapGesture {
+                    guard let active else { return }
+                    store.select(agent: active.id)
                 }
 
             VStack(alignment: .leading, spacing: 10) {
@@ -64,7 +71,8 @@ struct ProviderTile: View {
                     AgentBubbleRow(
                         agents: agents,
                         activeID: active.id,
-                        onSelect: { id in
+                        onSelect: { id in store.select(agent: id) },
+                        onOpen: { id in
                             guard agents.contains(where: { $0.id == id && $0.isLive }) else { return }
                             withAnimation(.smooth(duration: 0.2)) {
                                 store.openDetail(id)
