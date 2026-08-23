@@ -368,14 +368,25 @@ struct FleetView: View {
     private func handleFocusShortcut(_ event: NSEvent) -> Bool {
         let chords = event.modifierFlags.intersection([.command, .option, .control, .shift])
 
-        if store.detailAgent != nil,
-           chords.contains(.control),
+        if chords.contains(.control),
            !chords.contains(.command),
            !chords.contains(.option),
            !chords.contains(.shift),
            event.charactersIgnoringModifiers?.lowercased() == "q" {
-            dismissFocusedSession()
-            return true
+            if store.detailAgent != nil {
+                dismissFocusedSession()
+                return true
+            }
+            // In the fleet the same chord closes the *selected card* and only
+            // that one — the other sessions are someone else's work and are not
+            // implicated by dismissing this one.
+            if let id = store.selectedAgentID {
+                dismissSession(id)
+                return true
+            }
+            // Nothing selected: not ours to take. Ctrl-Q is a real control
+            // character, so it goes to whatever has the keyboard.
+            return false
         }
 
         if providerLaunchOpen,
@@ -391,7 +402,14 @@ struct FleetView: View {
             && !chords.contains(.command)
             && !chords.contains(.option)
             && !chords.contains(.shift)
-        guard isControlTab, store.detailAgent != nil else { return false }
+        guard isControlTab else { return false }
+
+        // In the fleet the same chord walks the provider tiles rather than the
+        // focus strip.
+        if store.detailAgent == nil {
+            advanceFleetProvider()
+            return true
+        }
 
         if providerLaunchOpen {
             providerLaunchOpen = false
@@ -487,6 +505,45 @@ struct FleetView: View {
         return remaining[0]
     }
 
+    /// Ctrl-Tab in the fleet: the next provider tile that has anything in it.
+    ///
+    /// Walks the same order the tiles are laid out in
+    /// (`AgentDashboard`: claude, codex, cursor, opencode) and skips providers
+    /// with no sessions, so the chord matches what is actually on screen rather
+    /// than stopping on gaps.
+    private func advanceFleetProvider() {
+        let order: [AgentKind] = [.claude, .codex, .cursor, .opencode]
+        let grouped = Dictionary(grouping: store.visibleAgents) { $0.agent }
+        let present = order.filter { !(grouped[$0] ?? []).isEmpty }
+        guard !present.isEmpty else { return }
+
+        let next: AgentKind
+        if let current = store.selectedAgent?.agent,
+           let index = present.firstIndex(of: current) {
+            next = present[(index + 1) % present.count]
+        } else {
+            next = present[0]
+        }
+
+        guard let target = mostRecentlyUsed(in: grouped[next] ?? []) else { return }
+        withAnimation(.smooth(duration: 0.18)) {
+            store.select(agent: target.id)
+        }
+    }
+
+    /// A provider with several sessions lands on the one you were last dealing
+    /// with, not the oldest or an arbitrary one.
+    ///
+    /// `lastOutputAt` is when the agent last printed, which is the closest thing
+    /// to "last used" that is actually recorded — it moves whenever you send a
+    /// prompt, because the reply follows. `startedAt` covers a session that has
+    /// not spoken yet, so a freshly launched card is not sorted to the back.
+    private func mostRecentlyUsed(in agents: [MockAgent]) -> MockAgent? {
+        agents.max { lhs, rhs in
+            max(lhs.lastOutputAt, lhs.startedAt) < max(rhs.lastOutputAt, rhs.startedAt)
+        }
+    }
+
     private func dismissFocusedSession() {
         let id: String?
         if !focusCycleIDs.isEmpty, focusCycleIndex < focusCycleIDs.count {
@@ -494,7 +551,18 @@ struct FleetView: View {
         } else {
             id = store.selectedAgentID ?? store.detailAgentID
         }
-        guard let id, let agent = store.agents.first(where: { $0.id == id }) else { return }
+        guard let id else { return }
+        dismissSession(id)
+    }
+
+    /// Stop one session and take its card off the screen.
+    ///
+    /// `store.stop` terminates the pty and discards the card; `store.dismiss`
+    /// is the same minus the terminate, for a session that already exited.
+    /// Both move the selection on themselves, so nothing here has to guess
+    /// where to land in the fleet.
+    private func dismissSession(_ id: String) {
+        guard let agent = store.agents.first(where: { $0.id == id }) else { return }
 
         let successor = successorStripID(after: id)
         providerLaunchOpen = false
@@ -508,6 +576,8 @@ struct FleetView: View {
             store.dismiss(id)
         }
 
+        // Only the focus view needs somewhere to go next; the fleet still has
+        // every other card on screen.
         if let successor, store.detailAgentID != nil {
             withAnimation(.smooth(duration: 0.36)) {
                 store.openDetail(successor)
