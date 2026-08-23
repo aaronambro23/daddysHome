@@ -72,6 +72,7 @@ struct GlassDropdown<Label: View>: View {
     var chromelessLabel: Bool = false
     var externalIsOpen: Binding<Bool>? = nil
     var highlightedIndex: Int? = nil
+    var selectedIndex: Int? = nil
     var onKeyboardMove: ((Int) -> Void)? = nil
     var onKeyboardActivate: (() -> Void)? = nil
 
@@ -133,7 +134,11 @@ struct GlassDropdown<Label: View>: View {
                     .padding(.vertical, 9)
             } else {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    GlassDropdownRow(item: item, isHighlighted: highlightedIndex == index) { selected in
+                    GlassDropdownRow(
+                        item: item,
+                        isHighlighted: highlightedIndex == index,
+                        isSelected: selectedIndex == index
+                    ) { selected in
                         if !staysOpenOnPick { openBinding.wrappedValue = false }
                         selected.action()
                     }
@@ -166,6 +171,7 @@ struct GlassDropdown<Label: View>: View {
 private struct GlassDropdownRow: View {
     let item: GlassDropdownItem
     let isHighlighted: Bool
+    let isSelected: Bool
     let onSelect: (GlassDropdownItem) -> Void
 
     @State private var hovering = false
@@ -194,6 +200,10 @@ private struct GlassDropdownRow: View {
                     .strokeBorder(
                         DaddyTheme.failure.opacity(hovering && item.isEnabled ? 0.55 : 0.32)
                     )
+            }
+            if isSelected {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(DaddyTheme.accent.opacity(0.34), lineWidth: 1)
             }
         }
         .animation(.easeOut(duration: 0.12), value: hovering)
@@ -266,7 +276,7 @@ private struct GlassDropdownRow: View {
     private var submenu: some View {
         VStack(alignment: .leading, spacing: 3) {
             ForEach(item.children) { child in
-                GlassDropdownRow(item: child, isHighlighted: false) { selected in
+                GlassDropdownRow(item: child, isHighlighted: false, isSelected: false) { selected in
                     submenuOpen = false
                     onSelect(selected)
                 }
