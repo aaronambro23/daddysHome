@@ -1,0 +1,15 @@
+# Project root
+/docs/
+/documents/
+/test-harness/
+/ui-mockups-for-swift-app/
+/design-inspo/
+
+/UI-CHANGE-FIXES.md
+/TESTING.md
+/STATUS.md
+/prd.md
+
+# DaddyApp
+/DaddyApp/build/
+/DaddyApp/docs/
