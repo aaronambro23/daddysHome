@@ -4,6 +4,7 @@
 /test-harness/
 /ui-mockups-for-swift-app/
 /design-inspo/
+/DaddyApp/.build/
 
 /UI-CHANGE-FIXES.md
 /TESTING.md
@@ -13,3 +14,4 @@
 # DaddyApp
 /DaddyApp/build/
 /DaddyApp/docs/
+/daddycore-spm/p/documents/
