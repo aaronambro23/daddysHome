@@ -70,11 +70,29 @@ struct GlassDropdown<Label: View>: View {
     /// the bubbles — chrome wrapped around the label is the one thing that stops
     /// it matching.
     var chromelessLabel: Bool = false
+    var externalIsOpen: Binding<Bool>? = nil
+    var highlightedIndex: Int? = nil
+    var onKeyboardMove: ((Int) -> Void)? = nil
+    var onKeyboardActivate: (() -> Void)? = nil
 
     @ViewBuilder let label: () -> Label
 
-    @State private var isOpen = false
+    @State private var internalIsOpen = false
     @State private var hoveringTrigger = false
+    @FocusState private var menuFocused: Bool
+
+    private var openBinding: Binding<Bool> {
+        Binding(
+            get: { externalIsOpen?.wrappedValue ?? internalIsOpen },
+            set: { value in
+                if let externalIsOpen {
+                    externalIsOpen.wrappedValue = value
+                } else {
+                    internalIsOpen = value
+                }
+            }
+        )
+    }
 
     var body: some View {
         // Padding and the capsule belong *inside* the button.
@@ -85,7 +103,7 @@ struct GlassDropdown<Label: View>: View {
         // entirely, falling through to whatever was behind. On a provider tile
         // that meant the card opened instead of the menu.
         Button {
-            isOpen.toggle()
+            openBinding.wrappedValue.toggle()
         } label: {
             if chromelessLabel {
                 label()
@@ -93,14 +111,14 @@ struct GlassDropdown<Label: View>: View {
                 label()
                     .padding(.horizontal, 9)
                     .padding(.vertical, 5)
-                    .insetCapsule(opacity: hoveringTrigger || isOpen ? 0.16 : 0.08)
+                    .insetCapsule(opacity: hoveringTrigger || openBinding.wrappedValue ? 0.16 : 0.08)
                     .contentShape(Capsule())
             }
         }
         .buttonStyle(.plain)
         .onHover { hoveringTrigger = $0 }
         .animation(.easeOut(duration: 0.15), value: hoveringTrigger)
-        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+        .popover(isPresented: openBinding, arrowEdge: .bottom) {
             menuBody
         }
     }
@@ -114,9 +132,9 @@ struct GlassDropdown<Label: View>: View {
                     .padding(.horizontal, 11)
                     .padding(.vertical, 9)
             } else {
-                ForEach(items) { item in
-                    GlassDropdownRow(item: item) { selected in
-                        if !staysOpenOnPick { isOpen = false }
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    GlassDropdownRow(item: item, isHighlighted: highlightedIndex == index) { selected in
+                        if !staysOpenOnPick { openBinding.wrappedValue = false }
                         selected.action()
                     }
                 }
@@ -127,11 +145,27 @@ struct GlassDropdown<Label: View>: View {
         // The popover chrome is the system's; this paints our own surface
         // across the whole of it so no system grey shows through.
         .background(DaddyTheme.popoverBackground)
+        .focusable()
+        .focused($menuFocused)
+        .onAppear { menuFocused = true }
+        .onKeyPress(.upArrow) {
+            onKeyboardMove?(-1)
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            onKeyboardMove?(1)
+            return .handled
+        }
+        .onKeyPress(.return) {
+            onKeyboardActivate?()
+            return .handled
+        }
     }
 }
 
 private struct GlassDropdownRow: View {
     let item: GlassDropdownItem
+    let isHighlighted: Bool
     let onSelect: (GlassDropdownItem) -> Void
 
     @State private var hovering = false
@@ -221,7 +255,7 @@ private struct GlassDropdownRow: View {
         if item.isDestructive {
             return DaddyTheme.failure.opacity(hovering ? 0.26 : 0.15)
         }
-        return hovering ? DaddyTheme.insetFill : .clear
+        return hovering || isHighlighted ? DaddyTheme.insetFill : .clear
     }
 
     private var titleColor: Color {
@@ -232,7 +266,7 @@ private struct GlassDropdownRow: View {
     private var submenu: some View {
         VStack(alignment: .leading, spacing: 3) {
             ForEach(item.children) { child in
-                GlassDropdownRow(item: child) { selected in
+                GlassDropdownRow(item: child, isHighlighted: false) { selected in
                     submenuOpen = false
                     onSelect(selected)
                 }

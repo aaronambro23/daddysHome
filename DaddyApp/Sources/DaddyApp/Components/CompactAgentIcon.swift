@@ -90,7 +90,7 @@ struct CompactAgentIcon: View {
 
     /// The fallback mark. Bubbles show `ProviderLogo` now; this is what they
     /// fall back to when the resource bundle is missing.
-    static func monogram(for kind: AgentKind) -> String {
+    nonisolated static func monogram(for kind: AgentKind) -> String {
         switch kind {
         case .claude: return "C"
         case .codex: return "X"
@@ -99,7 +99,7 @@ struct CompactAgentIcon: View {
         }
     }
 
-    static func tint(for kind: AgentKind) -> Color {
+    nonisolated static func tint(for kind: AgentKind) -> Color {
         switch kind {
         case .claude: return DaddyTheme.providerClaude
         case .codex: return DaddyTheme.providerCodex

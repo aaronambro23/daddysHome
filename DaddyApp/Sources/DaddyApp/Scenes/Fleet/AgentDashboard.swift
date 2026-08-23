@@ -5,6 +5,7 @@ struct AgentDashboard: View {
     @Environment(MockStore.self) private var store
 
     @Binding var progressOpen: Bool
+    @Binding var launchMenuOpen: Bool
     let onOpenProgress: (String) -> Void
 
     var body: some View {
@@ -118,7 +119,7 @@ struct AgentDashboard: View {
     }
 
     private var launchMenu: some View {
-        ProviderLaunchMenu(project: store.selectedProject) {
+        ProviderLaunchMenu(isOpen: $launchMenuOpen, project: store.selectedProject) {
             HStack(spacing: 5) {
                 Image(systemName: "play.fill")
                     .font(.system(size: 8))

@@ -252,6 +252,7 @@ struct FleetView: View {
             } else {
                 AgentDashboard(
                     progressOpen: $progressPanelOpen,
+                    launchMenuOpen: $providerLaunchOpen,
                     onOpenProgress: openProgress
                 )
                 .transition(.move(edge: .leading).combined(with: .opacity))
@@ -393,6 +394,12 @@ struct FleetView: View {
     private func handleFocusShortcut(_ event: NSEvent) -> Bool {
         let chords = event.modifierFlags.intersection([.command, .option, .control, .shift])
 
+        let isCommandEnter = chords == [.command] && (event.keyCode == 36 || event.keyCode == 76)
+        if isCommandEnter, store.detailAgent == nil, store.selectedProject != nil {
+            providerLaunchOpen = true
+            return true
+        }
+
         if chords.contains(.control),
            !chords.contains(.command),
            !chords.contains(.option),
@@ -415,6 +422,7 @@ struct FleetView: View {
         }
 
         if providerLaunchOpen,
+           store.detailAgent != nil,
            chords.isEmpty,
            let kind = RadialProviderMenuOverlay.kind(for: event) {
             compassArmedKind = kind

@@ -10,6 +10,7 @@ import DaddyCore
 /// places, so this is the list.
 struct ProviderLaunchMenu<Label: View>: View {
     @Environment(MockStore.self) private var store
+    @Binding var isOpen: Bool
 
     /// Where the agent will run. Nil disables the menu with an explanation
     /// rather than launching into a guess.
@@ -20,6 +21,8 @@ struct ProviderLaunchMenu<Label: View>: View {
     /// Passed through, for a trigger that draws itself — see `GlassDropdown`.
     var chromelessLabel: Bool = false
 
+    @State private var highlightedIndex = 0
+
     @ViewBuilder let label: () -> Label
 
     var body: some View {
@@ -29,8 +32,15 @@ struct ProviderLaunchMenu<Label: View>: View {
             emptyMessage: "Select a project first",
             staysOpenOnPick: true,
             chromelessLabel: chromelessLabel,
+            externalIsOpen: $isOpen,
+            highlightedIndex: highlightedIndex,
+            onKeyboardMove: moveSelection,
+            onKeyboardActivate: activateSelection,
             label: label
         )
+        .onChange(of: isOpen) { _, open in
+            if open { highlightedIndex = firstEnabledIndex ?? 0 }
+        }
     }
 
     private var items: [GlassDropdownItem] {
@@ -75,6 +85,24 @@ struct ProviderLaunchMenu<Label: View>: View {
         }
 
         return items
+    }
+
+    private var enabledIndices: [Int] {
+        items.indices.filter { items[$0].isEnabled }
+    }
+
+    private var firstEnabledIndex: Int? { enabledIndices.first }
+
+    private func moveSelection(_ direction: Int) {
+        guard !enabledIndices.isEmpty else { return }
+        let current = enabledIndices.firstIndex(of: highlightedIndex) ?? 0
+        let next = (current + direction + enabledIndices.count) % enabledIndices.count
+        highlightedIndex = enabledIndices[next]
+    }
+
+    private func activateSelection() {
+        guard items.indices.contains(highlightedIndex), items[highlightedIndex].isEnabled else { return }
+        items[highlightedIndex].action()
     }
 
 }
