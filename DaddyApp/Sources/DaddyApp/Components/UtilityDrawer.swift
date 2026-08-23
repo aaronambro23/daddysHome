@@ -169,6 +169,7 @@ private struct SettingsUtilityPanel: View {
     private static let shortcuts: [(String, String)] = [
         ("⌘←", "Shrink full terminal chat view"),
         ("⌘→", "Open full terminal chat view"),
+        ("⌘↩", "Open the launch menu in Fleet"),
         ("⌃Q", "Quit and end chat session"),
         ("⌃⇥", "Switch between active chat sessions"),
         ("⌘B", "Toggle sidebar directory menu"),

@@ -22,6 +22,7 @@ struct ProviderLaunchMenu<Label: View>: View {
     var chromelessLabel: Bool = false
 
     @State private var highlightedIndex = 0
+    @State private var hasKeyboardSelection = false
 
     @ViewBuilder let label: () -> Label
 
@@ -33,13 +34,16 @@ struct ProviderLaunchMenu<Label: View>: View {
             staysOpenOnPick: true,
             chromelessLabel: chromelessLabel,
             externalIsOpen: $isOpen,
-            highlightedIndex: highlightedIndex,
+            highlightedIndex: hasKeyboardSelection ? highlightedIndex : nil,
             onKeyboardMove: moveSelection,
             onKeyboardActivate: activateSelection,
             label: label
         )
         .onChange(of: isOpen) { _, open in
-            if open { highlightedIndex = firstEnabledIndex ?? 0 }
+            if open {
+                highlightedIndex = firstEnabledIndex ?? 0
+                hasKeyboardSelection = false
+            }
         }
     }
 
@@ -98,11 +102,15 @@ struct ProviderLaunchMenu<Label: View>: View {
         let current = enabledIndices.firstIndex(of: highlightedIndex) ?? 0
         let next = (current + direction + enabledIndices.count) % enabledIndices.count
         highlightedIndex = enabledIndices[next]
+        hasKeyboardSelection = true
     }
 
     private func activateSelection() {
-        guard items.indices.contains(highlightedIndex), items[highlightedIndex].isEnabled else { return }
-        items[highlightedIndex].action()
+        let index = items.indices.contains(highlightedIndex) && items[highlightedIndex].isEnabled
+            ? highlightedIndex
+            : firstEnabledIndex
+        guard let index else { return }
+        items[index].action()
     }
 
 }

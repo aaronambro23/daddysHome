@@ -17,6 +17,7 @@ struct AgentDetailHeader: View {
     var stripIDs: [String] = []
 
     @Namespace private var deckNamespace
+    @Namespace private var modeNamespace
 
     var body: some View {
         HStack(spacing: 10) {
@@ -103,7 +104,7 @@ struct AgentDetailHeader: View {
             ProviderUsageBattery(snapshot: store.providerUsage[agent.agent])
                 .frame(width: 190, alignment: .leading)
 
-            workModeToggle
+            workModeExperiments
 
             StatusBadge(state: agent.state)
 
@@ -185,38 +186,124 @@ struct AgentDetailHeader: View {
         store.project(agent.projectID) ?? store.selectedProject
     }
 
-    /// Quick or detailed, one click, while you are looking at the terminal.
-    ///
-    /// A two-state control is a switch, not a menu: burying it behind ⋯ would
-    /// make you open a menu to read which mode you were in, and the mode is
-    /// exactly the sort of thing you want to see without asking. Shows the
-    /// current mode and flips to the other one.
+    /// Four alternatives kept together temporarily so the mode interaction can
+    /// be judged in the context of the real header, rather than in isolation.
     @ViewBuilder
-    private var workModeToggle: some View {
+    private var workModeExperiments: some View {
         let current = store.workMode(of: agent)
-        let next: WorkMode = current == .quick ? .detailed : .quick
 
-        Button {
-            store.setWorkMode(next, for: agent.id)
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: current == .quick ? "hare.fill" : "book.closed.fill")
-                    .font(.system(size: 9, weight: .bold))
-                Text(current.displayName.uppercased())
-                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                    .tracking(0.5)
+        HStack(spacing: 6) {
+            // A. Segmented choice: explicit and scannable.
+            HStack(spacing: 2) {
+                modeChoice("QUICK", .quick, current: current)
+                modeChoice("DETAILED", .detailed, current: current)
             }
-            .foregroundStyle(current == .quick ? DaddyTheme.accent : DaddyTheme.textSecondary)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .insetCapsule(opacity: 0.1)
-            .contentShape(Capsule())
+            .padding(3)
+            .insetCapsule(opacity: 0.06)
+            .help("Choose the work mode")
+
+            // B. Two icon buttons: visual first, with labels only on hover.
+            HStack(spacing: 3) {
+                modeIcon("hare.fill", "Quick", .quick, current: current)
+                modeIcon("book.closed.fill", "Detailed", .detailed, current: current)
+            }
+            .padding(3)
+            .insetCapsule(opacity: 0.06)
+            .help("Quick or detailed mode")
+
+            // C. Switch: familiar binary control with a quiet label.
+            Button { setWorkMode(current == .quick ? .detailed : .quick) } label: {
+                HStack(spacing: 6) {
+                    Text("MODE")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .tracking(0.5)
+                    Text(current == .quick ? "Q" : "D")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .frame(width: 18, height: 18)
+                        .background(Circle().fill(DaddyTheme.textPrimary.opacity(0.12)))
+                }
+                .foregroundStyle(DaddyTheme.textSecondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .insetCapsule(opacity: 0.06)
+            }
+            .buttonStyle(.plain)
+            .help("Switch between quick and detailed mode")
+
+            // D. Text-led status: restrained and easy to read at a glance.
+            Button { setWorkMode(current == .quick ? .detailed : .quick) } label: {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(current == .quick ? DaddyTheme.accent : DaddyTheme.textPrimary)
+                        .frame(width: 6, height: 6)
+                    Text(current.displayName.lowercased())
+                        .font(.system(size: 10, weight: .medium))
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 7, weight: .bold))
+                }
+                .foregroundStyle(DaddyTheme.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+            }
+            .buttonStyle(.plain)
+            .help("Switch between quick and detailed mode")
         }
-        .buttonStyle(.plain)
-        // Dead sessions have nothing to send the switch message to.
         .disabled(!agent.isLive)
         .opacity(agent.isLive ? 1 : 0.4)
-        .help("\(current.summary) Click for \(next.displayName.lowercased()).")
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func modeChoice(_ title: String, _ mode: WorkMode, current: WorkMode) -> some View {
+        Button { setWorkMode(mode) } label: {
+            HStack(spacing: 5) {
+                Image(systemName: mode == .quick ? "bolt.fill" : "sparkles")
+                    .font(.system(size: 8, weight: .bold))
+                Text(title)
+                    .font(.system(size: 9.5, weight: .semibold))
+            }
+            .foregroundStyle(current == mode ? DaddyTheme.textPrimary : DaddyTheme.textMuted)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background {
+                if current == mode {
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.22),
+                                    Color.white.opacity(0.10),
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .overlay {
+                            Capsule().strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
+                        }
+                        .matchedGeometryEffect(id: "mode-selection", in: modeNamespace)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func modeIcon(_ symbol: String, _ title: String, _ mode: WorkMode, current: WorkMode) -> some View {
+        Button { setWorkMode(mode) } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(current == mode ? DaddyTheme.textPrimary : DaddyTheme.textMuted)
+                .frame(width: 24, height: 20)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(current == mode ? Color.white.opacity(0.14) : .clear)
+                }
+        }
+        .buttonStyle(.plain)
+        .help(title)
+    }
+
+    private func setWorkMode(_ mode: WorkMode) {
+        store.setWorkMode(mode, for: agent.id)
     }
 
     private var menuItems: [GlassDropdownItem] {

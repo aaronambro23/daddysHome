@@ -196,7 +196,6 @@ private struct GlassDropdownRow: View {
                     )
             }
         }
-        .onHover(perform: handleRowHover)
         .animation(.easeOut(duration: 0.12), value: hovering)
         .popover(
             isPresented: $submenuOpen,
@@ -246,6 +245,7 @@ private struct GlassDropdownRow: View {
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onHover(perform: handleRowHover)
     }
 
     /// Destructive rows carry their fill at rest — that is the whole point of
@@ -255,7 +255,7 @@ private struct GlassDropdownRow: View {
         if item.isDestructive {
             return DaddyTheme.failure.opacity(hovering ? 0.26 : 0.15)
         }
-        return hovering || isHighlighted ? DaddyTheme.insetFill : .clear
+        return hovering ? DaddyTheme.insetFillSelected : (isHighlighted ? DaddyTheme.insetFill : .clear)
     }
 
     private var titleColor: Color {
