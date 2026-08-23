@@ -689,6 +689,31 @@ struct TerminalSurface: NSViewRepresentable {
 
                 let point = view.convert(event.locationInWindow, from: nil)
                 guard view.bounds.contains(point) else { return event }
+
+                // Scrolling ends an alternate-screen selection.
+                //
+                // A drag that leaves the pane is the gesture that strands one:
+                // the mouse comes up somewhere this surface may never hear
+                // about, and the selection is left active with nothing to
+                // retire it. SwiftTerm's own policy is that an alternate-screen
+                // selection does not survive output — `feedPrepare` clears it
+                // and `linefeed` calls `selectNone` — but both are guarded on
+                // `allowMouseReporting`, so a selection can outlive the moment
+                // that was supposed to end it and then costs work on every
+                // frame for the rest of the session.
+                //
+                // The alternate screen has no scrollback of ours, and its
+                // contents are rewritten wholesale by the agent, so a selection
+                // held across a scroll refers to text that no longer exists. It
+                // is not something worth preserving, and dropping it here is
+                // both what the emulator already wants and a point the gesture
+                // cannot slip past. A selection you made is still yours to copy
+                // — right up until you scroll away from it.
+                if view.getTerminal().isCurrentBufferAlternate,
+                   view.selection?.active == true {
+                    view.selectNone()
+                }
+
                 guard view.allowMouseReporting,
                       !view.getTerminal().isCurrentBufferAlternate
                 else { return event }

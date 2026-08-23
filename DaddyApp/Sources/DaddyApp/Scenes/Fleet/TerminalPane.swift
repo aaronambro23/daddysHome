@@ -16,7 +16,18 @@ struct TerminalPane: View {
                         // Driven by whether the process is actually running.
                         // This used to key off `isRealSession`, which is true of
                         // every card now — so a dead agent still said LIVE.
-                        if isRunning(agent) {
+                        if isLaunching(agent) {
+                            HStack(spacing: 5) {
+                                BreathingDot(color: DaddyTheme.launching, glowRadius: 6, size: 4)
+                                Text("LAUNCHING")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .tracking(0.8)
+                                    .foregroundStyle(DaddyTheme.launching)
+                            }
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .insetCapsule(tint: DaddyTheme.launching, opacity: 0.12)
+                        } else if isRunning(agent) {
                             HStack(spacing: 5) {
                                 BreathingDot(color: DaddyTheme.working, glowRadius: 6, size: 4)
                                 Text("LIVE")
@@ -78,7 +89,12 @@ struct TerminalPane: View {
     @ViewBuilder
     private var terminalBody: some View {
         if let agent = store.selectedAgent {
-            if let pty = store.pty(for: agent), pty.isProcessRunning {
+            if isLaunching(agent) {
+                // A CLI that has not printed yet has nothing to show, and an
+                // empty black rectangle reads as a session that failed. Cursor
+                // in particular can take several seconds to come up.
+                LaunchingState(agent: agent)
+            } else if let pty = store.pty(for: agent), pty.isProcessRunning {
                 // Real pty: SwiftTerm renders it, including colour and any
                 // interactive prompts the agent draws.
                 TerminalSurface(pty: pty, fontSize: store.terminalFontSize)
@@ -102,6 +118,13 @@ struct TerminalPane: View {
 
     private func isRunning(_ agent: MockAgent) -> Bool {
         store.pty(for: agent)?.isProcessRunning ?? false
+    }
+
+    /// The window between forkpty returning and the CLI's first byte.
+    /// `MockStore` holds a session in `.launching` until it has spoken.
+    private func isLaunching(_ agent: MockAgent) -> Bool {
+        if case .launching = agent.state { return true }
+        return false
     }
 
     /// What a finished session looks like.
@@ -169,3 +192,71 @@ struct TerminalPane: View {
 
 }
 
+/// What a session looks like while its CLI is still booting.
+private struct LaunchingState: View {
+    let agent: MockAgent
+
+    @State private var sweep = false
+    @State private var halo = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Spacer(minLength: 0)
+
+            ZStack {
+                // A ring that expands and fades out of the mark, over and over,
+                // so the pane reads as waiting rather than stuck.
+                Circle()
+                    .strokeBorder(DaddyTheme.launching.opacity(0.5), lineWidth: 1)
+                    .frame(width: halo ? 96 : 46, height: halo ? 96 : 46)
+                    .opacity(halo ? 0 : 1)
+
+                ProviderLogo.badge(for: agent.agent, diameter: 46)
+            }
+            .frame(width: 96, height: 96)
+
+            VStack(spacing: 5) {
+                Text("Starting \(agent.agent.rawValue)…")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(DaddyTheme.textSecondary)
+
+                Text("waiting for its first output")
+                    .font(.system(size: 10))
+                    .foregroundStyle(DaddyTheme.textVeryDim)
+            }
+
+            // Indeterminate, because nothing here knows how long a CLI takes.
+            Capsule()
+                .fill(Color.white.opacity(0.05))
+                .frame(width: 180, height: 2)
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    .clear,
+                                    DaddyTheme.launching.opacity(0.9),
+                                    .clear,
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: 64, height: 2)
+                        .offset(x: sweep ? 180 : -64)
+                }
+                .clipShape(Capsule())
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: false)) {
+                sweep = true
+            }
+            withAnimation(.easeOut(duration: 1.9).repeatForever(autoreverses: false)) {
+                halo = true
+            }
+        }
+    }
+}
