@@ -167,12 +167,15 @@ private struct SettingsUtilityPanel: View {
     /// included — belongs to the agent in the terminal, which is worth saying
     /// out loud, because Escape used to leave the focus view.
     private static let shortcuts: [(String, String)] = [
-        ("⌘←", "Back to the fleet"),
-        ("⌘→", "Open the selected session"),
-        ("⌃⇥", "Cycle sessions in focus"),
-        ("⌃Q", "Stop or dismiss the session"),
+        ("⌘←", "Shrink full terminal chat view"),
+        ("⌘→", "Open full terminal chat view"),
+        ("⌃Q", "Quit and end chat session"),
+        ("⌃⇥", "Switch between active chat sessions"),
+        ("⌘B", "Toggle sidebar directory menu"),
         ("⎋", "Goes to the agent, not to Daddy"),
     ]
+
+    @State private var glossaryOpen = false
 
     var body: some View {
         @Bindable var store = store
@@ -189,6 +192,19 @@ private struct SettingsUtilityPanel: View {
                 }
 
                 section("AGENTS") {
+                    setting(
+                        "Work mode",
+                        "\(store.workMode.summary) New sessions only — switch a running one from its card menu."
+                    ) {
+                        Picker("", selection: $store.workMode) {
+                            ForEach(WorkMode.allCases, id: \.self) { mode in
+                                Text(mode.displayName.lowercased()).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+
                     setting(
                         "Approval policy",
                         store.approvalPolicy == .safeAuto
@@ -212,20 +228,51 @@ private struct SettingsUtilityPanel: View {
 
                 section("SHORTCUTS") {
                     VStack(alignment: .leading, spacing: 10) {
-                        ForEach(Self.shortcuts, id: \.0) { chord, meaning in
-                            HStack(spacing: 11) {
-                                Text(chord)
-                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        // Folded away by default. The list is reference
+                        // material — you read it once and then you know it —
+                        // and left open it pushed the settings people actually
+                        // change down past the fold.
+                        Button {
+                            withAnimation(.smooth(duration: 0.22)) { glossaryOpen.toggle() }
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "keyboard")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(DaddyTheme.accent)
+                                Text("Shortcut glossary")
+                                    .font(.system(size: 11.5, weight: .semibold))
                                     .foregroundStyle(DaddyTheme.textPrimary)
-                                    .frame(width: 34, height: 22)
-                                    .insetSurface(cornerRadius: 7)
-
-                                Text(meaning)
-                                    .font(.system(size: 10.5))
+                                Spacer()
+                                Image(systemName: glossaryOpen ? "chevron.down" : "chevron.right")
+                                    .font(.system(size: 10, weight: .semibold))
                                     .foregroundStyle(DaddyTheme.textSecondary)
-
-                                Spacer(minLength: 0)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .insetSurface(cornerRadius: 12)
+                        }
+                        .buttonStyle(.plain)
+
+                        if glossaryOpen {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(Self.shortcuts, id: \.0) { chord, meaning in
+                                    HStack(spacing: 11) {
+                                        Text(chord)
+                                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                            .foregroundStyle(DaddyTheme.textPrimary)
+                                            .frame(width: 34, height: 22)
+                                            .insetSurface(cornerRadius: 7)
+
+                                        Text(meaning)
+                                            .font(.system(size: 10.5))
+                                            .foregroundStyle(DaddyTheme.textSecondary)
+
+                                        Spacer(minLength: 0)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 2)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                     }
                 }

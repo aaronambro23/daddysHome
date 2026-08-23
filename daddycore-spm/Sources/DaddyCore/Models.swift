@@ -111,13 +111,28 @@ public final class Session: Identifiable {
     public let createdAt: Date
     public var lastOutputAt: Date
 
+    /// The id the *CLI* knows this conversation by, which is not `id` — that
+    /// one is Daddy's own handle and means nothing to the agent.
+    ///
+    /// Set at launch for CLIs that accept a pre-assigned id, and it is what
+    /// makes reopening this exact conversation possible later. Nil means the
+    /// best Daddy can offer is "the newest conversation in this directory".
+    public var providerSessionID: String?
+
+    /// How much process this agent wraps around the work. Set at launch and
+    /// updated by `SessionManager.switchWorkMode`, so a card can show what its
+    /// agent is actually operating under rather than what the global default
+    /// happened to be when it started.
+    public var workMode: WorkMode = .detailed
+
     public init(
         id: String = UUID().uuidString,
         projectID: String,
         workUnitID: String,
         agent: AgentKind,
         model: ModelRef? = nil,
-        cwd: URL
+        cwd: URL,
+        providerSessionID: String? = nil
     ) {
         self.id = id
         self.projectID = projectID
@@ -125,6 +140,7 @@ public final class Session: Identifiable {
         self.agent = agent
         self.model = model
         self.cwd = cwd
+        self.providerSessionID = providerSessionID
         self.state = .launching
         self.createdAt = Date()
         self.lastOutputAt = Date()

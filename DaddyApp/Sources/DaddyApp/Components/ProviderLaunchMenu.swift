@@ -36,7 +36,7 @@ struct ProviderLaunchMenu<Label: View>: View {
     private var items: [GlassDropdownItem] {
         guard let project else { return [] }
 
-        return [AgentKind.claude, .codex, .cursor, .opencode].map { kind in
+        var items = [AgentKind.claude, .codex, .cursor, .opencode].map { kind in
             let installed = store.isInstalled(kind)
             return GlassDropdownItem(
                 id: kind.rawValue,
@@ -48,5 +48,33 @@ struct ProviderLaunchMenu<Label: View>: View {
                 store.launchReal(kind, in: project)
             }
         }
+
+        // Also here, and not only on a card's menu: a project with nothing
+        // running has no cards to open a menu from, and that is exactly when
+        // you want to pick up where you left off.
+        let chats = store.pastChats[project.id] ?? []
+        if !chats.isEmpty {
+            items.append(
+                GlassDropdownItem(
+                    id: "past-chats",
+                    title: "Past chats",
+                    note: "\(chats.count)",
+                    childrenWidth: 380,
+                    children: chats.prefix(12).map { chat in
+                        GlassDropdownItem(
+                            id: "past-\(chat.id)",
+                            title: chat.title,
+                            note: chat.age,
+                            leading: AnyView(ProviderLogo.badge(for: chat.agent, diameter: 24))
+                        ) {
+                            store.openPastChat(chat, in: project)
+                        }
+                    }
+                )
+            )
+        }
+
+        return items
     }
+
 }

@@ -5,6 +5,26 @@ public enum ApprovalPolicy: String {
     case fullBypass = "full-bypass"
 }
 
+/// What a launch should do about the conversation that came before it.
+///
+/// This is a whole-launch concern rather than a flag to append, because not
+/// every CLI expresses it as a flag: Codex resumes through a *subcommand*
+/// (`codex resume [flags] <id>`), which no amount of appending can produce.
+public enum Resumption: Equatable, Sendable {
+    /// A new conversation. `sessionID` is Daddy's chosen id for it, used by
+    /// the CLIs that let a caller pre-assign one; the rest ignore it and mint
+    /// their own.
+    case fresh(sessionID: String?)
+
+    /// Reopen this exact conversation.
+    case conversation(id: String)
+
+    /// Reopen whichever conversation in this directory is newest. The fallback
+    /// for CLIs whose ids Daddy cannot know at launch — and the reason sibling
+    /// agents in one project used to collide.
+    case mostRecent
+}
+
 public protocol AgentAdapter: AnyObject {
     static var kind: AgentKind { get }
     static var executablePath: String { get }
@@ -16,16 +36,34 @@ public protocol AgentAdapter: AnyObject {
     func launchArgs(
         cwd: URL,
         model: ModelRef?,
-        approvalPolicy: ApprovalPolicy
+        approvalPolicy: ApprovalPolicy,
+        resumption: Resumption
     ) -> [String]
 
-    /// Extra arguments that make this CLI pick up its previous conversation
-    /// instead of starting a blank one, or nil if it cannot.
+    /// Whether this CLI can reopen a previous conversation at all.
     ///
-    /// Relaunching otherwise gets you the same agent in the same directory with
-    /// no memory of what you were doing, which is rarely what "relaunch" means
-    /// to the person clicking it.
-    var continueConversationArgs: [String]? { get }
+    /// Relaunching without it gets you the same agent in the same directory
+    /// with no memory of what you were doing, which is rarely what "relaunch"
+    /// means to the person clicking it.
+    var canReopenConversations: Bool { get }
+
+    /// Arguments that append `text` to this CLI's system prompt, or nil if it
+    /// has no such flag.
+    ///
+    /// A system prompt is the right home for a work mode: it cannot be
+    /// compacted away halfway through a long session, the way an opening
+    /// message can. Only Claude Code offers it, so for the others the mode is
+    /// carried by `AGENTS.md` and by an explicit switch message.
+    func systemPromptArgs(_ text: String) -> [String]?
+
+    /// Whether this CLI lets the caller choose the conversation's id before it
+    /// starts.
+    ///
+    /// Only Claude Code does (`--session-id`). It is the difference between
+    /// knowing which conversation a card owns and guessing that it is the most
+    /// recent one in the directory — which is wrong the moment two agents run
+    /// in the same project.
+    var mintsSessionID: Bool { get }
 
     func modelFlagValue(for humanName: String) -> String?
 
@@ -47,6 +85,26 @@ public protocol AgentAdapter: AnyObject {
 // times. They live here now; an adapter overrides only what it genuinely does
 // differently.
 extension AgentAdapter {
+
+    /// Most CLIs cannot be told what to call a conversation before it exists.
+    public var mintsSessionID: Bool { false }
+
+    /// Most CLIs have no way to append to their system prompt.
+    public func systemPromptArgs(_ text: String) -> [String]? { nil }
+
+    /// The plain form, for callers with no opinion about history.
+    public func launchArgs(
+        cwd: URL,
+        model: ModelRef?,
+        approvalPolicy: ApprovalPolicy
+    ) -> [String] {
+        launchArgs(
+            cwd: cwd,
+            model: model,
+            approvalPolicy: approvalPolicy,
+            resumption: .fresh(sessionID: nil)
+        )
+    }
 
     public func sendPrompt(_ text: String, to pty: PTYProcess) throws {
         try pty.send(.text(text))
@@ -74,16 +132,25 @@ public final class ClaudeAdapter: AgentAdapter {
 
     public let interruptInput = TerminalInput.key(.escape)
 
-    /// `claude --continue` resumes the most recent conversation in this
-    /// directory.
-    public let continueConversationArgs: [String]? = ["--continue"]
+    public let canReopenConversations = true
+
+    /// `claude --session-id <uuid>` names the conversation at launch, so Daddy
+    /// knows which file on disk belongs to which card without having to guess
+    /// at the newest one.
+    public let mintsSessionID = true
+
+    /// From `claude --help`: `--append-system-prompt <prompt>`.
+    public func systemPromptArgs(_ text: String) -> [String]? {
+        ["--append-system-prompt", text]
+    }
 
     public init() {}
 
     public func launchArgs(
         cwd: URL,
         model: ModelRef?,
-        approvalPolicy: ApprovalPolicy
+        approvalPolicy: ApprovalPolicy,
+        resumption: Resumption
     ) -> [String] {
         var args: [String]
 
@@ -97,6 +164,19 @@ public final class ClaudeAdapter: AgentAdapter {
         if let model = model {
             args.append("--model")
             args.append(model.rawValue)
+        }
+
+        switch resumption {
+        case .fresh(let sessionID):
+            // Must be a UUID; Claude rejects anything else outright, and a
+            // rejected flag means the agent never starts.
+            if let sessionID, UUID(uuidString: sessionID) != nil {
+                args += ["--session-id", sessionID]
+            }
+        case .conversation(let id):
+            args += ["--resume", id]
+        case .mostRecent:
+            args.append("--continue")
         }
 
         return args
@@ -151,20 +231,29 @@ public final class CodexAdapter: AgentAdapter {
 
     public let interruptInput = TerminalInput.interrupt
 
-    /// Unknown. Codex has a `resume` subcommand rather than a flag, and the
-    /// exact form has not been confirmed against the installed CLI — so
-    /// relaunching Codex starts a fresh conversation rather than guessing at an
-    /// invocation that would fail outright. See STATUS.md open questions.
-    public let continueConversationArgs: [String]? = nil
+    /// Confirmed against the installed CLI, which the previous "unknown" note
+    /// here had not been. `codex resume --help`:
+    ///
+    ///     Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]
+    ///       --last   Continue the most recent session without showing the picker
+    ///
+    /// It takes `-m`, `-s` and `-a` like a normal launch, so the flags below
+    /// are unchanged by resuming — only their position moves.
+    public let canReopenConversations = true
 
     public init() {}
 
     public func launchArgs(
         cwd: URL,
         model: ModelRef?,
-        approvalPolicy: ApprovalPolicy
+        approvalPolicy: ApprovalPolicy,
+        resumption: Resumption
     ) -> [String] {
+        // `resume` is a subcommand, so it has to come first — before the flags,
+        // not after them. This is why the whole list is built here rather than
+        // having resume arguments appended by the caller.
         var args: [String] = []
+        if case .fresh = resumption {} else { args.append("resume") }
 
         if let model = model {
             args.append("-m")
@@ -176,6 +265,17 @@ public final class CodexAdapter: AgentAdapter {
             args += ["--ask-for-approval", "on-request", "--sandbox", "workspace-write"]
         case .fullBypass:
             args += ["--ask-for-approval", "never", "--sandbox", "danger-full-access"]
+        }
+
+        // The session id is a positional argument and must come after the
+        // flags that take values, or it would be swallowed as one of them.
+        switch resumption {
+        case .fresh:
+            break
+        case .conversation(let id):
+            args.append(id)
+        case .mostRecent:
+            args.append("--last")
         }
 
         return args
@@ -201,15 +301,17 @@ public final class CursorAdapter: AgentAdapter {
 
     public let interruptInput = TerminalInput.key(.escape)
 
-    /// From `agent --help`: `--continue  Continue previous session`.
-    public let continueConversationArgs: [String]? = ["--continue"]
+    /// From `agent --help`: `--resume [chatId]  Select a session to resume`
+    /// and `--continue  Continue previous session`.
+    public let canReopenConversations = true
 
     public init() {}
 
     public func launchArgs(
         cwd: URL,
         model: ModelRef?,
-        approvalPolicy: ApprovalPolicy
+        approvalPolicy: ApprovalPolicy,
+        resumption: Resumption
     ) -> [String] {
         var args: [String] = []
 
@@ -228,6 +330,15 @@ public final class CursorAdapter: AgentAdapter {
             args.append("--auto-review")
         case .fullBypass:
             args.append("--force")
+        }
+
+        switch resumption {
+        case .fresh:
+            break
+        case .conversation(let id):
+            args += ["--resume", id]
+        case .mostRecent:
+            args.append("--continue")
         }
 
         return args
@@ -251,15 +362,17 @@ public final class OpenCodeAdapter: AgentAdapter {
 
     public let interruptInput = TerminalInput.interrupt
 
-    /// From `opencode --help`: `-c, --continue  continue the last session`.
-    public let continueConversationArgs: [String]? = ["--continue"]
+    /// From `opencode --help`: `-c, --continue  continue the last session` and
+    /// `-s, --session  session id to continue`.
+    public let canReopenConversations = true
 
     public init() {}
 
     public func launchArgs(
         cwd: URL,
         model: ModelRef?,
-        approvalPolicy: ApprovalPolicy
+        approvalPolicy: ApprovalPolicy,
+        resumption: Resumption
     ) -> [String] {
         var args: [String] = []
 
@@ -273,6 +386,15 @@ public final class OpenCodeAdapter: AgentAdapter {
         // is the default — so safeAuto simply adds nothing.
         if approvalPolicy == .fullBypass {
             args.append("--auto")
+        }
+
+        switch resumption {
+        case .fresh:
+            break
+        case .conversation(let id):
+            args += ["--session", id]
+        case .mostRecent:
+            args.append("--continue")
         }
 
         return args

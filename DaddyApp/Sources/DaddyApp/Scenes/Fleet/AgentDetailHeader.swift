@@ -103,6 +103,8 @@ struct AgentDetailHeader: View {
             ProviderUsageBattery(snapshot: store.providerUsage[agent.agent])
                 .frame(width: 190, alignment: .leading)
 
+            workModeToggle
+
             StatusBadge(state: agent.state)
 
             Text(agent.uptime)
@@ -181,6 +183,40 @@ struct AgentDetailHeader: View {
     /// inside a session should start the new agent alongside it.
     private var launchTarget: MockProject? {
         store.project(agent.projectID) ?? store.selectedProject
+    }
+
+    /// Quick or detailed, one click, while you are looking at the terminal.
+    ///
+    /// A two-state control is a switch, not a menu: burying it behind ⋯ would
+    /// make you open a menu to read which mode you were in, and the mode is
+    /// exactly the sort of thing you want to see without asking. Shows the
+    /// current mode and flips to the other one.
+    @ViewBuilder
+    private var workModeToggle: some View {
+        let current = store.workMode(of: agent)
+        let next: WorkMode = current == .quick ? .detailed : .quick
+
+        Button {
+            store.setWorkMode(next, for: agent.id)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: current == .quick ? "hare.fill" : "book.closed.fill")
+                    .font(.system(size: 9, weight: .bold))
+                Text(current.displayName.uppercased())
+                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                    .tracking(0.5)
+            }
+            .foregroundStyle(current == .quick ? DaddyTheme.accent : DaddyTheme.textSecondary)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .insetCapsule(opacity: 0.1)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        // Dead sessions have nothing to send the switch message to.
+        .disabled(!agent.isLive)
+        .opacity(agent.isLive ? 1 : 0.4)
+        .help("\(current.summary) Click for \(next.displayName.lowercased()).")
     }
 
     private var menuItems: [GlassDropdownItem] {

@@ -21,7 +21,11 @@ struct WorkspaceRail: View {
 
     /// Held open by the chevron / folder button rather than by the cursor.
     /// A pinned rail ignores hover entirely.
-    @State private var pinned = false
+    ///
+    /// Owned by `FleetView` rather than held here, because ⌘B has to be able to
+    /// set it: a keyboard toggle that only moved `expanded` would be undone by
+    /// the next hover, which is not what a deliberate keypress means.
+    @Binding var pinned: Bool
     @State private var expandedProjectIDs: Set<String> = []
 
     /// Leaving the panel starts a short countdown instead of collapsing at

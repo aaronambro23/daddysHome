@@ -22,6 +22,11 @@ struct GlassDropdownItem: Identifiable {
     /// a generic component and has no business knowing about providers, but a
     /// list of four products reads far faster with their logos on it.
     var leading: AnyView?
+    /// How wide the nested level should be. A submenu of four product names
+    /// wants a narrow one; a submenu of sentences people actually typed wants a
+    /// far wider one, and guessing a single number for both gives you four
+    /// words per line stacked eight deep.
+    var childrenWidth: CGFloat?
     /// One nested level, shown in a popover attached to this row on hover.
     var children: [GlassDropdownItem]
     let action: () -> Void
@@ -33,6 +38,7 @@ struct GlassDropdownItem: Identifiable {
         isEnabled: Bool = true,
         isDestructive: Bool = false,
         leading: AnyView? = nil,
+        childrenWidth: CGFloat? = nil,
         children: [GlassDropdownItem] = [],
         action: @escaping () -> Void = {}
     ) {
@@ -43,6 +49,7 @@ struct GlassDropdownItem: Identifiable {
         self.isDestructive = isDestructive
         self.leading = leading
         self.children = children
+        self.childrenWidth = childrenWidth
         self.action = action
     }
 }
@@ -174,9 +181,14 @@ private struct GlassDropdownRow: View {
                     .opacity(item.isEnabled ? 1 : 0.4)
             }
 
+            // A menu row is one line. Without this a long title wraps to five
+            // or six of them, and a list of past conversations turns into a
+            // wall of four-words-per-line text taller than the window.
             Text(item.title)
                 .font(.system(size: 12, weight: item.isDestructive ? .semibold : .medium))
                 .foregroundStyle(titleColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
 
             Spacer(minLength: 6)
 
@@ -184,6 +196,10 @@ private struct GlassDropdownRow: View {
                 Text(note)
                     .font(.system(size: 9.5, design: .monospaced))
                     .foregroundStyle(DaddyTheme.textMuted)
+                    .lineLimit(1)
+                    // The title yields space before the note does: "4 hr ago"
+                    // broken across two lines reads as a mistake.
+                    .layoutPriority(1)
             }
 
             if !item.children.isEmpty {
@@ -223,7 +239,7 @@ private struct GlassDropdownRow: View {
             }
         }
         .padding(6)
-        .frame(width: 190)
+        .frame(width: item.childrenWidth ?? 210)
         .background(DaddyTheme.popoverBackground)
         .onHover { inside in
             if inside {

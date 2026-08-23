@@ -4,6 +4,31 @@ This file is the contract for every AI agent working in this repository,
 regardless of which CLI you are (Claude Code, Codex, Cursor, opencode).
 Follow it exactly.
 
+## 0. Modes
+
+Daddy starts each session in a **mode**, and the mode decides how much
+of this file applies. You will be told which one you are in — in your
+system prompt at launch, or by a message during the session. A later
+instruction wins over an earlier one.
+
+**QUICK mode** — sections 1 to 5 are suspended. Instead:
+
+- Do the thing that was asked. Ask a clarifying question only if the
+  request is genuinely ambiguous, not as a matter of routine.
+- Do **not** read `docs/handoffs/` unless the prompt asks you to or the
+  task plainly depends on what a previous batch did. Reading three
+  documents to fix an alignment bug costs more than the fix.
+- Do **not** create or update a batch document unless asked. If you are
+  asked at the end, write one document covering what you did.
+- Say what you changed in your reply instead. That is the record.
+
+**DETAILED mode** — the default, and everything below applies as
+written.
+
+Neither mode changes what good work is. Quick means less ceremony, not
+less care: you still read the code you are changing, and you still say
+so plainly when something is broken or you did not finish.
+
 ## 1. Before you write any code
 
 - Ask clarifying questions first. Do not guess at ambiguous requirements.

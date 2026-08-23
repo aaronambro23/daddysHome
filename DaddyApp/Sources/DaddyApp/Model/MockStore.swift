@@ -39,6 +39,20 @@ final class MockStore {
     /// live sessions, so only this override needs storing.
     var doneWorkUnits: Set<String> = []
 
+    /// Conversations already on disk, per project id, newest first.
+    ///
+    /// Includes the ones started in a plain terminal — they are the same files
+    /// Claude writes either way, and there is no reason for Daddy to pretend it
+    /// cannot see them. Filled in by `refreshPastChats`, never read from disk
+    /// on the main thread.
+    var pastChats: [String: [PastChat]] = [:]
+
+    @ObservationIgnored private var pastChatsReadAt: [String: Date] = [:]
+
+    /// How stale the list is allowed to get. Long, because it only changes when
+    /// a conversation ends.
+    private static let pastChatsInterval: TimeInterval = 20
+
     /// Agent kinds with a binary on this machine. Filled in shortly after
     /// launch by `refreshInstalledAgents()`; empty until then, so the launch
     /// menu shows everything as unavailable for a moment rather than blocking.
@@ -53,14 +67,24 @@ final class MockStore {
     // moved and changed no behavior is worse than no picker.
 
     /// Handed to `SessionManager` at launch; decides the CLI's approval flags.
-    var approvalPolicy: ApprovalPolicy = .safeAuto
+    var approvalPolicy: ApprovalPolicy = .safeAuto {
+        didSet { Defaults.set(approvalPolicy.rawValue, for: .approvalPolicy) }
+    }
+
+    /// The mode new sessions start in. A single card can be switched away from
+    /// it afterwards without disturbing this — see `setWorkMode`.
+    var workMode: WorkMode = .detailed {
+        didSet { Defaults.set(workMode.rawValue, for: .workMode) }
+    }
 
     /// Posts a notification when a background session wants input.
     var notifyOnReady: Bool = true
 
     /// Point size for both terminals. A change is a real font reset and a
     /// TIOCSWINSZ at the far end, so surfaces apply it only when it moves.
-    var terminalFontSize: Double = 11.5
+    var terminalFontSize: Double = 11.5 {
+        didSet { Defaults.set(terminalFontSize, for: .terminalFontSize) }
+    }
 
     static let terminalFontRange: ClosedRange<Double> = 9...20
 
@@ -76,6 +100,11 @@ final class MockStore {
 
     /// Owns every real pty. Seeded demo agents do not touch this.
     @ObservationIgnored let sessionManager = SessionManager()
+
+    /// Remembers which agents you had when you quit, so they are still there
+    /// when you come back — each one able to reopen its actual conversation
+    /// rather than starting blank.
+    @ObservationIgnored let sessionStore = SessionStore()
 
     /// Fetches provider quota windows and keeps the last successful snapshots.
     @ObservationIgnored private let providerUsageService = ProviderUsageService()
@@ -105,7 +134,13 @@ final class MockStore {
     var launchError: String?
 
     init() {
+        // Before anything that could write them back: these assignments fire
+        // the `didSet` observers above, and reading has to come first or a
+        // fresh launch would save its own defaults over the stored ones.
+        loadDefaults()
+
         seed()
+        restoreSessions()
         selectedProjectID = projects.first?.id
         selectedAgentID = agents.first?.id
         refreshInstalledAgents()
@@ -374,7 +409,11 @@ final class MockStore {
                 agent: kind,
                 cwd: cwd
             )
-            try sessionManager.launchSession(session, approvalPolicy: approvalPolicy)
+            try sessionManager.launchSession(
+                session,
+                approvalPolicy: approvalPolicy,
+                workMode: workMode
+            )
 
             let card = MockAgent(
                 id: session.id,
@@ -394,6 +433,7 @@ final class MockStore {
             // you, rather than leaving it parked on the previous agent while
             // the selection quietly moves underneath it.
             if detailAgentID != nil { detailAgentID = card.id }
+            persistSessions()
             return card
         } catch {
             launchError = "\(kind.rawValue): \(error.localizedDescription)"
@@ -421,6 +461,10 @@ final class MockStore {
     /// Terminate every real session. Called on app teardown so agents and
     /// their descendants do not outlive the window.
     func shutdownAllRealSessions() {
+        // Before the killing starts: once these are terminated the cards are
+        // exited, and exited cards are not what we want to come back to.
+        persistSessions()
+
         for agent in agents where agent.isRealSession {
             if let id = agent.sessionID {
                 try? sessionManager.terminateSession(id)
@@ -599,6 +643,10 @@ final class MockStore {
                 approvalPolicy: approvalPolicy,
                 continuingConversation: continuingConversation
             )
+            // A fresh start mints a new conversation id, so what was recorded a
+            // moment ago now points at the wrong one.
+            persistSessions()
+            refreshPastChats(for: agents.first { $0.id == agentID }?.projectID ?? "", force: true)
         } catch {
             launchError = "relaunch: \(error.localizedDescription)"
             mutate(agentID) { $0.state = .error(error.localizedDescription) }
@@ -636,6 +684,7 @@ final class MockStore {
     private func discard(_ agentID: String, sessionID: String?) {
         agents.removeAll { $0.id == agentID }
         detailHistory.removeAll { $0 == agentID }
+        persistSessions()
 
         if selectedAgentID == agentID {
             selectedAgentID = visibleAgents.first?.id ?? agents.first?.id
@@ -755,6 +804,10 @@ final class MockStore {
 
     func tick() {
         tickCount += 1
+
+        if let projectID = selectedProjectID {
+            refreshPastChats(for: projectID)
+        }
 
         // Every card is a real session now, so state comes from the process and
         // nothing invents it. The dashboard sits still when nothing is happening,
@@ -913,27 +966,185 @@ extension MockStore {
         }
     }
 
-    // MARK: - Agent State File Reading
+    // MARK: - Settings that persist
 
-    /// Reads live agent state from {project}/.daddy/agents/{agent-id}.json
-    /// Returns (model, workUnitID) or (nil, nil) if file doesn't exist or is invalid.
-    func readAgentStateFromFile(agentID: String, projectPath: String) -> (model: String?, workUnitID: String?) {
-        let daddyDir = URL(fileURLWithPath: projectPath).appendingPathComponent(".daddy")
-        let agentsDir = daddyDir.appendingPathComponent("agents")
-        let stateFile = agentsDir.appendingPathComponent("\(agentID).json")
+    private func loadDefaults() {
+        if let raw = Defaults.string(.approvalPolicy),
+           let policy = ApprovalPolicy(rawValue: raw) {
+            approvalPolicy = policy
+        }
+        if let raw = Defaults.string(.workMode), let mode = WorkMode(rawValue: raw) {
+            workMode = mode
+        }
+        if let size = Defaults.double(.terminalFontSize),
+           Self.terminalFontRange.contains(size) {
+            terminalFontSize = size
+        }
+    }
 
-        guard FileManager.default.fileExists(atPath: stateFile.path) else {
-            return (nil, nil)
+    // MARK: - Work mode
+
+    /// The mode a specific card is running under, which is not necessarily the
+    /// global default — that is the whole point of being able to switch one.
+    func workMode(of agent: MockAgent) -> WorkMode {
+        guard let sessionID = agent.sessionID,
+              let session = sessionManager.session(sessionID) else { return workMode }
+        return session.workMode
+    }
+
+    /// Switch one running session without touching the default.
+    ///
+    /// A live process cannot have its system prompt rewritten, so this arrives
+    /// as a message in the conversation. That is visible in the transcript,
+    /// which is the honest way for it to happen — the agent's behaviour is
+    /// changing and the change is on the record.
+    func setWorkMode(_ mode: WorkMode, for agentID: String) {
+        guard let sessionID = agents.first(where: { $0.id == agentID })?.sessionID else { return }
+        do {
+            try sessionManager.switchWorkMode(mode, for: sessionID)
+            mutate(agentID) { $0.lastOutputAt = Date() }
+        } catch {
+            launchError = "mode: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Surviving a quit
+
+    /// Puts back the agents you had when you last quit, as dead cards that can
+    /// be reopened.
+    ///
+    /// They come back exited on purpose. The processes died with the app, and a
+    /// card claiming READY over a pty that does not exist is worse than an
+    /// honest dead one — it can be typed into, and the keystrokes go nowhere.
+    func restoreSessions() {
+        let records = sessionStore.load()
+        guard !records.isEmpty else { return }
+
+        for record in records {
+            sessionManager.restoreSession(
+                id: record.id,
+                projectID: record.projectID,
+                workUnitID: record.workUnitID,
+                agent: record.agent,
+                model: ModelRef(agent: record.agent, rawValue: record.model),
+                cwd: URL(fileURLWithPath: record.cwd),
+                providerSessionID: record.providerSessionID
+            )
+
+            agents.append(
+                MockAgent(
+                    id: record.id,
+                    projectID: record.projectID,
+                    agent: record.agent,
+                    workUnitID: record.workUnitID,
+                    model: record.model,
+                    state: .exited(exitCode: 0),
+                    startedAt: record.startedAt,
+                    lastOutputAt: record.lastOutputAt,
+                    sessionID: record.id
+                )
+            )
+        }
+    }
+
+    /// Records every card currently on the dashboard.
+    ///
+    /// Not just the live ones. A card whose agent exited on its own stays on
+    /// screen precisely so you can reopen it, and that has to survive a quit
+    /// too — otherwise restored cards would evaporate on the *next* launch.
+    /// Cards you stopped or dismissed are already gone from `agents` by the
+    /// time this runs, which is what keeps "stop" meaning stop.
+    func persistSessions() {
+        let records: [SessionRecord] = agents.compactMap { agent in
+            guard let sessionID = agent.sessionID else { return nil }
+            guard let session = sessionManager.session(sessionID) else { return nil }
+
+            return SessionRecord(
+                id: agent.id,
+                projectID: agent.projectID,
+                workUnitID: agent.workUnitID,
+                agent: agent.agent,
+                model: agent.model,
+                cwd: session.cwd.path,
+                providerSessionID: session.providerSessionID,
+                startedAt: agent.startedAt,
+                lastOutputAt: agent.lastOutputAt
+            )
         }
 
+        sessionStore.save(records)
+    }
+
+    // MARK: - Past chats
+
+    /// Refills `pastChats` for a project, off the main thread.
+    ///
+    /// Reading them is real disk work — every transcript directory gets probed
+    /// — so it can never happen while a menu is being built. Throttled as well
+    /// as backgrounded, because `tick()` calls this once a second and the set
+    /// of past conversations does not change that often.
+    func refreshPastChats(for projectID: String, force: Bool = false) {
+        guard let project = project(projectID) else { return }
+
+        if !force, let last = pastChatsReadAt[projectID],
+           Date().timeIntervalSince(last) < Self.pastChatsInterval {
+            return
+        }
+        pastChatsReadAt[projectID] = Date()
+
+        let path = (project.path as NSString).expandingTildeInPath
+        Task.detached(priority: .utility) {
+            let found = ChatHistory.claudeChats(inDirectory: path)
+            await MainActor.run { self.pastChats[projectID] = found }
+        }
+    }
+
+    /// Open one of them as a new card.
+    @discardableResult
+    func openPastChat(_ chat: PastChat, in project: MockProject) -> MockAgent? {
+        launchError = nil
+
+        let cwd = URL(fileURLWithPath: (project.path as NSString).expandingTildeInPath)
+        let unit = newWorkUnitID()
+
         do {
-            let data = try Data(contentsOf: stateFile)
-            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let model = json?["model"] as? String
-            let workUnitID = json?["workUnitID"] as? String
-            return (model, workUnitID)
+            let session = try sessionManager.createSession(
+                projectID: project.id,
+                workUnitID: unit,
+                agent: chat.agent,
+                cwd: cwd,
+                providerSessionID: chat.id
+            )
+
+            // `continuingConversation` with a known provider id resolves to
+            // "reopen exactly this one", not "reopen the newest".
+            try sessionManager.launchSession(
+                session,
+                approvalPolicy: approvalPolicy,
+                continuingConversation: true,
+                workMode: workMode
+            )
+
+            let card = MockAgent(
+                id: session.id,
+                projectID: project.id,
+                agent: chat.agent,
+                workUnitID: unit,
+                model: Self.defaultModel(for: chat.agent),
+                state: .launching,
+                startedAt: Date(),
+                lastOutputAt: Date(),
+                sessionID: session.id
+            )
+            agents.append(card)
+            selectedProjectID = project.id
+            selectedAgentID = card.id
+            if detailAgentID != nil { detailAgentID = card.id }
+            persistSessions()
+            return card
         } catch {
-            return (nil, nil)
+            launchError = "\(chat.agent.rawValue): \(error.localizedDescription)"
+            return nil
         }
     }
 }

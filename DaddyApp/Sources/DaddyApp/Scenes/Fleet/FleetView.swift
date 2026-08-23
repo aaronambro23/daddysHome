@@ -30,6 +30,9 @@ struct FleetView: View {
     @Environment(MockStore.self) private var store
 
     @State private var sidebarExpanded = false
+    /// Held open deliberately — by the rail's own chevron or by ⌘B — as opposed
+    /// to being held open by the pointer sitting on it.
+    @State private var sidebarPinned = false
     @State private var progressPanelOpen = false
     @State private var progressPanelProjectID: String?
     @State private var keyboardMonitor: Any?
@@ -155,7 +158,8 @@ struct FleetView: View {
                 // out from under it.
                 WorkspaceRail(
                     expanded: $sidebarExpanded,
-                    hoverExpansionEnabled: sidebarHoverEnabled
+                    hoverExpansionEnabled: sidebarHoverEnabled,
+                    pinned: $sidebarPinned
                 )
                 .frame(width: sidebarWidth, height: geo.size.height)
                 // The rail's content is laid out at its final width, so growing
@@ -329,6 +333,16 @@ struct FleetView: View {
             if handleFocusShortcut(event) { return nil }
 
             let chords = event.modifierFlags.intersection([.command, .option, .control, .shift])
+
+            // ⌘B, not ⌃B. Control-B is a real control character — readline's
+            // backward-char and tmux's prefix — so binding it here would eat a
+            // keystroke the agent in the terminal is entitled to. Command never
+            // reaches a pty, which is the same reasoning behind ⌘← above.
+            if chords == [.command], event.charactersIgnoringModifiers?.lowercased() == "b" {
+                toggleSidebar()
+                return nil
+            }
+
             // Modified escapes (Option-Escape is Meta-Escape) stay the pty's.
             let isEscape = event.keyCode == 53 && chords.isEmpty
             let isCommandBack = chords == [.command]
@@ -363,6 +377,17 @@ struct FleetView: View {
             }
             return event
         }
+    }
+
+    /// Open the rail and hold it open, or close it and let it stay closed.
+    ///
+    /// Pinning is half the point. Toggling `expanded` alone would leave the rail
+    /// at the mercy of the next hover — open it with the keyboard, move the
+    /// pointer, and it shuts again as though the keypress had not happened.
+    private func toggleSidebar() {
+        let opening = !sidebarExpanded
+        sidebarPinned = opening
+        withAnimation(.smooth(duration: 0.3)) { sidebarExpanded = opening }
     }
 
     private func handleFocusShortcut(_ event: NSEvent) -> Bool {

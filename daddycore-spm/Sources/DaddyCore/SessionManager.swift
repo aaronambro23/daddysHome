@@ -50,19 +50,57 @@ public final class SessionManager: @unchecked Sendable {
     }
 
     public func createSession(
+        id: String = UUID().uuidString,
         projectID: String,
         workUnitID: String,
         agent: AgentKind,
         model: ModelRef? = nil,
-        cwd: URL
+        cwd: URL,
+        providerSessionID: String? = nil
     ) throws -> Session {
         let session = Session(
+            id: id,
             projectID: projectID,
             workUnitID: workUnitID,
             agent: agent,
             model: model,
-            cwd: cwd
+            cwd: cwd,
+            providerSessionID: providerSessionID
         )
+
+        lock.lock()
+        defer { lock.unlock() }
+        sessions[session.id] = session
+        return session
+    }
+
+    /// Puts back a session from a previous run of the app, with no process
+    /// behind it.
+    ///
+    /// The card it belongs to is dead by definition — the pty died with the app
+    /// that owned it — so the session is registered as exited. What it carries
+    /// that a brand new session would not is `providerSessionID`, which is what
+    /// lets "Resume chat" reopen the actual conversation rather than guessing.
+    @discardableResult
+    public func restoreSession(
+        id: String,
+        projectID: String,
+        workUnitID: String,
+        agent: AgentKind,
+        model: ModelRef? = nil,
+        cwd: URL,
+        providerSessionID: String?
+    ) -> Session {
+        let session = Session(
+            id: id,
+            projectID: projectID,
+            workUnitID: workUnitID,
+            agent: agent,
+            model: model,
+            cwd: cwd,
+            providerSessionID: providerSessionID
+        )
+        session.state = .exited(exitCode: 0)
 
         lock.lock()
         defer { lock.unlock() }
@@ -74,23 +112,43 @@ public final class SessionManager: @unchecked Sendable {
     public func canContinueConversation(_ kind: AgentKind) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return adapters[kind]?.continueConversationArgs != nil
+        return adapters[kind]?.canReopenConversations ?? false
     }
 
     public func launchSession(
         _ session: Session,
         approvalPolicy: ApprovalPolicy = .safeAuto,
-        continuingConversation: Bool = false
+        continuingConversation: Bool = false,
+        workMode: WorkMode = .detailed
     ) throws {
         guard let adapter = adapters[session.agent] else {
             throw SessionError.unknownAgent(session.agent)
         }
 
-        let execPath = type(of: adapter).executablePath
-        var args = adapter.launchArgs(cwd: session.cwd, model: session.model, approvalPolicy: approvalPolicy)
+        let resumption = resumption(for: session, adapter: adapter, continuing: continuingConversation)
 
-        if continuingConversation, let resumeArgs = adapter.continueConversationArgs {
-            args += resumeArgs
+        // Committed to the session *before* launch, so the card owns the id
+        // even if the process dies on its first breath.
+        if case .fresh(let minted?) = resumption {
+            session.providerSessionID = minted
+        }
+
+        session.workMode = workMode
+
+        let execPath = type(of: adapter).executablePath
+        var args = adapter.launchArgs(
+            cwd: session.cwd,
+            model: session.model,
+            approvalPolicy: approvalPolicy,
+            resumption: resumption
+        )
+
+        // Detailed mode is the contract's own default, so it injects nothing —
+        // and a CLI with no system-prompt flag gets the mode from AGENTS.md
+        // instead, which is why that file has to define them.
+        if let prompt = workMode.systemPrompt,
+           let modeArgs = adapter.systemPromptArgs(prompt) {
+            args += modeArgs
         }
 
         let ptyProcess = PTYProcess(executablePath: execPath, arguments: args, cwd: session.cwd)
@@ -119,6 +177,59 @@ public final class SessionManager: @unchecked Sendable {
         ptyProcess.registerOutputCallback { [weak self] output in
             self?.updateSessionState(sessionID: session.id, newOutput: output)
         }
+    }
+
+    /// Decides what this launch should do about history.
+    ///
+    /// A fresh launch on a CLI that accepts a pre-assigned id gets one minted
+    /// here, so the conversation is identifiable from the first byte. A
+    /// continuing launch reopens the exact conversation when the id is known
+    /// and otherwise falls back to the newest one in the directory — which is
+    /// the best those CLIs can currently do, and is wrong whenever two agents
+    /// share a project. See the batch document for what closing that needs.
+    private func resumption(
+        for session: Session,
+        adapter: AgentAdapter,
+        continuing: Bool
+    ) -> Resumption {
+        guard continuing, adapter.canReopenConversations else {
+            // A fresh launch always gets a *new* id, even on a session that
+            // already carries one. Reusing it would be the opposite of what
+            // "fresh start" means, and Claude rejects an id that is already on
+            // disk anyway — which would stop the agent from starting at all.
+            guard adapter.mintsSessionID else { return .fresh(sessionID: nil) }
+            return .fresh(sessionID: UUID().uuidString)
+        }
+
+        if let known = session.providerSessionID {
+            return .conversation(id: known)
+        }
+        return .mostRecent
+    }
+
+    /// Change a running session's mode.
+    ///
+    /// A launched process cannot have its system prompt rewritten, so this is a
+    /// message rather than a flag — which is also why it works on all four CLIs
+    /// while the launch-time injection only works on Claude.
+    public func switchWorkMode(_ mode: WorkMode, for sessionID: String) throws {
+        let (pty, adapter) = try liveSession(sessionID)
+        try adapter.sendPrompt(mode.switchInstruction, to: pty)
+
+        lock.lock()
+        defer { lock.unlock() }
+        sessions[sessionID]?.workMode = mode
+        sessions[sessionID]?.lastOutputAt = Date()
+    }
+
+    /// Internal, for tests: the resume decision without launching anything.
+    ///
+    /// Exercising it through `launchSession` would mean running a real agent
+    /// CLI, which is exactly the kind of test that only passes on the machine
+    /// it was written on.
+    func resumptionForTesting(session: Session, continuing: Bool) -> Resumption {
+        guard let adapter = adapters[session.agent] else { return .fresh(sessionID: nil) }
+        return resumption(for: session, adapter: adapter, continuing: continuing)
     }
 
     public func sendPrompt(_ prompt: String, to sessionID: String) throws {
@@ -194,7 +305,8 @@ public final class SessionManager: @unchecked Sendable {
     public func restartSession(
         _ sessionID: String,
         approvalPolicy: ApprovalPolicy = .safeAuto,
-        continuingConversation: Bool = false
+        continuingConversation: Bool = false,
+        workMode: WorkMode? = nil
     ) throws {
         lock.lock()
         guard let session = sessions[sessionID] else {
@@ -209,7 +321,11 @@ public final class SessionManager: @unchecked Sendable {
         try launchSession(
             session,
             approvalPolicy: approvalPolicy,
-            continuingConversation: continuingConversation
+            continuingConversation: continuingConversation,
+            // Nil means "whatever this session was already running under" — a
+            // relaunch should not silently drop a card back to the global
+            // default just because the default is what a new card would get.
+            workMode: workMode ?? session.workMode
         )
     }
 

@@ -140,3 +140,20 @@ func formatTimeAgo(_ date: Date) -> String {
     if elapsed < 3600 { return "\(Int(elapsed / 60))m" }
     return "\(Int(elapsed / 3600))h"
 }
+
+/// `@MainActor` because `RelativeDateTimeFormatter` is not `Sendable` and this
+/// one is only ever touched while drawing a menu row.
+@MainActor
+extension PastChat {
+    /// "2h ago" rather than a timestamp: which conversation you want is a
+    /// question of how long ago you had it, not of what o'clock it was.
+    var age: String {
+        Self.relativeAge.localizedString(for: updatedAt, relativeTo: Date())
+    }
+
+    private static let relativeAge: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+}

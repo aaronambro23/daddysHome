@@ -268,11 +268,15 @@ final class ControlSurfaceTests: XCTestCase {
         static let kind = AgentKind.claude
         static let executablePath = "/bin/cat"
         let interruptInput = TerminalInput.interrupt
-        // Nil: /bin/cat has no conversation to continue. Required since the
-        // protocol grew resume support, which this stub predates.
-        let continueConversationArgs: [String]? = nil
+        // /bin/cat has no conversation to continue.
+        let canReopenConversations = false
 
-        func launchArgs(cwd: URL, model: ModelRef?, approvalPolicy: ApprovalPolicy) -> [String] { [] }
+        func launchArgs(
+            cwd: URL,
+            model: ModelRef?,
+            approvalPolicy: ApprovalPolicy,
+            resumption: Resumption
+        ) -> [String] { [] }
         func modelFlagValue(for humanName: String) -> String? { humanName }
         func detectState(fromRecentOutput buffer: String) -> AgentState { .ready }
     }

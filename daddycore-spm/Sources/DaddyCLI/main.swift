@@ -18,6 +18,8 @@ struct DaddyCLI {
             handleLaunch(args: Array(args.dropFirst(2)))
         case "status":
             handleStatus(args: Array(args.dropFirst(2)))
+        case "chats":
+            handleChats(args: Array(args.dropFirst(2)))
         case "help":
             printUsage()
         default:
@@ -78,6 +80,33 @@ struct DaddyCLI {
         }
     }
 
+    /// Lists the conversations Daddy can reopen for a directory. Exists so the
+    /// history reader can be checked against real transcripts without launching
+    /// the app.
+    static func handleChats(args: [String]) {
+        guard let path = args.first else {
+            print("Usage: daddy-cli chats <project-path>")
+            exit(1)
+        }
+
+        let directory = (path as NSString).expandingTildeInPath
+        let chats = ChatHistory.claudeChats(inDirectory: directory)
+
+        guard !chats.isEmpty else {
+            print("No conversations recorded for \(directory)")
+            return
+        }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+
+        print("\(chats.count) conversation(s) in \(directory):\n")
+        for chat in chats {
+            print("  \(formatter.string(from: chat.updatedAt))  \(chat.id)")
+            print("      \(chat.title)")
+        }
+    }
+
     static func handleStatus(args: [String]) {
         print("Status command not yet implemented")
     }
@@ -88,6 +117,7 @@ struct DaddyCLI {
 
         Usage:
           daddy-cli launch <agent> <project-path> [model]
+          daddy-cli chats <project-path>
           daddy-cli help
 
         Agents:

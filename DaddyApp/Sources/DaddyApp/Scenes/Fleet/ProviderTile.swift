@@ -226,6 +226,65 @@ struct ProviderTile: View {
     // Same actions the old expanded card carried, reachable without leaving the
     // grid. Everything acts on this tile's active agent, except Stop all.
 
+    /// Switch this agent between quick and detailed, without disturbing the
+    /// default new sessions start in.
+    ///
+    /// Live agents only: the switch is a message into a running conversation,
+    /// and there is nothing to send it to on a card whose process has ended.
+    private func modeItems(for agent: MockAgent) -> [GlassDropdownItem] {
+        guard agent.isLive else { return [] }
+        let current = store.workMode(of: agent)
+
+        return [
+            GlassDropdownItem(
+                id: "mode",
+                title: "Mode",
+                note: current.displayName.lowercased(),
+                childrenWidth: 260,
+                children: WorkMode.allCases.map { mode in
+                    GlassDropdownItem(
+                        id: "mode-\(mode.rawValue)",
+                        title: mode.displayName,
+                        note: mode == current ? "current" : nil,
+                        isEnabled: mode != current
+                    ) {
+                        store.setWorkMode(mode, for: agent.id)
+                    }
+                }
+            )
+        ]
+    }
+
+    /// Conversations this project already has on disk, as one nested row.
+    ///
+    /// Per project rather than per card, because that is what they are: the
+    /// history belongs to the directory, not to the tile you happened to open
+    /// the menu from. Chats started in a plain terminal show up here too.
+    private func pastChatItems(for agent: MockAgent) -> [GlassDropdownItem] {
+        let chats = store.pastChats[agent.projectID] ?? []
+        guard let project = store.project(agent.projectID), !chats.isEmpty else { return [] }
+
+        return [
+            GlassDropdownItem(
+                id: "past-chats",
+                title: "Past chats",
+                note: "\(chats.count)",
+                childrenWidth: 380,
+                children: chats.prefix(12).map { chat in
+                    GlassDropdownItem(
+                        id: "past-\(chat.id)",
+                        title: chat.title,
+                        note: chat.age,
+                        leading: AnyView(ProviderLogo.badge(for: chat.agent, diameter: 16))
+                    ) {
+                        store.openPastChat(chat, in: project)
+                    }
+                }
+            )
+        ]
+    }
+
+
     private func menuItems(for agent: MockAgent) -> [GlassDropdownItem] {
         var items: [GlassDropdownItem] = []
 
@@ -267,6 +326,9 @@ struct ProviderTile: View {
         items.append(GlassDropdownItem(id: "docs", title: "View docs") {
             onOpenProgress(agent.projectID)
         })
+
+        items.append(contentsOf: modeItems(for: agent))
+        items.append(contentsOf: pastChatItems(for: agent))
 
         let handoffTargets = [AgentKind.claude, .codex, .cursor, .opencode]
             .filter { $0 != agent.agent && store.isInstalled($0) }
