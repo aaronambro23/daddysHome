@@ -4,11 +4,40 @@ import DaddyCore
 struct AgentDashboard: View {
     @Environment(MockStore.self) private var store
 
+    @Binding var progressOpen: Bool
+    let onOpenProgress: (String) -> Void
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SectionHeader(title: "AGENTS") {
                 HStack(spacing: 10) {
                     HeaderCaption(text: scopeCaption)
+
+                    if store.selectedProject != nil {
+                        Button {
+                            store.dismissAllActiveAgentsInSelectedProject()
+                        } label: {
+                            Label("Dismiss all agents", systemImage: "ladybug.fill")
+                                .font(.system(size: 9.5, weight: .semibold))
+                        }
+                        .buttonStyle(.inset)
+                        .foregroundStyle(DaddyTheme.failure)
+                        .disabled(!store.visibleAgents.contains(where: \.isLive))
+                        .help("Debug: stop and dismiss every live agent in this project")
+                    }
+
+                    if store.agents.contains(where: { !$0.isLive }) {
+                        Button("clear finished") { store.dismissAllExited() }
+                            .buttonStyle(.inset)
+                    }
+
+                    Button(action: { withAnimation(.smooth(duration: 0.3)) { progressOpen.toggle() } }) {
+                        Image(systemName: "list.bullet.rectangle")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(progressOpen ? DaddyTheme.textPrimary : DaddyTheme.textSecondary)
+                    }
+                    .buttonStyle(.inset)
+
                     launchMenu
                 }
             }
@@ -28,57 +57,39 @@ struct AgentDashboard: View {
                 .padding(.vertical, 10)
             }
 
+            // One layout, always. Selecting an agent used to swap this whole
+            // column for a different arrangement — and filtered the selected
+            // agent out of the grid, so nothing was left to click to get back.
             ScrollView {
-                VStack(spacing: 10) {
-                    if store.visibleAgents.isEmpty {
-                        emptyState
-                    } else {
-                        ForEach(store.visibleAgents) { agent in
-                            AgentCard(
-                                agent: agent,
-                                isSelected: store.selectedAgentID == agent.id
-                            )
+                if store.visibleAgents.isEmpty {
+                    emptyState
+                        .padding(16)
+                } else {
+                    let grouped = Dictionary(grouping: store.visibleAgents) { $0.agent }
+
+                    // Adaptive rather than a fixed two: the middle column is
+                    // narrow with the terminal docked beside it and wide once
+                    // the terminal moves below, and the tiles should reflow
+                    // instead of being squeezed under their minimum.
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 268), spacing: 14)],
+                        spacing: 14
+                    ) {
+                        ForEach([AgentKind.claude, .codex, .cursor, .opencode], id: \.self) { kind in
+                            if let agents = grouped[kind], !agents.isEmpty {
+                                ProviderTile(
+                                    kind: kind,
+                                    agents: agents,
+                                    onOpenProgress: onOpenProgress
+                                )
+                            }
                         }
                     }
+                    .padding(16)
                 }
-                .padding(16)
             }
         }
         .glassPanel()
-    }
-
-    /// Launches a real CLI in the selected project. Kinds whose binary is not
-    /// on PATH are disabled rather than allowed to fail silently — a missing
-    /// agent should be visible, not a mystery.
-    private var launchMenu: some View {
-        Menu {
-            if let project = store.selectedProject {
-                ForEach([AgentKind.claude, .codex, .cursor, .opencode], id: \.rawValue) { kind in
-                    let installed = store.isInstalled(kind)
-                    Button {
-                        store.launchReal(kind, in: project)
-                    } label: {
-                        Text(installed
-                             ? kind.rawValue.capitalized
-                             : "\(kind.rawValue.capitalized) — not installed")
-                    }
-                    .disabled(!installed)
-                }
-            } else {
-                Text("Select a project first")
-            }
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 8))
-                Text("Launch")
-                    .font(.system(size: 10, weight: .medium))
-            }
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .foregroundStyle(DaddyTheme.textSecondary)
-        .disabled(store.selectedProject == nil)
     }
 
     private var scopeCaption: String {
@@ -90,15 +101,31 @@ struct AgentDashboard: View {
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Text("No agents on this project")
+            Text(store.selectedProject == nil
+                 ? "No agents running"
+                 : "No agents on this project")
                 .font(.system(size: 11))
                 .foregroundStyle(DaddyTheme.textSecondary)
 
-            Text("Pick another project, or speak to Daddy to launch one")
+            Text(store.selectedProject == nil
+                 ? "Pick a project on the left, then use Launch above."
+                 : "Use Launch above to start one here.")
                 .font(.system(size: 10))
                 .foregroundStyle(DaddyTheme.textMuted)
         }
         .frame(maxWidth: .infinity)
         .padding(40)
+    }
+
+    private var launchMenu: some View {
+        ProviderLaunchMenu(project: store.selectedProject) {
+            HStack(spacing: 5) {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 8))
+                Text("Launch")
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundStyle(DaddyTheme.textSecondary)
+        }
     }
 }

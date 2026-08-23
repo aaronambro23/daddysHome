@@ -13,6 +13,21 @@ struct MockProject: Identifiable, Hashable {
     let id: String
     let name: String
     let path: String
+    /// Nil for sidebar roots; otherwise the selectable directory containing it.
+    let parentID: String?
+}
+
+/// One of your own shells in the right-hand pane, as the tab strip sees it.
+///
+/// The pty itself lives in `ShellSessions`, keyed by this `id`. What is here is
+/// only what the interface needs: which project the tab belongs to and the
+/// number shown after the project name. `ordinal` counts up from the highest
+/// ever issued rather than from the tab count, so closing the middle tab never
+/// leaves two shells called "daddy 2".
+struct ShellTab: Identifiable, Hashable {
+    let id: String
+    let projectID: String
+    let ordinal: Int
 }
 
 struct MockAgent: Identifiable {
@@ -23,7 +38,18 @@ struct MockAgent: Identifiable {
     var model: String
     var state: AgentState
     var startedAt: Date
+
+    /// When the agent itself last printed something — not when you last clicked
+    /// a button at it. `MockStore.tick()` copies this from the live session
+    /// every second; the action methods seed it so a fresh card is not blank.
     var lastOutputAt: Date
+
+    /// The last line the agent actually printed, ANSI-stripped.
+    ///
+    /// Cached here rather than derived in a view body: `PTYProcess.recentOutput`
+    /// is up to 64KB and `stripANSI` walks all of it, and a tile would ask for
+    /// this once per agent per frame. `tick()` computes it once a second.
+    var lastLine: String = ""
 
     /// Non-nil when this card is backed by a real `SessionManager` session and
     /// a live pty. Nil means it is seeded demo data with a scripted transcript.
@@ -46,6 +72,41 @@ struct MockAgent: Identifiable {
         if case .exited = state { return false }
         return true
     }
+
+    /// Mid-task. Interrupting is the useful control here; continuing is not.
+    var isBusy: Bool {
+        if case .working = state { return true }
+        return false
+    }
+
+    /// 0-based start-order among live same-provider siblings. Nil when this
+    /// provider has only one live agent — the logo is enough.
+    static func siblingIndex(for agent: MockAgent, among agents: [MockAgent]) -> Int? {
+        let siblings = agents
+            .filter { $0.isLive && $0.agent == agent.agent }
+            .sorted {
+                if $0.startedAt != $1.startedAt { return $0.startedAt < $1.startedAt }
+                return $0.id < $1.id
+            }
+        guard siblings.count >= 2 else { return nil }
+        return siblings.firstIndex { $0.id == agent.id }
+    }
+
+    /// I, II, III… from a 0-based sibling index. Roman has no zero.
+    static func romanNumeral(forZeroBased index: Int) -> String {
+        var n = index + 1
+        let table: [(Int, String)] = [
+            (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"),
+        ]
+        var out = ""
+        for (value, glyph) in table {
+            while n >= value {
+                out += glyph
+                n -= value
+            }
+        }
+        return out
+    }
 }
 
 struct MockWorkUnit: Identifiable {
@@ -61,21 +122,6 @@ struct MockWorkUnit: Identifiable {
     var status: Status
     var summary: String
     var lastActivityAt: Date
-}
-
-struct TerminalLine: Identifiable {
-    enum Kind {
-        case command
-        case output
-        case dim
-        case error
-        case rule
-    }
-
-    let id = UUID()
-    let agentID: String
-    let kind: Kind
-    let text: String
 }
 
 struct VoiceEntry: Identifiable {

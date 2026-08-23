@@ -10,6 +10,7 @@ public enum CommandIntent: Equatable {
     case status        // query status
     case runTests      // run tests
     case switchModel   // switch model
+    case launch        // launch a new agent
     case unknown(String)  // unknown intent
 }
 
@@ -36,43 +37,56 @@ public struct ParsedCommand {
 }
 
 public final class CommandParser {
-    private let dictionary: [String: CommandIntent]
+
+    /// Keywords in the order they are tested: longest first, then alphabetically.
+    ///
+    /// This used to iterate a `Dictionary` directly, whose order is not stable
+    /// between runs. When two keywords both matched — "what's" (status) and "go"
+    /// inside "going" (work) — the winner changed from run to run, and the test
+    /// suite failed a different number of times each time it was run. Order is
+    /// now part of the contract: the most specific phrase wins.
+    private let rankedKeywords: [(keyword: String, intent: CommandIntent)]
 
     public init(customDictionary: [String: CommandIntent]? = nil) {
-        if let customDictionary = customDictionary {
-            self.dictionary = customDictionary
-        } else {
-            self.dictionary = Self.defaultDictionary()
-        }
+        let dictionary = customDictionary ?? Self.defaultDictionary()
+        self.rankedKeywords = dictionary
+            .map { (keyword: $0.key, intent: $0.value) }
+            .sorted { lhs, rhs in
+                if lhs.keyword.count != rhs.keyword.count {
+                    return lhs.keyword.count > rhs.keyword.count
+                }
+                return lhs.keyword < rhs.keyword
+            }
     }
 
     public func parse(_ transcript: String) -> ParsedCommand {
         let normalized = transcript.lowercased().trimmingCharacters(in: .whitespaces)
 
-        var agent: AgentKind?
+        // Model first: "claude-opus" is one model name, and stripping the agent
+        // out of it would leave "-opus" and report the wrong thing.
         var model: String?
-        var targetAgent: AgentKind?
-        var remainingText = normalized
-
-        // Extract agent name
-        (agent, remainingText) = extractAgent(from: remainingText)
-
-        // Extract model if present
-        if let extractedModel = extractModel(from: remainingText, for: agent) {
+        var withoutModel = normalized
+        if let extractedModel = extractModel(from: normalized, for: nil) {
             model = extractedModel
-            remainingText = removeModel(from: remainingText, model: extractedModel)
+            withoutModel = removeModel(from: normalized, model: extractedModel)
         }
 
-        // Extract intent keyword
-        let intent = extractIntent(from: remainingText)
+        let mentions = agentMentions(in: withoutModel)
+        let agent = mentions.first
+        let textWithoutModel = removingAgentNames(from: withoutModel)
 
-        // For handoff, extract target agent
+        let intent = extractIntent(from: textWithoutModel)
+
+        // "hand this to codex" — the agent named is the one being handed *to*.
+        var targetAgent: AgentKind?
         if case .handoff = intent {
-            (targetAgent, _) = extractAgent(from: remainingText)
+            targetAgent = mentions.last
         }
 
-        // Everything else is the prompt
-        let prompt = remainingText.trimmingCharacters(in: .whitespaces)
+        // The intent keyword is deliberately left in the prompt: "fix the login
+        // bug" is both the instruction and the thing to say to the agent.
+        let prompt = textWithoutModel
+            .trimmingCharacters(in: CharacterSet(charactersIn: " ,.;:!?-—"))
         let promptText = prompt.isEmpty ? nil : prompt
 
         return ParsedCommand(
@@ -84,54 +98,115 @@ public final class CommandParser {
         )
     }
 
-    private func extractAgent(from text: String) -> (AgentKind?, String) {
-        let agentPatterns: [(pattern: String, agent: AgentKind)] = [
-            ("claude", .claude),
-            ("codex", .codex),
-            ("cursor", .cursor),
-            ("opencode", .opencode),
-            ("open code", .opencode),
-        ]
+    private static let agentPatterns: [(pattern: String, agent: AgentKind)] = [
+        ("opencode", .opencode),
+        ("open code", .opencode),
+        ("claude", .claude),
+        ("cloud", .claude),       // Transcription: "Claude" → "cloud"
+        ("claud", .claude),       // Transcription: dropped final sound
+        ("clawed", .claude),      // Transcription: phonetic spelling
+        ("collade", .claude),     // Transcription observed in HEX history
+        ("codex", .codex),
+        ("codecs", .codex),      // Transcription: "codex" → "codecs"
+        ("codes", .codex),        // Transcription: "codex" → "codes"
+        ("cursor", .cursor),
+    ]
 
-        for (pattern, agent) in agentPatterns {
-            if text.hasPrefix(pattern) {
-                let remaining = String(text.dropFirst(pattern.count)).trimmingCharacters(in: .whitespaces)
-                return (agent, remaining)
+    /// Every agent named in the sentence, in the order they appear.
+    ///
+    /// This used to be `hasPrefix`, so an agent was only recognised at the very
+    /// start — "continue codex" found nothing.
+    private func agentMentions(in text: String) -> [AgentKind] {
+        var found: [(index: String.Index, agent: AgentKind)] = []
+
+        for (pattern, agent) in Self.agentPatterns {
+            var searchStart = text.startIndex
+            while let range = text.range(
+                of: "\\b" + NSRegularExpression.escapedPattern(for: pattern) + "\\b",
+                options: .regularExpression,
+                range: searchStart..<text.endIndex
+            ) {
+                found.append((range.lowerBound, agent))
+                searchStart = range.upperBound
+                if searchStart >= text.endIndex { break }
             }
         }
 
-        return (nil, text)
+        // "opencode" and "open code" can both hit; keep first mention per kind.
+        var seen = Set<AgentKind>()
+        return found
+            .sorted { $0.index < $1.index }
+            .compactMap { seen.insert($0.agent).inserted ? $0.agent : nil }
+    }
+
+    private func removingAgentNames(from text: String) -> String {
+        // Remove only the first mention of each agent. A transcription alias can
+        // also be meaningful prompt text: "Claude, fix cloud deployment" must
+        // retain "cloud" instead of stripping both same-agent matches.
+        var firstRangeByAgent: [AgentKind: NSRange] = [:]
+        for (pattern, agent) in Self.agentPatterns {
+            guard let range = text.range(
+                of: "\\b" + NSRegularExpression.escapedPattern(for: pattern) + "\\b",
+                options: .regularExpression
+            ) else { continue }
+
+            let nsRange = NSRange(range, in: text)
+            if let existing = firstRangeByAgent[agent], existing.location <= nsRange.location {
+                continue
+            }
+            firstRangeByAgent[agent] = nsRange
+        }
+
+        let result = NSMutableString(string: text)
+        for range in firstRangeByAgent.values.sorted(by: { $0.location > $1.location }) {
+            result.replaceCharacters(in: range, with: " ")
+        }
+
+        return String(result)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
     }
 
     private func extractModel(from text: String, for agent: AgentKind?) -> String? {
         let modelPatterns = [
-            "opus", "sonnet", "haiku", "fable",  // Claude
-            "gpt-5", "gpt-4", "gpt-3.5",          // Generic
+            "claude-opus", "claude-sonnet",       // Full names, before the bare ones
+            "gpt-3.5", "gpt-5", "gpt-4",          // Generic
+            "opus", "sonnet", "haiku", "fable",   // Claude
             "o1", "o3",                           // Reasoning
-            "claude-opus", "claude-sonnet",       // Full names
         ]
 
-        for pattern in modelPatterns {
-            if text.contains(pattern) {
-                return pattern
-            }
+        // Longest first, so "claude-opus" is not reported as "opus".
+        for pattern in modelPatterns where contains(text, word: pattern) {
+            return pattern
         }
 
         return nil
     }
 
     private func removeModel(from text: String, model: String) -> String {
-        return text.replacingOccurrences(of: model, with: "").trimmingCharacters(in: .whitespaces)
+        text
+            .replacingOccurrences(
+                of: "\\b" + NSRegularExpression.escapedPattern(for: model) + "\\b",
+                with: " ",
+                options: .regularExpression
+            )
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
     }
 
     private func extractIntent(from text: String) -> CommandIntent {
-        for (keyword, intent) in dictionary {
-            if text.contains(keyword) {
-                return intent
-            }
+        for (keyword, intent) in rankedKeywords where contains(text, word: keyword) {
+            return intent
         }
 
         return .unknown(text)
+    }
+
+    /// Whole-word match. Substring matching is what made "go" fire inside
+    /// "going" and "para" inside "parameter".
+    private func contains(_ text: String, word: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: word)
+        return text.range(of: "\\b" + escaped + "\\b", options: .regularExpression) != nil
     }
 
     private static func defaultDictionary() -> [String: CommandIntent] {
@@ -140,6 +215,10 @@ public final class CommandParser {
             "continue": .work,
             "keep going": .work,
             "go": .work,
+            "fix": .work,
+            "work on": .work,
+            "build": .work,
+            "write": .work,
             "dal": .work,           // Spanish: "dale"
             "dale": .work,          // Spanish
             "segui": .work,         // Spanish: "seguí"
@@ -171,6 +250,7 @@ public final class CommandParser {
             // Handoff
             "handoff": .handoff,
             "hand off": .handoff,
+            "hand": .handoff,
             "give": .handoff,
             "take over": .handoff,
             "pasalo": .handoff,     // Spanish: "pasalo"
@@ -195,6 +275,12 @@ public final class CommandParser {
             "switch": .switchModel,
             "change model": .switchModel,
             "model": .switchModel,
+
+            // Launch
+            "start": .launch,
+            "launch": .launch,
+            "begin": .launch,
+            "open": .launch,
         ]
     }
 }

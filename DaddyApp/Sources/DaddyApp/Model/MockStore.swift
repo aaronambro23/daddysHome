@@ -1,35 +1,6 @@
 import SwiftUI
 import DaddyCore
 
-// MARK: - Tabs
-
-enum DaddyTab: String, CaseIterable, Identifiable {
-    case fleet
-    case workUnits
-    case voice
-    case settings
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .fleet: return "Fleet"
-        case .workUnits: return "Work Units"
-        case .voice: return "Voice"
-        case .settings: return "Settings"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .fleet: return "square.grid.2x2"
-        case .workUnits: return "list.bullet.rectangle"
-        case .voice: return "waveform"
-        case .settings: return "slider.horizontal.3"
-        }
-    }
-}
-
 // MARK: - Store
 //
 // Everything on screen is driven from here. The data is seeded rather than
@@ -40,39 +11,95 @@ enum DaddyTab: String, CaseIterable, Identifiable {
 // `tick()` with reads from `SessionManager`.
 
 @Observable
+@MainActor
 final class MockStore {
     // Navigation
-    var tab: DaddyTab = .fleet
     var selectedProjectID: String?
     var selectedAgentID: String?
+
+    /// The agent being looked at in the drilled-in detail view, if any.
+    ///
+    /// Deliberately on the store rather than local to `AgentDashboard`: the old
+    /// expansion state was view-local, which let it drift out of step with
+    /// `selectedAgentID` and left the view with no reachable way back to the
+    /// grid. Selection and drill-in are now separate, and both live here.
+    var detailAgentID: String?
+
+    /// Agent IDs in the order they were last focused, most recent first. Drives
+    /// "put me back where I was" when you return to a project.
+    private var detailHistory: [String] = []
 
     // Data
     var projects: [MockProject] = []
     var agents: [MockAgent] = []
-    var workUnits: [MockWorkUnit] = []
     var voiceLog: [VoiceEntry] = []
-    var terminal: [TerminalLine] = []
+    var providerUsage: [AgentKind: ProviderUsageSnapshot] = [:]
 
-    // Composer
-    var composeText: String = ""
+    /// Work units marked done by hand. The units themselves are derived from
+    /// live sessions, so only this override needs storing.
+    var doneWorkUnits: Set<String> = []
 
-    // Voice
-    var isListening: Bool = false
-    var voiceLevel: Double = 0.2
+    /// Agent kinds with a binary on this machine. Filled in shortly after
+    /// launch by `refreshInstalledAgents()`; empty until then, so the launch
+    /// menu shows everything as unavailable for a moment rather than blocking.
+    var installedAgents: Set<AgentKind> = []
+
 
     // Settings
-    var defaultModel: String = "opus-5"
+    //
+    // Every one of these reaches something. `defaultModel`, `launchAtLogin`,
+    // `notifyOnRateLimit` and `notifyOnError` used to sit here too, wired to
+    // controls in the settings drawer and to nothing else — a picker that
+    // moved and changed no behavior is worse than no picker.
+
+    /// Handed to `SessionManager` at launch; decides the CLI's approval flags.
     var approvalPolicy: ApprovalPolicy = .safeAuto
+
+    /// Posts a notification when a background session wants input.
     var notifyOnReady: Bool = true
-    var notifyOnRateLimit: Bool = true
-    var notifyOnError: Bool = true
-    var launchAtLogin: Bool = false
+
+    /// Point size for both terminals. A change is a real font reset and a
+    /// TIOCSWINSZ at the far end, so surfaces apply it only when it moves.
+    var terminalFontSize: Double = 11.5
+
+    static let terminalFontRange: ClosedRange<Double> = 9...20
+
+    func nudgeTerminalFont(by delta: Double) {
+        let next = terminalFontSize + delta
+        terminalFontSize = min(
+            Self.terminalFontRange.upperBound,
+            max(Self.terminalFontRange.lowerBound, next)
+        )
+    }
 
     private var tickCount: Int = 0
-    private var streamCursor: [String: Int] = [:]
 
     /// Owns every real pty. Seeded demo agents do not touch this.
     @ObservationIgnored let sessionManager = SessionManager()
+
+    /// Fetches provider quota windows and keeps the last successful snapshots.
+    @ObservationIgnored private let providerUsageService = ProviderUsageService()
+
+    /// Your own shells. Not agents — see `ShellSessions`. The ptys live in
+    /// there; which ones a project has, in what order, and which is on screen
+    /// live in `shellTabs`/`activeShellTabID` below, because this property is
+    /// `@ObservationIgnored` and a change inside the registry would never
+    /// redraw the tab strip.
+    @ObservationIgnored let shellSessions = ShellSessions()
+
+    /// The shells each project has open, in tab order.
+    var shellTabs: [String: [ShellTab]] = [:]
+
+    /// Which of them is on screen, per project.
+    var activeShellTabID: [String: String] = [:]
+
+    /// Turns a spoken sentence into an intent. Existed and was unit-tested long
+    /// before anything called it.
+    @ObservationIgnored let commandParser = CommandParser()
+
+    /// Reads HEX's own recording history, so voice commands do not depend on
+    /// whichever SwiftUI control or embedded terminal currently owns focus.
+    @ObservationIgnored private var hexWatcher: HEXWatcher?
 
     /// Surfaced in the UI when a launch fails (missing binary, bad cwd).
     var launchError: String?
@@ -81,7 +108,13 @@ final class MockStore {
         seed()
         selectedProjectID = projects.first?.id
         selectedAgentID = agents.first?.id
-        rebuildTerminal()
+        refreshInstalledAgents()
+        refreshProviderUsage()
+
+        hexWatcher = HEXWatcher()
+        hexWatcher?.start { [weak self] transcript in
+            self?.submitVoice(transcript)
+        }
     }
 
     // MARK: - Derived
@@ -95,8 +128,23 @@ final class MockStore {
         agents.first { $0.id == selectedAgentID }
     }
 
+    /// Resolved rather than stored, so a dismissed or vanished agent drops the
+    /// detail view instead of leaving it pointing at nothing.
+    var detailAgent: MockAgent? {
+        guard let id = detailAgentID else { return nil }
+        return agents.first { $0.id == id }
+    }
+
     var selectedProject: MockProject? {
         projects.first { $0.id == selectedProjectID }
+    }
+
+    var rootProjects: [MockProject] {
+        projects.filter { $0.parentID == nil }
+    }
+
+    func childProjects(for projectID: String) -> [MockProject] {
+        projects.filter { $0.parentID == projectID }
     }
 
     var liveAgentCount: Int {
@@ -107,47 +155,198 @@ final class MockStore {
         agents.filter { $0.projectID == projectID && $0.isLive }.count
     }
 
+    /// Work units are derived from sessions, not stored. There is no persistence
+    /// on this branch, so the only honest source is what is actually running —
+    /// an empty list means nothing has been launched, not that data is missing.
+    /// (`simple` is the branch that owns the written record; see BRANCHES.md.)
     func workUnits(for projectID: String?) -> [MockWorkUnit] {
-        guard let projectID else { return workUnits }
-        return workUnits.filter { $0.projectID == projectID }
+        let relevant = projectID.map { pid in agents.filter { $0.projectID == pid } } ?? agents
+
+        return Dictionary(grouping: relevant, by: \.workUnitID)
+            .map { unitID, cards -> MockWorkUnit in
+                let newest = cards.max(by: { $0.lastOutputAt < $1.lastOutputAt })
+                let names = cards.map(\.displayName).sorted().joined(separator: " · ")
+
+                return MockWorkUnit(
+                    id: unitID,
+                    projectID: newest?.projectID ?? "",
+                    name: unitID,
+                    status: doneWorkUnits.contains(unitID) ? .done
+                        : (cards.contains(where: \.isLive) ? .active : .idle),
+                    summary: "\(names) · \(project(newest?.projectID ?? "")?.name ?? "")",
+                    lastActivityAt: newest?.lastOutputAt ?? Date()
+                )
+            }
+            .sorted { $0.lastActivityAt > $1.lastActivityAt }
     }
 
     func project(_ id: String) -> MockProject? {
         projects.first { $0.id == id }
     }
 
-    var terminalForSelection: [TerminalLine] {
-        guard let id = selectedAgentID else { return [] }
-        return terminal.filter { $0.agentID == id }
-    }
-
     // MARK: - Selection
 
+    /// Switching project takes the terminal with you.
+    ///
+    /// It used to change `selectedProjectID` and nothing else. `detailAgentID`
+    /// kept pointing at an agent in the *old* project, so the toolbar went on
+    /// describing a session you had navigated away from, while `TerminalPane`
+    /// — which reads `selectedAgentID`, just cleared — dropped to "Select an
+    /// agent to view its output". A full window of nothing, with no way back to
+    /// the fleet except the chevron, and no docked terminal either, because you
+    /// had never actually left focus mode.
+    ///
+    /// So the detail view follows the project: to its best agent if it has one,
+    /// out to the fleet if it does not.
     func select(project id: String) {
-        selectedProjectID = (selectedProjectID == id) ? nil : id
-        if let current = selectedAgent, let pid = selectedProjectID, current.projectID != pid {
-            selectedAgentID = visibleAgents.first?.id
-            rebuildTerminal()
+        guard selectedProjectID != id else { return }
+        selectedProjectID = id
+
+        let target = bestAgent(in: id)
+        selectedAgentID = target?.id
+
+        // Only when already focused. Picking a project from the fleet should
+        // stay on the fleet.
+        guard detailAgentID != nil else { return }
+
+        if let target {
+            openDetail(target.id)
+        } else {
+            closeDetail()
         }
     }
 
+    /// The agent to land on when you arrive at a project, in the order a person
+    /// would expect: the one you were last looking at, then whatever is most
+    /// recently running, then nothing — which means the fleet.
+    private func bestAgent(in projectID: String) -> MockAgent? {
+        let live = agents.filter { $0.projectID == projectID && $0.isLive }
+        guard !live.isEmpty else { return nil }
+
+        if let remembered = detailHistory.lazy
+            .compactMap({ id in live.first { $0.id == id } })
+            .first {
+            return remembered
+        }
+
+        return live.max { $0.lastOutputAt < $1.lastOutputAt }
+    }
+
+    /// Point the docked terminal at a session without leaving the fleet.
+    ///
+    /// A card click used to call `openDetail` directly, so glancing at another
+    /// agent's output cost you the whole grid and a trip back. Selecting is now
+    /// the cheap half of that gesture and `openDetail` is the deliberate one:
+    /// double click, ⌘→, or the tile menu. Finished agents are selectable —
+    /// their output is still worth reading — but only live ones can be opened.
     func select(agent id: String) {
-        guard selectedAgentID != id else { return }
+        guard agents.contains(where: { $0.id == id }) else { return }
         selectedAgentID = id
-        rebuildTerminal()
+    }
+
+    /// Enter the focus workspace for a session. Deliberate by design; see
+    /// `select(agent:)` for the one-click half.
+    func openDetail(_ id: String) {
+        guard agents.contains(where: { $0.id == id && $0.isLive }) else { return }
+
+        selectedAgentID = id
+        detailAgentID = id
+
+        // The rail lists live agents across every project, so opening one can
+        // mean crossing into a different project. Bring the selection with it,
+        // or the tree, the FOCUS footer and the switcher all keep describing
+        // the project you just left.
+        if let projectID = agents.first(where: { $0.id == id })?.projectID {
+            selectedProjectID = projectID
+        }
+
+        // Most recently opened first. This is what "the one I had open" means
+        // when you come back to a project — `lastOutputAt` answers a different
+        // question, since the agent you were reading may well be the quietest.
+        detailHistory.removeAll { $0 == id }
+        detailHistory.insert(id, at: 0)
+    }
+
+    /// Switch the terminal to another live session without restacking focus
+    /// chrome. `openDetail` is what moves the identity slot; this is the hop
+    /// during a Ctrl+Tab burst.
+    func previewDetail(_ id: String) {
+        guard agents.contains(where: { $0.id == id && $0.isLive }) else { return }
+        selectedAgentID = id
+    }
+
+    func closeDetail() {
+        detailAgentID = nil
+    }
+
+    /// An exited session should not keep owning a terminal pane. The workspace
+    /// returns to the fleet and docked output follows another live agent in the
+    /// same visible scope, if one exists. The caller separately decides whether
+    /// the finished card remains available for resume or is discarded.
+    private func repairSelectionAfterExit(_ agentID: String) {
+        if detailAgentID == agentID {
+            closeDetail()
+        }
+
+        guard selectedAgentID == agentID else { return }
+        selectedAgentID = liveSelectionFallback(excluding: agentID)?.id
+    }
+
+    private func liveSelectionFallback(excluding agentID: String) -> MockAgent? {
+        let scopedLive = visibleAgents.filter { $0.id != agentID && $0.isLive }
+        if let newestInScope = scopedLive.max(by: { $0.lastOutputAt < $1.lastOutputAt }) {
+            return newestInScope
+        }
+
+        guard selectedProjectID == nil else { return nil }
+        return agents
+            .filter { $0.id != agentID && $0.isLive }
+            .max(by: { $0.lastOutputAt < $1.lastOutputAt })
     }
 
     // MARK: - Actions
 
     // MARK: - Real sessions
 
-    /// Which agent kinds actually have a binary on this machine. Used to grey
-    /// out launch options rather than let them fail silently.
+    /// Which agent kinds have a binary on this machine.
+    ///
+    /// Computed once, off the main thread — never from inside a view body. The
+    /// launch menu used to ask `ExecutableResolver` directly while rendering,
+    /// and resolving a bare name can spawn a login shell to read its PATH.
+    /// Running a process during layout crashed the app every time the menu was
+    /// opened. Nothing here touches the disk.
     func isInstalled(_ kind: AgentKind) -> Bool {
-        ExecutableResolver.resolve(Self.executableName(for: kind)) != nil
+        installedAgents.contains(kind)
     }
 
-    static func executableName(for kind: AgentKind) -> String {
+    /// Probes the PATH away from the main thread and publishes the result.
+    private func refreshInstalledAgents() {
+        Task { installedAgents = await Self.probeInstalledAgents() }
+    }
+
+    /// Static and off-main on purpose: resolving a bare name can spawn a login
+    /// shell, and that must never happen on the thread SwiftUI draws on.
+    private static func probeInstalledAgents() async -> Set<AgentKind> {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                var found: Set<AgentKind> = []
+                for kind in [AgentKind.claude, .codex, .cursor, .opencode]
+                where ExecutableResolver.resolve(executableName(for: kind)) != nil {
+                    found.insert(kind)
+                }
+                continuation.resume(returning: found)
+            }
+        }
+    }
+
+    func refreshProviderUsage() {
+        Task {
+            providerUsage = await providerUsageService.refresh()
+        }
+    }
+
+    /// `nonisolated` because the PATH probe runs off the main actor.
+    nonisolated static func executableName(for kind: AgentKind) -> String {
         switch kind {
         case .claude: return "claude"
         case .codex: return "codex"
@@ -157,16 +356,21 @@ final class MockStore {
     }
 
     /// Spawns a real CLI in a real pty and adds a card backed by it.
-    func launchReal(_ kind: AgentKind, in project: MockProject) {
+    @discardableResult
+    func launchReal(
+        _ kind: AgentKind,
+        in project: MockProject,
+        workUnitID: String? = nil
+    ) -> MockAgent? {
         launchError = nil
 
         let cwd = URL(fileURLWithPath: (project.path as NSString).expandingTildeInPath)
-        let workUnitID = "live-\(Int(Date().timeIntervalSince1970) % 10_000)"
+        let unit = workUnitID ?? newWorkUnitID()
 
         do {
             let session = try sessionManager.createSession(
                 projectID: project.id,
-                workUnitID: workUnitID,
+                workUnitID: unit,
                 agent: kind,
                 cwd: cwd
             )
@@ -176,9 +380,9 @@ final class MockStore {
                 id: session.id,
                 projectID: project.id,
                 agent: kind,
-                workUnitID: workUnitID,
+                workUnitID: unit,
                 model: Self.defaultModel(for: kind),
-                state: .working,
+                state: .launching,
                 startedAt: Date(),
                 lastOutputAt: Date(),
                 sessionID: session.id
@@ -186,9 +390,26 @@ final class MockStore {
             agents.append(card)
             selectedProjectID = project.id
             selectedAgentID = card.id
+            // Launching from inside the detail view moves the detail view with
+            // you, rather than leaving it parked on the previous agent while
+            // the selection quietly moves underneath it.
+            if detailAgentID != nil { detailAgentID = card.id }
+            return card
         } catch {
             launchError = "\(kind.rawValue): \(error.localizedDescription)"
+            return nil
         }
+    }
+
+    /// Was `"live-\(epoch % 10_000)"`, which repeats every 2.7 hours — two
+    /// sessions started either side of that boundary shared a work unit.
+    private var workUnitCounter = 0
+    func newWorkUnitID() -> String {
+        workUnitCounter += 1
+
+        let stamp = DateFormatter()
+        stamp.dateFormat = "MMdd-HHmm"
+        return "live-\(stamp.string(from: Date()))-\(workUnitCounter)"
     }
 
     /// The live pty behind an agent card, if it has one.
@@ -205,119 +426,326 @@ final class MockStore {
                 try? sessionManager.terminateSession(id)
             }
         }
+        // A shell running a dev server owns a tree of node processes and a
+        // bound port. Leaving those behind would leak a server on every quit.
+        shellSessions.shutdownAll()
+    }
+
+    // MARK: - Shells
+
+    /// The shells a project has open, in tab order. Safe from a view body.
+    func shellTabs(for projectID: String) -> [ShellTab] {
+        self.shellTabs[projectID] ?? []
+    }
+
+    /// The tab on screen for a project. Safe from a view body.
+    func activeShellTab(for projectID: String) -> ShellTab? {
+        let tabs = shellTabs(for: projectID)
+        guard let id = activeShellTabID[projectID] else { return tabs.first }
+        return tabs.first { $0.id == id } ?? tabs.first
+    }
+
+    /// The pty behind a tab, if it has been started. Safe from a view body —
+    /// it never launches anything.
+    func shell(for tab: ShellTab) -> PTYProcess? {
+        shellSessions.existing(id: tab.id)
+    }
+
+    /// Gives a project its first shell if it has none.
+    ///
+    /// Call this from `onAppear`/`onChange`, never from a `body`: it spawns a
+    /// process, and spawning during layout is what crashed the launch menu.
+    func ensureShell(for project: MockProject) {
+        guard shellTabs(for: project.id).isEmpty else { return }
+        openShellTab(for: project)
+    }
+
+    /// Another shell in the same project, and focus moves to it. Spawns —
+    /// same rule as `ensureShell`.
+    @discardableResult
+    func openShellTab(for project: MockProject) -> ShellTab? {
+        let cwd = URL(fileURLWithPath: (project.path as NSString).expandingTildeInPath)
+
+        // Numbered from the highest so far rather than from the count, so
+        // closing the middle tab never produces two shells with the same name.
+        let existing = shellTabs(for: project.id)
+        let ordinal = (existing.map(\.ordinal).max() ?? 0) + 1
+        let tab = ShellTab(id: UUID().uuidString, projectID: project.id, ordinal: ordinal)
+
+        do {
+            try shellSessions.shell(id: tab.id, cwd: cwd)
+        } catch {
+            launchError = "shell: \(error.localizedDescription)"
+            return nil
+        }
+
+        self.shellTabs[project.id] = existing + [tab]
+        activeShellTabID[project.id] = tab.id
+        return tab
+    }
+
+    func selectShellTab(_ tab: ShellTab) {
+        activeShellTabID[tab.projectID] = tab.id
+    }
+
+    /// Closes a shell and everything it was running.
+    ///
+    /// The pane is never left empty: closing the last tab immediately opens a
+    /// fresh shell, which is what closing the last tab does everywhere else and
+    /// is better than a dead panel with no way back.
+    func closeShellTab(_ tab: ShellTab) {
+        var tabs = shellTabs(for: tab.projectID)
+        guard let index = tabs.firstIndex(of: tab) else { return }
+
+        shellSessions.close(id: tab.id)
+        tabs.remove(at: index)
+        self.shellTabs[tab.projectID] = tabs
+
+        guard activeShellTabID[tab.projectID] == tab.id else { return }
+
+        if tabs.isEmpty {
+            activeShellTabID[tab.projectID] = nil
+            if let project = project(tab.projectID) { openShellTab(for: project) }
+        } else {
+            // The neighbour on the left, or the new last one — never a jump to
+            // the far end of the strip.
+            activeShellTabID[tab.projectID] = tabs[min(index, tabs.count - 1)].id
+        }
     }
 
     // MARK: - Actions
 
     func interrupt(_ agentID: String) {
-        if let agent = agents.first(where: { $0.id == agentID }), let id = agent.sessionID {
-            try? sessionManager.interruptSession(id)
-            mutate(agentID) { $0.lastOutputAt = Date() }
-            return
-        }
-
-        mutate(agentID) { agent in
-            agent.state = .ready
-            agent.lastOutputAt = Date()
-        }
-        append(agentID, .error, "^C  interrupt sent — agent returned to prompt")
+        guard let id = agents.first(where: { $0.id == agentID })?.sessionID else { return }
+        try? sessionManager.interruptSession(id)
+        mutate(agentID) { $0.lastOutputAt = Date() }
     }
 
+    /// Stop the agent and clear it away.
+    ///
+    /// Stopping used to leave the dead card sitting there so you could read how
+    /// the agent ended — but "Session ended" across the full width of the
+    /// window is not a reading experience, it is a dead end you can still click
+    /// into, get switched back to, and see in the focus switcher. Stopping is a
+    /// deliberate act; the agent goes.
+    ///
+    /// The cost, knowingly: a stopped agent can no longer be resumed, because
+    /// its session record goes with it. Agents that exit on their own still
+    /// leave a card behind, and those are the ones "Resume chat" is for.
     func stop(_ agentID: String) {
-        if let agent = agents.first(where: { $0.id == agentID }), let id = agent.sessionID {
-            try? sessionManager.terminateSession(id)
-            mutate(agentID) { agent in
-                agent.state = .exited(exitCode: 0)
-                agent.lastOutputAt = Date()
-            }
-            return
-        }
+        guard let agent = agents.first(where: { $0.id == agentID }),
+              let sessionID = agent.sessionID else { return }
 
-        mutate(agentID) { agent in
-            agent.state = .exited(exitCode: 0)
-            agent.lastOutputAt = Date()
-        }
-        append(agentID, .dim, "session terminated (exit 0)")
+        try? sessionManager.terminateSession(sessionID)
+
+        // Move the detail view somewhere real first, while the card still
+        // exists to be moved away from.
+        leaveDetailIfShowing(agentID)
+        discard(agentID, sessionID: sessionID)
     }
 
-    func relaunch(_ agentID: String) {
+    /// Stopping the agent you are focused on leaves a workspace with nothing in
+    /// it. Move somewhere with something in it instead: the next live agent if
+    /// there is one, the fleet otherwise.
+    private func leaveDetailIfShowing(_ agentID: String) {
+        guard detailAgentID == agentID else { return }
+
+        // Same scope the focus switcher offers first, then anywhere — being
+        // thrown to another project's agent beats being thrown to nothing.
+        let successor = visibleAgents.first { $0.id != agentID && $0.isLive }
+            ?? agents.first { $0.id != agentID && $0.isLive }
+
+        if let successor {
+            openDetail(successor.id)
+        } else {
+            closeDetail()
+        }
+    }
+
+    /// Nudge a stopped agent to keep going, without throwing away what it has
+    /// already worked out. The counterpart to `interrupt`.
+    func resume(_ agentID: String) {
+        guard let id = agents.first(where: { $0.id == agentID })?.sessionID else { return }
+        do {
+            try sessionManager.resumeSession(id)
+            mutate(agentID) { $0.lastOutputAt = Date() }
+        } catch {
+            launchError = "resume: \(error.localizedDescription)"
+        }
+    }
+
+    /// Whether this agent's CLI can pick up its previous conversation.
+    func canResumeChat(_ kind: AgentKind) -> Bool {
+        sessionManager.canContinueConversation(kind)
+    }
+
+    /// Start the process again.
+    ///
+    /// `continuingConversation` is the difference between "run this CLI again"
+    /// and "carry on where we left off" — the CLI reopens its own last session
+    /// rather than a blank one. Not every agent can do it; see `canResumeChat`.
+    func relaunch(_ agentID: String, continuingConversation: Bool = false) {
+        guard let id = agents.first(where: { $0.id == agentID })?.sessionID else { return }
+
         mutate(agentID) { agent in
             agent.state = .launching
             agent.startedAt = Date()
             agent.lastOutputAt = Date()
         }
-        guard let agent = agents.first(where: { $0.id == agentID }) else { return }
-        append(agentID, .rule, "")
-        append(agentID, .command,
-               "$ \(agent.agent.rawValue) --permission-mode \(approvalPolicy.rawValue) --model \(agent.model)")
-        append(agentID, .dim, "starting session…")
+
+        do {
+            try sessionManager.restartSession(
+                id,
+                approvalPolicy: approvalPolicy,
+                continuingConversation: continuingConversation
+            )
+        } catch {
+            launchError = "relaunch: \(error.localizedDescription)"
+            mutate(agentID) { $0.state = .error(error.localizedDescription) }
+        }
     }
 
+    /// The text goes into the pty; the agent's own output comes back through the
+    /// terminal renderer. There is nothing to fake on the way.
     func send(_ text: String, to agentID: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty,
+              let id = agents.first(where: { $0.id == agentID })?.sessionID else { return }
 
-        // Real session: the text goes into the pty, and the agent's own output
-        // comes back through the terminal renderer. Nothing to fake.
-        if let agent = agents.first(where: { $0.id == agentID }), let id = agent.sessionID {
-            try? sessionManager.sendPrompt(trimmed, to: id)
-            mutate(agentID) { $0.lastOutputAt = Date() }
-            composeText = ""
-            return
-        }
-
-        append(agentID, .command, "> \(trimmed)")
-        mutate(agentID) { agent in
-            agent.state = .working
-            agent.lastOutputAt = Date()
-        }
-        composeText = ""
+        try? sessionManager.sendPrompt(trimmed, to: id)
+        mutate(agentID) { $0.lastOutputAt = Date() }
     }
 
+    /// Remove a finished agent from the dashboard.
+    ///
+    /// Without this a dead card stays forever: `stop` leaves it visible on
+    /// purpose, so you can see how the agent ended, but nothing cleared it
+    /// afterwards.
+    func dismiss(_ agentID: String) {
+        guard let agent = agents.first(where: { $0.id == agentID }) else { return }
+        discard(agentID, sessionID: agent.sessionID)
+    }
+
+    /// Take the card off the screen now; reap the session behind it later.
+    ///
+    /// `forgetSession` shuts the pty down *synchronously*, polling for up to
+    /// two seconds for the process group to die. This type is `@MainActor`, so
+    /// doing that inline is a frozen window — survivable when dismissing an
+    /// agent that died a while ago, not when stopping one that is still
+    /// exiting. The card is gone from the UI either way.
+    private func discard(_ agentID: String, sessionID: String?) {
+        agents.removeAll { $0.id == agentID }
+        detailHistory.removeAll { $0 == agentID }
+
+        if selectedAgentID == agentID {
+            selectedAgentID = visibleAgents.first?.id ?? agents.first?.id
+        }
+        if detailAgentID == agentID {
+            detailAgentID = nil
+        }
+
+        guard let sessionID else { return }
+        let manager = sessionManager
+        Task.detached(priority: .utility) {
+            manager.forgetSession(sessionID)
+        }
+    }
+
+    /// Stop every live agent of one kind in the current scope. The tile menu's
+    /// one bulk action — killing four runaway Claudes one menu at a time is the
+    /// thing the old UI made tedious.
+    func stopAll(_ kind: AgentKind) {
+        for agent in visibleAgents where agent.agent == kind && agent.isLive {
+            stop(agent.id)
+        }
+    }
+
+    /// Debug escape hatch: terminate and remove every live agent in the
+    /// selected project, regardless of provider.
+    ///
+    /// IDs are snapshotted before `stop` mutates `agents`. No selected project
+    /// means no action; the all-projects scope must never become a global kill
+    /// switch by accident.
+    func dismissAllActiveAgentsInSelectedProject() {
+        guard let projectID = selectedProjectID else { return }
+        let agentIDs = agents
+            .filter { $0.projectID == projectID && $0.isLive }
+            .map(\.id)
+
+        for agentID in agentIDs {
+            stop(agentID)
+        }
+    }
+
+    /// Clear every finished agent at once.
+    func dismissAllExited() {
+        for agent in agents where !agent.isLive {
+            dismiss(agent.id)
+        }
+    }
+
+    /// Clear finished cards for one provider in the selected project. A nil
+    /// project means the dashboard is in its explicit all-projects scope.
+    func dismissAllExited(_ kind: AgentKind, in projectID: String?) {
+        for agent in agents
+        where !agent.isLive
+            && agent.agent == kind
+            && (projectID == nil || agent.projectID == projectID) {
+            dismiss(agent.id)
+        }
+    }
+
+    /// Start a different agent on the same work, in the same project.
+    ///
+    /// This used to append a card with no process behind it, so a handoff
+    /// produced something that looked like an agent and could not be talked to.
     func handOff(_ agentID: String, to kind: AgentKind) {
-        guard let source = agents.first(where: { $0.id == agentID }) else { return }
-        let new = MockAgent(
-            id: UUID().uuidString,
-            projectID: source.projectID,
-            agent: kind,
-            workUnitID: source.workUnitID,
-            model: Self.defaultModel(for: kind),
-            state: .launching,
-            startedAt: Date(),
-            lastOutputAt: Date()
-        )
-        agents.append(new)
-        selectedAgentID = new.id
-        append(new.id, .command,
-               "$ \(kind.rawValue) --permission-mode \(approvalPolicy.rawValue) --model \(new.model)")
-        append(new.id, .dim, "handed off from \(source.displayName) · \(source.workUnitID)")
+        guard let source = agents.first(where: { $0.id == agentID }),
+              let project = project(source.projectID) else { return }
+
+        launchReal(kind, in: project, workUnitID: source.workUnitID)
     }
 
     func markDone(_ workUnitID: String) {
-        guard let idx = workUnits.firstIndex(where: { $0.id == workUnitID }) else { return }
-        workUnits[idx].status = workUnits[idx].status == .done ? .active : .done
-        workUnits[idx].lastActivityAt = Date()
-    }
-
-    func toggleListening() {
-        isListening.toggle()
-        if isListening {
-            voiceLog.insert(
-                VoiceEntry(at: Date(), transcript: "listening…",
-                           resolution: "HEX armed", didSucceed: true),
-                at: 0
-            )
+        if doneWorkUnits.contains(workUnitID) {
+            doneWorkUnits.remove(workUnitID)
+        } else {
+            doneWorkUnits.insert(workUnitID)
         }
     }
 
-    func simulateVoiceCommand(_ phrase: String, resolution: String) {
+    /// The one entry point for spoken input. `HEXWatcher` supplies recordings
+    /// targeted at Daddy, and this routes them to a real agent.
+    @MainActor
+    func submitVoice(_ transcript: String) {
+        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let outcome = VoiceRouter(store: self).route(trimmed)
+
         voiceLog.insert(
-            VoiceEntry(at: Date(), transcript: phrase, resolution: resolution, didSucceed: true),
+            VoiceEntry(at: Date(), transcript: trimmed,
+                       resolution: outcome.summary, didSucceed: outcome.didSucceed),
             at: 0
         )
-        if let id = selectedAgentID {
-            append(id, .dim, "voice · \(resolution)")
-            mutate(id) { $0.state = .working }
+    }
+
+    /// Switch the model on a live session. Returns false if the agent has no
+    /// model by that name, so the caller can say so rather than fail silently.
+    func switchModel(_ humanName: String, on agentID: String) -> Bool {
+        guard let agent = agents.first(where: { $0.id == agentID }) else { return false }
+
+        guard let sessionID = agent.sessionID else {
+            mutate(agentID) { $0.model = humanName }
+            return true
+        }
+
+        do {
+            try sessionManager.selectModel(humanName, for: sessionID)
+            mutate(agentID) { $0.model = humanName }
+            return true
+        } catch {
+            return false
         }
     }
 
@@ -328,77 +756,88 @@ final class MockStore {
     func tick() {
         tickCount += 1
 
-        if isListening {
-            voiceLevel = 0.25 + 0.6 * abs(sin(Double(tickCount) * 0.9))
-        } else {
-            voiceLevel = 0.18
-        }
-
-        // Real sessions report their own state; never script over them.
-        for agent in agents where agent.isRealSession {
+        // Every card is a real session now, so state comes from the process and
+        // nothing invents it. The dashboard sits still when nothing is happening,
+        // which is correct: it used to shuffle states on a timer so it would look
+        // busy while you watched.
+        for agent in agents {
             guard let sessionID = agent.sessionID else { continue }
 
+            // `launchSession` marks a session `.ready` the moment `forkpty`
+            // returns, which is before the CLI has printed a single byte — so
+            // a card announced READY while its agent was still booting and
+            // could not be typed at. An agent that has said nothing is still
+            // launching, whatever the session says.
+            let hasSpoken = !(sessionManager.getPTYProcess(for: sessionID)?
+                .recentOutput.isEmpty ?? true)
+
             if let live = sessionManager.session(sessionID) {
-                mutate(agent.id) { $0.state = live.state }
+                let oldState = agent.state
+                let newState: AgentState
+                if case .ready = live.state, !hasSpoken {
+                    newState = .launching
+                } else {
+                    newState = live.state
+                }
+
+                mutate(agent.id) {
+                    $0.state = newState
+                    $0.lastOutputAt = live.lastOutputAt
+                }
+
+                let becameReady: Bool
+                if case .ready = newState, case .ready = oldState {
+                    becameReady = false
+                } else if case .ready = newState {
+                    becameReady = true
+                } else {
+                    becameReady = false
+                }
+
+                if becameReady, notifyOnReady, !NSApplication.shared.isActive {
+                    updateDockBadge()
+                    NSApplication.shared.requestUserAttention(.criticalRequest)
+                }
             }
 
-            // The pty vanishing means the process died on its own.
-            if let pty = sessionManager.getPTYProcess(for: sessionID), !pty.isProcessRunning {
-                mutate(agent.id) { $0.state = .exited(exitCode: 0) }
+            if let pty = sessionManager.getPTYProcess(for: sessionID) {
+                // Only the tail is cleaned. `recentOutput` runs to 64KB and
+                // `stripANSI` walks every character of what it is given, and
+                // this loop runs for every agent every second.
+                let tail = String(pty.recentOutput.suffix(4096))
+                let line = OutputHeuristics.lastVisibleLine(
+                    OutputHeuristics.recentWindow(tail, lines: 3)
+                )
+                if line != agent.lastLine {
+                    mutate(agent.id) { $0.lastLine = line }
+                }
+
+                // The pty vanishing means the process died on its own. If
+                // Ctrl-C immediately preceded that exit, it was the user's
+                // deliberate CLI-exit gesture: repair navigation and remove
+                // the card as one lifecycle event. A Ctrl-C that only cancelled
+                // work leaves the process running and never reaches this path.
+                if !pty.isProcessRunning {
+                    if pty.exitedAfterInterrupt {
+                        repairSelectionAfterExit(agent.id)
+                        discard(agent.id, sessionID: sessionID)
+                        continue
+                    }
+
+                    mutate(agent.id) { $0.state = .exited(exitCode: pty.exitCode ?? 0) }
+                    repairSelectionAfterExit(agent.id)
+                }
             }
         }
 
-        // Stream scripted output for demo agents only.
-        for agent in agents where agent.state == .working && !agent.isRealSession {
-            guard tickCount % 2 == 0 || agent.id == selectedAgentID else { continue }
-            appendStreamLine(for: agent)
-            mutate(agent.id) { $0.lastOutputAt = Date() }
-        }
+        // Rescan for projects occasionally — a repo cloned while Daddy is open
+        // should show up without a restart.
+        if tickCount % 30 == 0 { refreshProjects() }
 
-        // Launching demo agents come up after a beat.
-        for agent in agents where agent.state == .launching && !agent.isRealSession {
-            mutate(agent.id) { $0.state = .working }
-            append(agent.id, .output, "> ready · picking up \(agent.workUnitID)")
-        }
-
-        // Every few seconds one live agent changes state, so the dashboard is
-        // never static while you look at it.
-        if tickCount % 7 == 0 { advanceOneState() }
-    }
-
-    private func advanceOneState() {
-        let candidates = agents.filter(\.isLive)
-        guard let target = candidates.randomElement() else { return }
-
-        switch target.state {
-        case .working:
-            if Int.random(in: 0..<10) < 2 {
-                mutate(target.id) { $0.state = .rateLimited }
-                append(target.id, .error, "rate limit reached — backing off 4m")
-            } else {
-                mutate(target.id) { $0.state = .ready }
-                append(target.id, .output, "✓ done — awaiting instruction")
-            }
-        case .ready:
-            mutate(target.id) { $0.state = .working }
-            append(target.id, .output, "> resuming \(target.workUnitID)…")
-        case .rateLimited:
-            mutate(target.id) { $0.state = .ready }
-            append(target.id, .output, "limit cleared — ready")
-        case .error:
-            mutate(target.id) { $0.state = .ready }
-        case .launching, .exited:
-            break
-        }
-        mutate(target.id) { $0.lastOutputAt = Date() }
-    }
-
-    private func appendStreamLine(for agent: MockAgent) {
-        let script = Self.stream(for: agent.agent)
-        let cursor = streamCursor[agent.id] ?? 0
-        let line = script[cursor % script.count]
-        streamCursor[agent.id] = cursor + 1
-        append(agent.id, line.0, line.1)
+        // Provider quota endpoints are account-wide and some are aggressively
+        // rate-limited. Five minutes keeps the dashboard useful without turning
+        // four fleet cards into a polling storm.
+        if tickCount % 300 == 0 { refreshProviderUsage() }
     }
 
     // MARK: - Buffer plumbing
@@ -408,22 +847,12 @@ final class MockStore {
         body(&agents[idx])
     }
 
-    private func append(_ agentID: String, _ kind: TerminalLine.Kind, _ text: String) {
-        terminal.append(TerminalLine(agentID: agentID, kind: kind, text: text))
-        // Keep the buffer bounded — this runs forever.
-        if terminal.count > 600 {
-            terminal.removeFirst(terminal.count - 600)
-        }
+    /// Updates the Dock icon badge to show the count of ready agents.
+    private func updateDockBadge() {
+        let readyCount = agents.filter { if case .ready = $0.state { return true } else { return false } }.count
+        NSApplication.shared.dockTile.badgeLabel = readyCount > 0 ? "\(readyCount)" : ""
     }
 
-    private func rebuildTerminal() {
-        guard let agent = selectedAgent else { return }
-        guard !terminal.contains(where: { $0.agentID == agent.id }) else { return }
-        append(agent.id, .command,
-               "$ \(agent.agent.rawValue) --permission-mode \(approvalPolicy.rawValue) --model \(agent.model)")
-        append(agent.id, .rule, "")
-        append(agent.id, .output, "> working on \(agent.workUnitID)…")
-    }
 }
 
 // MARK: - Seed Data
@@ -438,119 +867,73 @@ extension MockStore {
         }
     }
 
-    static func stream(for kind: AgentKind) -> [(TerminalLine.Kind, String)] {
-        switch kind {
-        case .claude:
-            return [
-                (.dim, "· Reading Sources/DaddyCore/SessionManager.swift"),
-                (.output, "  applying edit → SessionManager.swift:118"),
-                (.dim, "· Running swift build"),
-                (.output, "  Compiling DaddyCore (9 sources)"),
-                (.dim, "· Build succeeded in 4.2s"),
-                (.output, "  writing DaddyWork/auth-refactor/notes.md"),
-            ]
-        case .codex:
-            return [
-                (.dim, "· scanning workspace"),
-                (.output, "  patch → tests/test_auth.py"),
-                (.dim, "· pytest -q"),
-                (.output, "  14 passed, 1 skipped"),
-            ]
-        case .cursor:
-            return [
-                (.dim, "· indexing repository"),
-                (.output, "  composer: refactor HEXWatcher polling"),
-                (.dim, "· awaiting approval for 3 file writes"),
-            ]
-        case .opencode:
-            return [
-                (.dim, "· reading prd.md"),
-                (.output, "  drafting milestone-7 checklist"),
-                (.dim, "· idle"),
-            ]
+    /// Reads the world as it actually is. There is no seeded data left: an
+    /// empty dashboard means no agents are running, which is the truth.
+    func seed() {
+        refreshProjects()
+    }
+
+    /// Rescans the disk for projects, off the main thread.
+    ///
+    /// Walking `~/Documents` two levels deep is not free, and it runs on a timer
+    /// — doing it on the main thread would stutter the UI at best. Same rule as
+    /// `refreshInstalledAgents`: no filesystem work where SwiftUI is drawing.
+    func refreshProjects() {
+        Task {
+            let found = await Self.scanProjects()
+            guard found != projects else { return }
+
+            projects = found
+            if selectedProjectID == nil { selectedProjectID = found.first?.id }
         }
     }
 
-    func seed() {
-        let now = Date()
+    private static func scanProjects() async -> [MockProject] {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                let projects = ProjectScanner.scan().flatMap { root in
+                    [
+                        MockProject(
+                            id: root.id,
+                            name: root.name,
+                            path: root.path,
+                            parentID: nil
+                        )
+                    ] + root.children.map {
+                        MockProject(
+                            id: $0.id,
+                            name: $0.name,
+                            path: $0.path,
+                            parentID: root.id
+                        )
+                    }
+                }
+                continuation.resume(returning: projects)
+            }
+        }
+    }
 
-        projects = [
-            MockProject(id: "daddysHome", name: "daddysHome", path: "~/Documents/daddy"),
-            MockProject(id: "hex-bridge", name: "hex-bridge", path: "~/Documents/hex-bridge"),
-            MockProject(id: "daddycore-spm", name: "daddycore-spm", path: "~/Documents/daddycore-spm"),
-            MockProject(id: "notes-sync", name: "notes-sync", path: "~/Documents/notes-sync"),
-            MockProject(id: "portfolio-site", name: "portfolio-site", path: "~/Documents/portfolio-site"),
-            MockProject(id: "tax-2026", name: "tax-2026", path: "~/Documents/tax-2026"),
-        ]
+    // MARK: - Agent State File Reading
 
-        agents = [
-            MockAgent(id: "a1", projectID: "daddysHome", agent: .claude,
-                      workUnitID: "auth-refactor", model: "opus-5",
-                      state: .working,
-                      startedAt: now.addingTimeInterval(-1_820),
-                      lastOutputAt: now.addingTimeInterval(-4)),
-            MockAgent(id: "a2", projectID: "daddysHome", agent: .codex,
-                      workUnitID: "test-coverage", model: "gpt-5-codex",
-                      state: .ready,
-                      startedAt: now.addingTimeInterval(-940),
-                      lastOutputAt: now.addingTimeInterval(-96)),
-            MockAgent(id: "a3", projectID: "hex-bridge", agent: .cursor,
-                      workUnitID: "hotkey-latency", model: "composer-1",
-                      state: .rateLimited,
-                      startedAt: now.addingTimeInterval(-5_400),
-                      lastOutputAt: now.addingTimeInterval(-240)),
-            MockAgent(id: "a4", projectID: "daddycore-spm", agent: .opencode,
-                      workUnitID: "milestone-7", model: "sonnet-5",
-                      state: .working,
-                      startedAt: now.addingTimeInterval(-320),
-                      lastOutputAt: now.addingTimeInterval(-2)),
-            MockAgent(id: "a5", projectID: "notes-sync", agent: .claude,
-                      workUnitID: "markdown-sync", model: "opus-5",
-                      state: .error("adapter exited unexpectedly"),
-                      startedAt: now.addingTimeInterval(-7_200),
-                      lastOutputAt: now.addingTimeInterval(-1_500)),
-        ]
+    /// Reads live agent state from {project}/.daddy/agents/{agent-id}.json
+    /// Returns (model, workUnitID) or (nil, nil) if file doesn't exist or is invalid.
+    func readAgentStateFromFile(agentID: String, projectPath: String) -> (model: String?, workUnitID: String?) {
+        let daddyDir = URL(fileURLWithPath: projectPath).appendingPathComponent(".daddy")
+        let agentsDir = daddyDir.appendingPathComponent("agents")
+        let stateFile = agentsDir.appendingPathComponent("\(agentID).json")
 
-        workUnits = [
-            MockWorkUnit(id: "auth-refactor", projectID: "daddysHome", name: "Authentication refactor",
-                         status: .active, summary: "Move token exchange into DaddyCore, drop keychain shim",
-                         lastActivityAt: now.addingTimeInterval(-60)),
-            MockWorkUnit(id: "test-coverage", projectID: "daddysHome", name: "Test coverage push",
-                         status: .active, summary: "CommandParser Spanish cases, 9/14 → 14/14",
-                         lastActivityAt: now.addingTimeInterval(-600)),
-            MockWorkUnit(id: "liquid-glass", projectID: "daddysHome", name: "Liquid Glass reskin",
-                         status: .active, summary: "Real glassEffect surfaces, aurora backdrop, live tabs",
-                         lastActivityAt: now.addingTimeInterval(-20)),
-            MockWorkUnit(id: "hotkey-latency", projectID: "hex-bridge", name: "Hotkey latency",
-                         status: .idle, summary: "Double-tap ⌥ dispatch is ~180ms, target <60ms",
-                         lastActivityAt: now.addingTimeInterval(-3_100)),
-            MockWorkUnit(id: "milestone-7", projectID: "daddycore-spm", name: "Milestone 7 scoping",
-                         status: .active, summary: "Rate-limit backoff policy + session recovery",
-                         lastActivityAt: now.addingTimeInterval(-120)),
-            MockWorkUnit(id: "markdown-sync", projectID: "notes-sync", name: "Markdown sync",
-                         status: .idle, summary: "DaddyWork ↔ Obsidian vault two-way write",
-                         lastActivityAt: now.addingTimeInterval(-9_000)),
-            MockWorkUnit(id: "pty-hardening", projectID: "daddycore-spm", name: "PTY hardening",
-                         status: .done, summary: "NSLock around session table, no more races",
-                         lastActivityAt: now.addingTimeInterval(-86_400)),
-            MockWorkUnit(id: "menu-bar", projectID: "daddysHome", name: "Menu bar background mode",
-                         status: .done, summary: "NSStatusItem persists after window close",
-                         lastActivityAt: now.addingTimeInterval(-172_800)),
-        ]
+        guard FileManager.default.fileExists(atPath: stateFile.path) else {
+            return (nil, nil)
+        }
 
-        voiceLog = [
-            VoiceEntry(at: now.addingTimeInterval(-45),
-                       transcript: "daddy, what's claude doing",
-                       resolution: "read state · claude · auth-refactor · working", didSucceed: true),
-            VoiceEntry(at: now.addingTimeInterval(-300),
-                       transcript: "start codex on test coverage",
-                       resolution: "launch · codex · daddysHome/test-coverage", didSucceed: true),
-            VoiceEntry(at: now.addingTimeInterval(-780),
-                       transcript: "pásate a opus",
-                       resolution: "set model · opus-5 · claude", didSucceed: true),
-            VoiceEntry(at: now.addingTimeInterval(-1_500),
-                       transcript: "mark the auth thing done",
-                       resolution: "ambiguous work unit — asked to confirm", didSucceed: false),
-        ]
+        do {
+            let data = try Data(contentsOf: stateFile)
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let model = json?["model"] as? String
+            let workUnitID = json?["workUnitID"] as? String
+            return (model, workUnitID)
+        } catch {
+            return (nil, nil)
+        }
     }
 }

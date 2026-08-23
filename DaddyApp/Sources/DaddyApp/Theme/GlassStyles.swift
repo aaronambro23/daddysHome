@@ -113,6 +113,15 @@ extension ButtonStyle where Self == InsetButtonStyle {
 // MARK: - Hairline
 
 struct GlassHairline: View {
+    /// Which way the line runs. Vertical is for separating things that sit
+    /// beside each other in a row — it fades at both ends the same way, so it
+    /// reads as a seam in the glass rather than a drawn border.
+    var axis: Axis = .horizontal
+
+    /// Vertical only: how tall the seam is. A rule between two items in a
+    /// toolbar should be shorter than the toolbar, or it looks like a wall.
+    var length: CGFloat = 26
+
     var body: some View {
         Rectangle()
             .fill(
@@ -122,10 +131,13 @@ struct GlassHairline: View {
                         Color.white.opacity(0.14),
                         Color.white.opacity(0.02),
                     ],
-                    startPoint: .leading,
-                    endPoint: .trailing
+                    startPoint: axis == .horizontal ? .leading : .top,
+                    endPoint: axis == .horizontal ? .trailing : .bottom
                 )
             )
-            .frame(height: 1)
+            .frame(
+                width: axis == .horizontal ? nil : 1,
+                height: axis == .horizontal ? 1 : length
+            )
     }
 }

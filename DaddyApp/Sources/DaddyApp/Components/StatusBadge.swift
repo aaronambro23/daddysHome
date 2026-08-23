@@ -12,6 +12,7 @@ enum StateColors {
         case .error: return DaddyTheme.failure
         case .launching: return DaddyTheme.launching
         case .exited: return DaddyTheme.idle
+        case .unknown: return DaddyTheme.idle
         }
     }
 
@@ -23,6 +24,7 @@ enum StateColors {
         case .error: return "ERROR"
         case .launching: return "LAUNCHING"
         case .exited: return "EXITED"
+        case .unknown: return "UNCLEAR"
         }
     }
 
@@ -34,6 +36,7 @@ enum StateColors {
         case .error: return "xmark"
         case .launching: return "arrow.up.circle"
         case .exited: return "stop.fill"
+        case .unknown: return "questionmark"
         }
     }
 }
@@ -51,7 +54,14 @@ struct StatusBadge: View {
         let accent = StateColors.accent(for: state)
 
         HStack(spacing: 6) {
-            if let glyph = StateColors.glyph(for: state) {
+            // READY has a glyph in `StateColors`, so this must precede the
+            // generic glyph branch. The old order consumed READY as a static
+            // checkmark and made the bouncing indicator unreachable.
+            if state == .ready {
+                BouncingBadge(color: accent, glowRadius: 7, size: 5)
+            } else if state == .working {
+                BreathingDot(color: accent, glowRadius: 7, size: 5)
+            } else if let glyph = StateColors.glyph(for: state) {
                 Image(systemName: glyph)
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(accent)

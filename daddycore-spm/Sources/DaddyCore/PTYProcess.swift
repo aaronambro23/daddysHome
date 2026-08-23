@@ -49,11 +49,22 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
     private var outputBuffer: String = ""
     private var pendingBytes: [UInt8] = []
     private var outputCallbacks: [(String) -> Void] = []
-    private var chunkCallbacks: [(String) -> Void] = []
+    private var chunkCallbacks: [(token: UUID, callback: (String) -> Void)] = []
     private var terminationCallbacks: [(Int32) -> Void] = []
     private var lastExitCode: Int32 = 0
     private var hasExited = false
+    private var lastInterruptInputAt: Date?
+    private var exitedAfterRecentInterrupt = false
     private let exitSignal = DispatchSemaphore(value: 0)
+
+    /// Ctrl-C that exits an interactive CLI does so immediately. Keeping this
+    /// window short distinguishes that deliberate exit from a later unrelated
+    /// crash after Ctrl-C merely cancelled some in-progress work.
+    private static let interruptExitWindow: TimeInterval = 3
+
+    /// Set by `launch()`, cleared by the first `consumeFreshLaunchRedraw()`.
+    /// See that method for what it is for.
+    private var awaitingFirstRedraw = false
 
     /// Lines of scrollback retained in `recentOutput` for state detection.
     private let retainedLines = 200
@@ -85,6 +96,34 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
 
     // MARK: Lifecycle
 
+    /// The environment an agent is launched into.
+    ///
+    /// This used to be `nil`, meaning the child inherited a GUI app's
+    /// environment — which has no `TERM` in it at all. Without `TERM` a TUI
+    /// cannot look up terminfo, so it assumes the terminal can do nothing and
+    /// stops redrawing in place: every keystroke reprints the whole input line
+    /// underneath the last one. Claude Code hid the problem because it emits
+    /// hardcoded ANSI, but OpenCode and Cursor read terminfo and degraded.
+    ///
+    /// `PATH` matters for a second reason: an agent shells out to `node`, `git`,
+    /// `rg` and anything else it needs, and a GUI app's PATH finds none of them.
+    /// SwiftTerm's own helper deliberately leaves PATH out, so it is added here.
+    static func childEnvironment() -> [String] {
+        var env = Terminal.getEnvironmentVariables(termName: "xterm-256color", trueColor: true)
+        env.append("PATH=\(ExecutableResolver.pathForChildProcesses())")
+
+        let inherited = ProcessInfo.processInfo.environment
+        for key in ["SHELL", "LC_ALL", "LC_CTYPE", "TMPDIR", "SSH_AUTH_SOCK"] {
+            if let value = inherited[key] { env.append("\(key)=\(value)") }
+        }
+
+        // Some CLIs key colour support off this rather than COLORTERM.
+        env.append("FORCE_COLOR=1")
+        env.append("TERM_PROGRAM=Daddy")
+
+        return env
+    }
+
     public func launch() throws {
         guard !localProcess.running else { return }
 
@@ -97,7 +136,7 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
         localProcess.startProcess(
             executable: resolved,
             args: arguments,
-            environment: nil,
+            environment: Self.childEnvironment(),
             execName: nil,
             currentDirectory: cwd.path
         )
@@ -105,6 +144,31 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
         guard localProcess.running else {
             throw PTYError.processFailed("forkpty failed for \(executablePath)")
         }
+
+        lock.lock()
+        awaitingFirstRedraw = true
+        lastInterruptInputAt = nil
+        exitedAfterRecentInterrupt = false
+        lock.unlock()
+    }
+
+    /// True exactly once per launch, for the first renderer to ask.
+    ///
+    /// The pty exists before any view does, so it starts at a fixed 120×30 and
+    /// the child prints its first prompt at that width — a powerline prompt in
+    /// a 55-column pane comes out wrapped across two lines with the caret
+    /// stranded below it, and it stays that way, because a resize tells the
+    /// child the new geometry but cannot unprint what is already on screen.
+    ///
+    /// A renderer that knows how to ask its child to repaint (a shell: Ctrl-L)
+    /// uses this to do it once, after it has reported the real size, and never
+    /// again — by which time the user may have output on screen worth keeping.
+    public func consumeFreshLaunchRedraw() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard awaitingFirstRedraw else { return false }
+        awaitingFirstRedraw = false
+        return true
     }
 
     public func write(_ data: String) throws {
@@ -112,19 +176,45 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
         guard let encoded = data.data(using: .utf8) else {
             throw PTYError.writeFailed("Could not encode string as UTF-8")
         }
-        localProcess.send(data: ArraySlice([UInt8](encoded)))
+        let bytes = [UInt8](encoded)
+        recordInterruptInput(in: bytes)
+        localProcess.send(data: ArraySlice(bytes))
     }
 
     /// Send typed input — a control byte, a named key, or literal text.
     /// Prefer this over `write` for anything that is not plain text.
     public func send(_ input: TerminalInput) throws {
         guard localProcess.running else { throw PTYError.alreadyTerminated }
+        recordInterruptInput(in: input.bytes)
         localProcess.send(data: ArraySlice(input.bytes))
     }
 
     /// Send a raw control byte, e.g. 0x03 for Ctrl-C.
     public func writeControl(_ byte: UInt8) throws {
         try send(.control(byte))
+    }
+
+    /// Whether Ctrl-C input immediately preceded this process exiting.
+    ///
+    /// This is latched at termination time rather than evaluated when the UI
+    /// next polls. The UI ticks once a second and may inspect the PTY long after
+    /// a fast CLI exit, but the cause should not change with polling latency.
+    public var exitedAfterInterrupt: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return exitedAfterRecentInterrupt
+    }
+
+    /// Record a physical Ctrl-C before the terminal emulator encodes it.
+    ///
+    /// TUIs can enable Kitty/CSI-u keyboard reporting, in which case Ctrl-C is
+    /// no longer sent as byte `0x03`. The terminal view calls this from the
+    /// original AppKit key event so exit intent does not depend on which input
+    /// protocol the child selected.
+    public func noteInterruptInput() {
+        lock.lock()
+        lastInterruptInputAt = Date()
+        lock.unlock()
     }
 
     /// Shut the child down, along with everything it spawned.
@@ -222,6 +312,34 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
         return kill(-group, 0) != 0
     }
 
+    /// Turns a raw `waitpid` status into the exit code a shell would report.
+    ///
+    /// SwiftTerm hands the delegate the status word, not the code: a child that
+    /// runs `exit 3` arrives here as 768, which is `3 << 8`. Every consumer of
+    /// this class was reporting that number verbatim.
+    ///
+    /// A process killed by a signal has no exit code, so it is reported as
+    /// `128 + signal` — the same convention shells use, which matters here
+    /// because `shutdown()` ends agents with SIGKILL.
+    static func decodeWaitStatus(_ status: Int32) -> Int32 {
+        let lowBits = status & 0x7f
+        if lowBits == 0 || lowBits == 0x7f {
+            return (status >> 8) & 0xff
+        }
+        return 128 + lowBits
+    }
+
+    /// The child's exit code, or nil while it is still running.
+    ///
+    /// Unlike `waitUntilExit()` this never blocks, so it is safe to ask right
+    /// after `shutdown()` — where waiting could deadlock if the termination
+    /// delegate has not fired yet.
+    public var exitCode: Int32? {
+        lock.lock()
+        defer { lock.unlock() }
+        return hasExited ? lastExitCode : nil
+    }
+
     /// Blocks until the child exits. Returns its exit code.
     @discardableResult
     public func waitUntilExit() -> Int32 {
@@ -264,10 +382,26 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
 
     /// Fires with only the newly-arrived text. Use this to feed a terminal
     /// renderer or append to a log — it does not re-send history.
-    public func registerChunkCallback(_ callback: @escaping (String) -> Void) {
+    ///
+    /// Returns a token to hand back to `removeChunkCallback` when the
+    /// registrant goes away. A pty routinely outlives the view rendering it, so
+    /// a registration nobody can take back is a closure that runs for every
+    /// chunk for the rest of the process's life — once per time that view was
+    /// ever built.
+    @discardableResult
+    public func registerChunkCallback(_ callback: @escaping (String) -> Void) -> UUID {
+        let token = UUID()
+        lock.lock()
+        chunkCallbacks.append((token, callback))
+        lock.unlock()
+        return token
+    }
+
+    /// Cancels a registration made by `registerChunkCallback`.
+    public func removeChunkCallback(_ token: UUID) {
         lock.lock()
         defer { lock.unlock() }
-        chunkCallbacks.append(callback)
+        chunkCallbacks.removeAll { $0.token == token }
     }
 
     public func registerTerminationCallback(_ callback: @escaping (Int32) -> Void) {
@@ -318,7 +452,7 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
         let chunks = chunkCallbacks
         lock.unlock()
 
-        for callback in chunks { callback(text) }
+        for entry in chunks { entry.callback(text) }
         for callback in outputs { callback(snapshot) }
     }
 
@@ -335,7 +469,10 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
             return
         }
         hasExited = true
-        lastExitCode = exitCode ?? 0
+        lastExitCode = Self.decodeWaitStatus(exitCode ?? 0)
+        exitedAfterRecentInterrupt = lastInterruptInputAt.map {
+            Date().timeIntervalSince($0) <= Self.interruptExitWindow
+        } ?? false
         let code = lastExitCode
         let callbacks = terminationCallbacks
         terminationCallbacks.removeAll()
@@ -352,6 +489,11 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
     }
 
     // MARK: - Helpers
+
+    private func recordInterruptInput(in bytes: some Collection<UInt8>) {
+        guard bytes.contains(0x03) else { return }
+        noteInterruptInput()
+    }
 
     /// Decodes any bytes still held by the incremental UTF-8 decoder and
     /// delivers them. Called on termination so trailing output is not lost.
@@ -375,14 +517,21 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
         let chunks = chunkCallbacks
         lock.unlock()
 
-        for callback in chunks { callback(text) }
+        for entry in chunks { entry.callback(text) }
         for callback in outputs { callback(snapshot) }
     }
 
     /// Caller must hold `lock`.
     private func trimBufferLocked() {
-        // Cheap guard so we are not splitting a huge string on every chunk.
-        guard outputBuffer.utf8.count > 64 * 1024 else { return }
+        // Trim *above* the size we trim down to, so the buffer is not parked on
+        // the threshold.
+        //
+        // With a single limit, an agent whose output hovers around it paid a
+        // full split-and-rejoin of 64KB on every single chunk — and a TUI
+        // redrawing a status line produces a lot of chunks. Trimming at 96KB
+        // down to 200 lines means the work happens once per ~32KB of output
+        // instead of once per write.
+        guard outputBuffer.utf8.count > 96 * 1024 else { return }
 
         let lines = outputBuffer.split(separator: "\n", omittingEmptySubsequences: false)
         guard lines.count > retainedLines else { return }
