@@ -44,11 +44,11 @@ struct MockAgent: Identifiable {
     /// every second; the action methods seed it so a fresh card is not blank.
     var lastOutputAt: Date
 
-    /// The last line the agent actually printed, ANSI-stripped.
+    /// The last thing the agent actually said, read off its rendered screen.
     ///
-    /// Cached here rather than derived in a view body: `PTYProcess.recentOutput`
-    /// is up to 64KB and `stripANSI` walks all of it, and a tile would ask for
-    /// this once per agent per frame. `tick()` computes it once a second.
+    /// Cached here rather than derived in a view body: rendering the screen
+    /// costs a pass over every row, and a tile would ask for this once per
+    /// agent per frame. `tick()` computes it once a second.
     var lastLine: String = ""
 
     /// Non-nil when this card is backed by a real `SessionManager` session and
@@ -58,6 +58,14 @@ struct MockAgent: Identifiable {
     /// True when a real process is behind this card, as opposed to seeded
     /// demo data. Distinct from `isRunning`, which is about agent state.
     var isRealSession: Bool { sessionID != nil }
+
+    /// What to show where the model goes.
+    ///
+    /// Empty means Daddy has not read the agent's own record yet — true for
+    /// the first moments of a session, and permanently for any CLI that does
+    /// not write one down. Showing "—" is the honest answer; the hardcoded
+    /// guess this replaced was wrong for three of the four providers.
+    var modelLabel: String { model.isEmpty ? "—" : model }
 
     var displayName: String { agent.rawValue.uppercased() }
 

@@ -278,7 +278,7 @@ final class ControlSurfaceTests: XCTestCase {
             resumption: Resumption
         ) -> [String] { [] }
         func modelFlagValue(for humanName: String) -> String? { humanName }
-        func detectState(fromRecentOutput buffer: String) -> AgentState { .ready }
+        func detectState(from screen: ScreenSnapshot) -> AgentState { .ready }
     }
 
     func testLaunchingASessionDoesNotDeadlock() throws {

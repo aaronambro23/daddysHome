@@ -77,7 +77,9 @@ public protocol AgentAdapter: AnyObject {
     /// to keep going.
     func resume(_ pty: PTYProcess) throws
 
-    func detectState(fromRecentOutput buffer: String) -> AgentState
+    /// What the agent's terminal currently *shows*, not the bytes that produced
+    /// it. See `OutputHeuristics` for why that distinction is the whole fix.
+    func detectState(from screen: ScreenSnapshot) -> AgentState
 }
 
 // Every adapter used to carry its own copy of these four, identical except for
@@ -195,32 +197,35 @@ public final class ClaudeAdapter: AgentAdapter {
         return aliases[normalized]
     }
 
-    public func detectState(fromRecentOutput buffer: String) -> AgentState {
-        let window = OutputHeuristics.recentWindow(buffer).lowercased()
-
-        // Claude Code 2.1.234 puts its idle signal in the footer below the
-        // composer rather than ending the stream on a bare prompt:
+    public func detectState(from screen: ScreenSnapshot) -> AgentState {
+        // Claude Code has no idle prompt to end on. It keeps a mode footer
+        // pinned below the composer at all times:
         //
         //   ⏵⏵ accept edits on (shift+tab to cycle) · ↔ for agents
         //
-        // Check the last visible line specifically. A previous "esc to
-        // interrupt" can still exist earlier in the same redraw chunk; the
-        // footer is the newer screen state and must win or WORKING latches
-        // forever after Claude hands control back.
-        let lastLine = OutputHeuristics.lastVisibleLine(window)
-        let hasIdleFooter = lastLine.contains("accept edits on")
-            || lastLine.contains("shift+tab to cycle")
-        if hasIdleFooter,
-           !OutputHeuristics.indicatesRateLimit(window),
-           !OutputHeuristics.indicatesFailure(window) {
+        // That footer is there whether or not the agent is busy, so on its own
+        // it is not an idle signal — it means "there is a composer here". Idle
+        // is that, *and* nothing in the live status area saying otherwise.
+        //
+        // On the old byte stream this could not work: the "last line" of a
+        // redraw is whatever bytes were written last, which is usually cursor
+        // positioning rather than the footer. On a rendered screen the bottom
+        // of the screen is the bottom of the screen.
+        let tail = screen.tail(OutputHeuristics.tailRows).lowercased()
+        let hasComposer = tail.contains("accept edits on")
+            || tail.contains("shift+tab to cycle")
+            || tail.contains("bypass permissions")
+            || tail.contains("for shortcuts")
+
+        if hasComposer,
+           !OutputHeuristics.indicatesWorking(screen),
+           !OutputHeuristics.indicatesRateLimit(screen),
+           !OutputHeuristics.indicatesFailure(screen) {
             return .ready
         }
 
-        return OutputHeuristics.resolve(window: window) { text in
-            text.contains(">>>")
-                || text.contains("claude >")
-                || text.contains("? for shortcuts")
-                || OutputHeuristics.endsWithPrompt(text)
+        return OutputHeuristics.resolve(screen: screen) { screen in
+            OutputHeuristics.endsWithPrompt(screen)
         }
     }
 }
@@ -285,12 +290,11 @@ public final class CodexAdapter: AgentAdapter {
         humanName.lowercased().trimmingCharacters(in: .whitespaces)
     }
 
-    public func detectState(fromRecentOutput buffer: String) -> AgentState {
-        let window = OutputHeuristics.recentWindow(buffer).lowercased()
-        // The old check here was `contains(">") || contains("codex")`, which is
-        // true of essentially every byte Codex ever prints.
-        return OutputHeuristics.resolve(window: window) { text in
-            OutputHeuristics.endsWithPrompt(text)
+    public func detectState(from screen: ScreenSnapshot) -> AgentState {
+        // The check here was once `contains(">") || contains("codex")`, which
+        // is true of essentially every byte Codex ever prints.
+        OutputHeuristics.resolve(screen: screen) { screen in
+            OutputHeuristics.endsWithPrompt(screen)
         }
     }
 }
@@ -348,10 +352,9 @@ public final class CursorAdapter: AgentAdapter {
         humanName.lowercased().trimmingCharacters(in: .whitespaces)
     }
 
-    public func detectState(fromRecentOutput buffer: String) -> AgentState {
-        let window = OutputHeuristics.recentWindow(buffer).lowercased()
-        return OutputHeuristics.resolve(window: window) { text in
-            OutputHeuristics.endsWithPrompt(text)
+    public func detectState(from screen: ScreenSnapshot) -> AgentState {
+        OutputHeuristics.resolve(screen: screen) { screen in
+            OutputHeuristics.endsWithPrompt(screen)
         }
     }
 }
@@ -404,10 +407,9 @@ public final class OpenCodeAdapter: AgentAdapter {
         humanName.lowercased().trimmingCharacters(in: .whitespaces)
     }
 
-    public func detectState(fromRecentOutput buffer: String) -> AgentState {
-        let window = OutputHeuristics.recentWindow(buffer).lowercased()
-        return OutputHeuristics.resolve(window: window) { text in
-            OutputHeuristics.endsWithPrompt(text)
+    public func detectState(from screen: ScreenSnapshot) -> AgentState {
+        OutputHeuristics.resolve(screen: screen) { screen in
+            OutputHeuristics.endsWithPrompt(screen)
         }
     }
 }

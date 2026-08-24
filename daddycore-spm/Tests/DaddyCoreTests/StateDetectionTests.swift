@@ -1,191 +1,312 @@
 import XCTest
 @testable import DaddyCore
 
-/// Regression tests for the bug that made the dashboard untrustworthy: state was
-/// inferred from the whole retained transcript, so any word that ever appeared
-/// was permanent evidence.
+/// Detection reads the agent's *rendered screen*, not the byte stream that
+/// produced it.
+///
+/// The tests that used to live here handed adapters clean multi-line strings.
+/// That is not what a pty delivers, and the difference was the bug: agent TUIs
+/// redraw by moving the cursor and erasing lines, so stripping escape codes out
+/// of the stream leaves every erased repaint behind as ordinary text. The old
+/// suite passed while the app latched on WORKING forever, because the fixtures
+/// described a screen the parser never actually received.
+///
+/// So the fixtures here are raw byte streams, fed through the same emulator the
+/// visible pane uses. `screen(_:)` is the whole difference.
 final class StateDetectionTests: XCTestCase {
 
-    // MARK: - The original bug
+    // MARK: - Helpers
 
-    func testWordFailedEarlierDoesNotPinTheSessionToError() {
-        let adapter = ClaudeAdapter()
+    /// Renders a raw terminal stream the way the agent's own terminal would.
+    private func screen(_ raw: String, columns: Int = 120, rows: Int = 30) -> ScreenSnapshot {
+        let shadow = ShadowScreen(columns: columns, rows: rows)
+        shadow.feed(raw)
+        return shadow.snapshot()
+    }
 
-        // The agent said "failed" once, a long time ago, and has since moved on.
-        var transcript = "3 tests failed in auth_spec.rb\n"
-        transcript += (1...60).map { "  patched line \($0)\n" }.joined()
-        transcript += "> "
+    /// A screen built directly from rows, for testing the matchers themselves.
+    private func rows(_ lines: String...) -> ScreenSnapshot {
+        ScreenSnapshot(
+            rows: lines,
+            cursorRow: 0,
+            cursorColumn: 0,
+            isAlternateScreen: false,
+            columns: 120
+        )
+    }
 
-        XCTAssertEqual(adapter.detectState(fromRecentOutput: transcript), .ready)
+    private let clear = "\u{1b}[2J\u{1b}[H"
+    /// Cursor up one line, then erase that whole line — how a TUI repaints in
+    /// place. Everything it erases used to survive `stripANSI` as text.
+    private let eraseLineAbove = "\u{1b}[1A\u{1b}[2K"
+
+    private let claudeFooter = "  ⏵⏵ accept edits on (shift+tab to cycle) · ↔ for agents"
+    private let composer = "╭──────────────────────────╮\r\n│ >                        │\r\n╰──────────────────────────╯\r\n"
+
+    // MARK: - The bug this file exists for
+
+    /// The regression. A spinner drawn, erased, redrawn, erased, and replaced
+    /// by the idle composer — which is what every finished Claude turn looks
+    /// like on the wire.
+    ///
+    /// Against the old byte-stream detector this returned `.working`, because
+    /// both erased copies of "esc to interrupt" were still sitting in the
+    /// stripped buffer. That is why a card went amber on the first prompt and
+    /// stayed amber for the rest of its life.
+    func testErasedSpinnerFramesDoNotLatchWorking() {
+        let raw = clear
+            + "Finished the fix.\r\n"
+            + "✻ Thinking… (3s · ↑ 1.2k tokens · esc to interrupt)\r\n"
+            + eraseLineAbove
+            + "✻ Thinking… (7s · ↑ 2.4k tokens · esc to interrupt)\r\n"
+            + eraseLineAbove
+            + composer
+            + claudeFooter
+
+        // What the old detector saw: strip the escapes out of the same stream
+        // and *both* erased frames are still there, in plain text. This is the
+        // bug, stated as an assertion.
+        let asTheOldDetectorSawIt = OutputHeuristics.stripANSI(raw)
+        XCTAssertEqual(
+            asTheOldDetectorSawIt.components(separatedBy: "esc to interrupt").count - 1,
+            2,
+            "the byte stream really does still contain both erased spinner frames"
+        )
+
+        // What the screen actually shows.
+        let rendered = screen(raw)
+        XCTAssertFalse(
+            rendered.visibleRows.contains { $0.contains("esc to interrupt") },
+            "an erased repaint must not survive into the rendered screen"
+        )
+        XCTAssertEqual(ClaudeAdapter().detectState(from: rendered), .ready)
+    }
+
+    /// The same screen with the spinner still on it is still working.
+    func testLiveSpinnerAboveTheComposerIsWorking() {
+        let raw = clear
+            + "✻ Thinking… (7s · ↑ 2.4k tokens · esc to interrupt)\r\n"
+            + composer
+            + claudeFooter
+
+        XCTAssertEqual(ClaudeAdapter().detectState(from: screen(raw)), .working)
+    }
+
+    /// Claude's footer is pinned below the composer whether or not it is busy,
+    /// so it can never mean "idle" on its own.
+    func testClaudeFooterIsNotAnIdleSignalByItself() {
+        let busy = rows(
+            "✻ Working… (esc to interrupt)",
+            "╭────────╮", "│ >      │", "╰────────╯",
+            claudeFooter
+        )
+        XCTAssertEqual(ClaudeAdapter().detectState(from: busy), .working)
+    }
+
+    // MARK: - Only the bottom of the screen is live status
+
+    /// The word "running" in something the agent *said* is not a status line.
+    /// The old detector matched a bare word list anywhere in its window, so any
+    /// agent that mentioned running, working or thinking pinned itself busy.
+    func testProseAboveTheComposerIsNotAStatusLine() {
+        let idle = rows(
+            "I am running the tests now and thinking about the failure.",
+            "Generating a patch was the last thing I did.",
+            "╭────────╮", "│ >      │", "╰────────╯",
+            claudeFooter
+        )
+        XCTAssertEqual(ClaudeAdapter().detectState(from: idle), .ready)
+    }
+
+    /// A stale "failed" high up the transcript is history, not status — and it
+    /// must not pin the session to `.error`.
+    func testFailedEarlierInTheTranscriptDoesNotPinToError() {
+        var lines = ["the previous attempt failed and I fixed it"]
+        lines += (1...20).map { "  patched line \($0)" }
+        lines += ["done.", "❯ "]
+
+        let rendered = ScreenSnapshot(
+            rows: lines,
+            cursorRow: 0,
+            cursorColumn: 0,
+            isAlternateScreen: false,
+            columns: 120
+        )
+        XCTAssertEqual(CodexAdapter().detectState(from: rendered), .ready)
     }
 
     func testNarratingAnErrorWhileWorkingIsWorkingNotError() {
-        let adapter = ClaudeAdapter()
-
-        let transcript = """
-        I found the error in the parser — it drops the final token.
-        ✻ Thinking… (esc to interrupt)
-        """
-
-        XCTAssertEqual(adapter.detectState(fromRecentOutput: transcript), .working)
+        let busy = rows(
+            "Error: the build broke, let me look",
+            "✻ Fixing… (esc to interrupt)"
+        )
+        XCTAssertEqual(ClaudeAdapter().detectState(from: busy), .working)
     }
 
-    func testClaudeCurrentFooterTransitionsFromWorkingToReady() {
-        let adapter = ClaudeAdapter()
+    // MARK: - Signals that must survive
 
-        XCTAssertEqual(
-            adapter.detectState(
-                fromRecentOutput: "✻ Working…\nesc to interrupt"
-            ),
-            .working
-        )
+    func testIdleComposerDoesNotHideRateLimitOrFailure() {
+        let limited = rows("You've hit your rate limit.", claudeFooter)
+        XCTAssertEqual(ClaudeAdapter().detectState(from: limited), .rateLimited)
 
+        let broken = rows("Error: invalid API key", claudeFooter)
         XCTAssertEqual(
-            adapter.detectState(
-                fromRecentOutput: """
-                ✻ Working… (esc to interrupt)
-                Finished the fix.
-                ❯
-                ⏵⏵ accept edits on (shift+tab to cycle) · ↔ for agents
-                """
-            ),
-            .ready,
-            "the current idle footer must override an older busy line in the same redraw"
-        )
-    }
-
-    func testClaudeIdleFooterDoesNotHideRateLimitOrFailure() {
-        let adapter = ClaudeAdapter()
-        let footer = "⏵⏵ accept edits on (shift+tab to cycle) · ↔ for agents"
-
-        XCTAssertEqual(
-            adapter.detectState(fromRecentOutput: "rate limit exceeded\n\(footer)"),
-            .rateLimited
-        )
-        XCTAssertEqual(
-            adapter.detectState(fromRecentOutput: "Error: invalid API key\n\(footer)"),
+            ClaudeAdapter().detectState(from: broken),
             .error("Detected failure in recent output")
         )
     }
 
     func testRealFailureIsStillDetected() {
-        let adapter = ClaudeAdapter()
-
         XCTAssertEqual(
-            adapter.detectState(fromRecentOutput: "claude: command not found"),
+            ClaudeAdapter().detectState(from: rows("claude: command not found")),
             .error("Detected failure in recent output")
         )
         XCTAssertEqual(
-            adapter.detectState(fromRecentOutput: "some context\nError: invalid API key"),
+            ClaudeAdapter().detectState(from: rows("some context", "Error: invalid API key")),
             .error("Detected failure in recent output")
+        )
+    }
+
+    func testCtrlCInterruptHintCountsAsWorking() {
+        XCTAssertEqual(
+            CodexAdapter().detectState(from: rows("▌ Working (5s • Ctrl+C to interrupt)")),
+            .working
         )
     }
 
     // MARK: - Unknown is not ready
 
     func testUnrecognisedOutputIsUnknownRatherThanReady() {
-        let adapter = ClaudeAdapter()
-
-        let state = adapter.detectState(fromRecentOutput: "Reticulating splines.\nAlmost there.")
-        XCTAssertEqual(state, .unknown, "silence about state must not be reported as ready")
-    }
-
-    func testCodexNoLongerCallsEverythingReady() {
-        let adapter = CodexAdapter()
-
-        // The old implementation returned .ready for this, because it contained
-        // ">" — as does nearly every line any of these CLIs print.
-        let state = adapter.detectState(fromRecentOutput: "reading src/main.rs -> 412 lines")
-        XCTAssertNotEqual(state, .ready)
-    }
-
-    func testCodexPromptIsStillReady() {
-        XCTAssertEqual(CodexAdapter().detectState(fromRecentOutput: "done.\n❯ "), .ready)
-    }
-
-    // MARK: - Windowing
-
-    func testOnlyTheTailIsEvidence() {
-        // Rate limit hit early, cleared, and the agent is working again.
-        var transcript = "rate limit reached, backing off\n"
-        transcript += (1...80).map { "line \($0)\n" }.joined()
-        transcript += "✻ Analyzing the diff… (esc to interrupt)"
-
-        XCTAssertEqual(ClaudeAdapter().detectState(fromRecentOutput: transcript), .working)
-    }
-
-    func testCurrentRateLimitIsDetected() {
         XCTAssertEqual(
-            ClaudeAdapter().detectState(fromRecentOutput: "You've reached your usage limit."),
-            .rateLimited
+            ClaudeAdapter().detectState(from: rows("Reticulating splines.", "Almost there.")),
+            .unknown
         )
     }
 
-    // MARK: - Window mechanics
-
-    func testANSIEscapesAreStrippedBeforeMatching() {
-        let coloured = "\u{1b}[1;31mError:\u{1b}[0m boom\n"
-        XCTAssertEqual(OutputHeuristics.stripANSI(coloured), "Error: boom\n")
+    func testAnEmptyScreenIsUnknown() {
+        XCTAssertEqual(ClaudeAdapter().detectState(from: .empty), .unknown)
     }
 
-    func testOSCSequencesAreStripped() {
+    func testBarePromptIsReady() {
+        XCTAssertEqual(CodexAdapter().detectState(from: rows("done.", "❯ ")), .ready)
+    }
+
+    /// A boxed composer ends in a border, not in the prompt character.
+    func testBoxedComposerCountsAsAPrompt() {
+        XCTAssertEqual(
+            CursorAdapter().detectState(from: rows("done.", "│ >                    │")),
+            .ready
+        )
+    }
+
+    // MARK: - Every adapter
+
+    func testNoAdapterFallsThroughToReady() {
+        for adapter in [
+            ClaudeAdapter() as AgentAdapter, CodexAdapter(), CursorAdapter(), OpenCodeAdapter(),
+        ] {
+            XCTAssertEqual(
+                adapter.detectState(from: rows("unremarkable chatter")),
+                .unknown,
+                "\(type(of: adapter)) must not guess READY"
+            )
+        }
+    }
+
+    func testEveryAdapterDetectsRateLimits() {
+        for adapter in [
+            ClaudeAdapter() as AgentAdapter, CodexAdapter(), CursorAdapter(), OpenCodeAdapter(),
+        ] {
+            XCTAssertEqual(
+                adapter.detectState(from: rows("rate limit exceeded")),
+                .rateLimited,
+                "\(type(of: adapter)) must notice a rate limit"
+            )
+        }
+    }
+
+    // MARK: - Screen mechanics
+
+    /// The shadow mirrors the real pane width, so a footer wraps in a narrow
+    /// split. Bottom-anchored matching joins the rows before looking.
+    func testWrappedStatusLineIsStillDetected() {
+        let narrow = screen(
+            clear + "✻ Thinking… (12s · ↑ 4.1k tokens · esc to interrupt)",
+            columns: 28,
+            rows: 12
+        )
+        XCTAssertGreaterThan(narrow.visibleRows.count, 1, "this fixture must actually wrap")
+        XCTAssertTrue(OutputHeuristics.indicatesWorking(narrow))
+    }
+
+    /// `·` is a spinner frame in some TUIs and also the separator in Claude's
+    /// permanent footer. Treating it as a spinner pinned every Claude session
+    /// to WORKING for its entire life.
+    func testFooterSeparatorIsNotASpinner() {
+        XCTAssertFalse(OutputHeuristics.indicatesWorking(rows(claudeFooter)))
+    }
+
+    /// The last row is permanent chrome, so "the last line the agent said" has
+    /// to look past it or every card shows the same static string forever.
+    func testLastMeaningfulLineSkipsComposerAndFooter() {
+        let rendered = rows(
+            "Applied the patch to OutputHeuristics.swift",
+            "╭────────╮", "│ >      │", "╰────────╯",
+            claudeFooter
+        )
+        XCTAssertEqual(
+            rendered.lastMeaningfulLine,
+            "Applied the patch to OutputHeuristics.swift"
+        )
+    }
+
+    func testResizeIsMirroredIntoTheRenderedWidth() {
+        let shadow = ShadowScreen(columns: 120, rows: 30)
+        shadow.feed("hello")
+        XCTAssertEqual(shadow.snapshot().columns, 120)
+
+        shadow.resize(columns: 60, rows: 20)
+        XCTAssertEqual(shadow.snapshot().columns, 60)
+        XCTAssertEqual(shadow.snapshot().rows.count, 20)
+    }
+
+    func testRevisionAdvancesOnFeedAndResize() {
+        let shadow = ShadowScreen(columns: 80, rows: 24)
+        let start = shadow.revision
+        shadow.feed("a")
+        XCTAssertGreaterThan(shadow.revision, start)
+
+        let afterFeed = shadow.revision
+        shadow.feed("")                       // nothing to do
+        XCTAssertEqual(shadow.revision, afterFeed)
+
+        shadow.resize(columns: 100, rows: 24)
+        XCTAssertGreaterThan(shadow.revision, afterFeed)
+    }
+
+    /// Synchronized output (DECSET 2026) arms a watchdog on the *main* queue
+    /// that would otherwise mutate this terminal from the wrong thread. The
+    /// frame is closed on the feeding thread instead.
+    func testSynchronizedOutputFrameIsClosedOnFeed() {
+        let shadow = ShadowScreen(columns: 80, rows: 24)
+        shadow.feed("\u{1b}[?2026hpartial redraw")
+        XCTAssertFalse(shadow.snapshot().rows.isEmpty)
+    }
+
+    // MARK: - Escape sequences
+
+    func testStripANSIRemovesColourAndTitles() {
+        let coloured = "\u{1b}[31mError: boom\u{1b}[0m\n"
+        XCTAssertEqual(OutputHeuristics.stripANSI(coloured), "Error: boom\n")
+
         let titled = "\u{1b}]0;my title\u{07}hello"
         XCTAssertEqual(OutputHeuristics.stripANSI(titled), "hello")
     }
 
-    func testCarriageReturnRedrawKeepsOnlyWhatWasVisible() {
-        // A spinner overwriting itself on one line.
-        let redrawn = "⠋ working\r⠙ working\r✓ done"
-        XCTAssertEqual(OutputHeuristics.recentWindow(redrawn), "✓ done")
-    }
+    // MARK: - Persistence
 
-    func testWindowKeepsOnlyTheTrailingLines() {
-        let many = (1...200).map { "line \($0)" }.joined(separator: "\n")
-        let window = OutputHeuristics.recentWindow(many, lines: 5)
-
-        XCTAssertEqual(window, "line 196\nline 197\nline 198\nline 199\nline 200")
-        XCTAssertFalse(window.contains("line 1\n"))
-    }
-
-    func testBlankLinesDoNotConsumeTheWindow() {
-        let padded = "signal\n" + String(repeating: "\n", count: 50)
-        XCTAssertEqual(OutputHeuristics.recentWindow(padded, lines: 3), "signal")
-    }
-
-    // MARK: - Every adapter got the fix
-
-    func testNoAdapterFallsThroughToReady() {
-        let adapters: [AgentAdapter] = [
-            ClaudeAdapter(), CodexAdapter(), CursorAdapter(), OpenCodeAdapter(),
-        ]
-
-        for adapter in adapters {
-            XCTAssertEqual(
-                adapter.detectState(fromRecentOutput: "unremarkable chatter"),
-                .unknown,
-                "\(type(of: adapter)) still guesses ready"
-            )
-        }
-    }
-
-    func testEveryAdapterDetectsRateLimit() {
-        let adapters: [AgentAdapter] = [
-            ClaudeAdapter(), CodexAdapter(), CursorAdapter(), OpenCodeAdapter(),
-        ]
-
-        for adapter in adapters {
-            XCTAssertEqual(
-                adapter.detectState(fromRecentOutput: "rate limit exceeded"),
-                .rateLimited,
-                "\(type(of: adapter)) missed a rate limit"
-            )
-        }
-    }
-
-    // MARK: - Persistence of the new case
-
-    func testUnknownRoundTripsThroughCodable() throws {
-        let encoded = try JSONEncoder().encode(AgentState.unknown)
-        XCTAssertEqual(try JSONDecoder().decode(AgentState.self, from: encoded), .unknown)
+    func testUnknownStateSurvivesCoding() throws {
+        let data = try JSONEncoder().encode(AgentState.unknown)
+        XCTAssertEqual(try JSONDecoder().decode(AgentState.self, from: data), .unknown)
     }
 }

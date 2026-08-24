@@ -1,50 +1,155 @@
 import Foundation
 
-/// Reading an agent's terminal output for what it says about the agent's state.
+/// Reading an agent's terminal for what it says about the agent's state.
 ///
-/// This exists because of one mistake made four times. Each adapter used to
-/// match against the whole retained transcript, so a single occurrence of a word
-/// like "failed" — in a test log, in a file the agent was reading, in its own
-/// explanation of what went wrong — pinned that session to `.error` for the rest
-/// of its life. The dashboard then lied for as long as the session lasted.
+/// This used to work on the raw PTY byte stream — strip the escape codes, keep
+/// the last 24 lines, match patterns against that. It had one fatal flaw, and
+/// the flaw survived two rounds of narrowing the patterns.
 ///
-/// Three rules follow from that:
+/// Agent TUIs do not redraw by printing newlines. They move the cursor up and
+/// erase the line. Strip the escape codes out of that stream and every *erased*
+/// repaint is still sitting there as ordinary text — so a "window" over it held
+/// a dozen stale copies of `esc to interrupt` long after the agent had stopped
+/// talking. WORKING latched and never cleared. Worse, detection only ran when
+/// output arrived, and an idle agent produces none: the last verdict was always
+/// computed on the tail of the *working* burst, and nothing ever revisited it.
 ///
-/// 1. **Only the tail is evidence.** What an agent printed a thousand lines ago
-///    is history, not status.
-/// 2. **Escape codes are not text.** Agent TUIs redraw in place, so the raw
-///    buffer is mostly cursor movement and colour. Matching against it matches
-///    the wrong things.
-/// 3. **Say `.unknown` when it is unknown.** Every adapter used to fall through
-///    to `.ready`, which made "I can't tell" indistinguishable from "waiting for
-///    you". A wrong "ready" invites you to interrupt something mid-thought —
-///    exactly the mistake this branch exists to prevent.
+/// So the input is now a `ScreenSnapshot` — what the terminal actually shows,
+/// rendered by the same emulator that draws the visible pane. An erased line is
+/// gone. The bottom of the screen is the bottom of the screen.
+///
+/// Three rules survive from the old design, and one is new:
+///
+/// 1. **Only the bottom of the screen is live status.** What is higher up is
+///    transcript — things the agent said, including things it said about
+///    running and failing.
+/// 2. **Say `.unknown` when it is unknown.** A wrong "ready" invites you to
+///    interrupt something mid-thought.
+/// 3. **Match markers, not vocabulary.** The old `\b(thinking|working|
+///    running)\b` matched any agent that used those words in a sentence.
+/// 4. **Rows may wrap.** The shadow mirrors the real pane width, so in a narrow
+///    split a one-line footer becomes two rows. Bottom-anchored matching joins
+///    the rows before looking.
 public enum OutputHeuristics {
 
-    /// How many trailing lines count as "now".
-    public static let windowLines = 24
+    /// How many non-empty rows at the bottom count as the live status area.
+    ///
+    /// Six, because Claude Code's busy screen is five rows before anything
+    /// wraps — status line, composer top border, composer, bottom border,
+    /// mode footer — and the status line is the top of those. A smaller window
+    /// silently drops the one row that says the agent is working.
+    public static let tailRows = 6
 
-    // MARK: - Window
+    // MARK: - Signals
 
-    /// The last `lines` non-empty lines of `buffer`, with escape sequences
-    /// removed and carriage-return redraws collapsed.
-    public static func recentWindow(_ buffer: String, lines: Int = windowLines) -> String {
-        let cleaned = stripANSI(buffer)
-
-        // A TUI redrawing a line sends `\r` and overwrites. Only what came after
-        // the last `\r` was ever visible.
-        let visible = cleaned
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .map { segment -> Substring in
-                segment.split(separator: "\r", omittingEmptySubsequences: false).last ?? segment
-            }
-            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-
-        return visible.suffix(lines).joined(separator: "\n")
+    public static func indicatesRateLimit(_ screen: ScreenSnapshot) -> Bool {
+        let all = screen.visibleRows.joined(separator: " ").lowercased()
+        return matches(all, #"rate[-\s]?limit"#)
+            || matches(all, #"\busage limit\b"#)
+            || matches(all, #"\btoo many requests\b"#)
     }
+
+    /// Only patterns that mean *the agent itself* is broken.
+    ///
+    /// Matched per row, so `^` still anchors to the start of a line — joining
+    /// first would quietly turn every anchored pattern into something else.
+    public static func indicatesFailure(_ screen: ScreenSnapshot) -> Bool {
+        for row in screen.visibleRows {
+            let line = row.lowercased()
+            if matches(line, #"^\s*(fatal )?error[:\s]"#) { return true }
+            if matches(line, #"^\s*panic:"#) { return true }
+            if matches(line, #"\bcommand not found\b"#) { return true }
+            if matches(line, #"\b(econnrefused|enotfound|etimedout|econnreset)\b"#) { return true }
+            if matches(line, #"\b(invalid api key|authentication failed|unauthorized)\b"#) {
+                return true
+            }
+            if matches(line, #"\btraceback \(most recent call last\)"#) { return true }
+        }
+        return false
+    }
+
+    /// Whether the *live status area* says the agent is mid-turn.
+    ///
+    /// Every one of these is a marker a TUI prints only while it is actually
+    /// busy — chiefly the instruction for how to stop it. The old bare-word
+    /// list is gone: an agent writing "running the tests now" in prose is not a
+    /// status line, and treating it as one is half of why badges stuck.
+    public static func indicatesWorking(_ screen: ScreenSnapshot) -> Bool {
+        let tail = screen.tail(tailRows).lowercased()
+
+        if matches(tail, #"\besc(ape)? to (interrupt|cancel|stop)\b"#) { return true }
+        if matches(tail, #"\bctrl\+?c to (interrupt|stop|cancel)\b"#) { return true }
+        if matches(tail, #"\bpress esc\b.*\b(interrupt|cancel|stop)\b"#) { return true }
+
+        // A live status line ends its verb in an ellipsis — "Thinking…",
+        // "Working…". Prose does not. The glyph matters: this is U+2026, not
+        // three periods.
+        if matches(tail, #"\b(thinking|working|processing|analysing|analyzing|generating|running|reading|writing|searching|compacting)…"#) {
+            return true
+        }
+
+        return containsSpinner(tail)
+    }
+
+    /// An idle input prompt somewhere in the live status area.
+    ///
+    /// Not strictly the last row: agents park a mode footer below the composer,
+    /// so the prompt is often second or third from the bottom.
+    public static func endsWithPrompt(_ screen: ScreenSnapshot) -> Bool {
+        for row in screen.visibleRows.suffix(tailRows) {
+            let line = row.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            // Tolerates a boxed composer: `│ >                    │`.
+            if matches(line, #"^[│|╰─\s]*[>❯$#»]\s*[│|]?\s*$"#) { return true }
+        }
+        return false
+    }
+
+    /// Braille/arc spinners plus the asterisk frames Claude cycles through.
+    ///
+    /// Note what is *not* here: `·`. It is a spinner frame in some TUIs, and it
+    /// is also the separator in Claude's permanently visible footer
+    /// (`(shift+tab to cycle) · ↔ for agents`) — including it pinned every
+    /// Claude session to WORKING for its entire life.
+    private static let spinnerFrames = Set("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒✻✽✢✳✶")
+
+    private static func containsSpinner(_ tail: String) -> Bool {
+        tail.contains { spinnerFrames.contains($0) }
+    }
+
+    private static func matches(_ haystack: String, _ pattern: String) -> Bool {
+        haystack.range(of: pattern, options: [.regularExpression]) != nil
+    }
+
+    // MARK: - Shared resolution
+
+    /// Rate limit first — unambiguous and actionable. Then *working*, before
+    /// failure: an agent narrating an error it is currently fixing is working,
+    /// not broken. Failure only for the narrow patterns above. Then the
+    /// adapter's own idea of idle. Then `.unknown`, honestly.
+    public static func resolve(
+        screen: ScreenSnapshot,
+        isReady: (ScreenSnapshot) -> Bool
+    ) -> AgentState {
+        if screen.isEmpty { return .unknown }
+        if indicatesRateLimit(screen) { return .rateLimited }
+        if indicatesWorking(screen) { return .working }
+        if indicatesFailure(screen) { return .error("Detected failure in recent output") }
+        if isReady(screen) { return .ready }
+        return .unknown
+    }
+
+    // MARK: - Escape sequences
 
     /// Strips CSI (`ESC [ … final`), OSC (`ESC ] … BEL`/`ST`) and two-character
     /// escape sequences, leaving the text a human would have seen.
+    ///
+    /// Kept because it is genuinely useful for turning a captured byte stream
+    /// into something readable. It is deliberately **not** used for state
+    /// detection any more — see this type's documentation for why that never
+    /// worked. `recentWindow` is gone for the same reason: "a window over a
+    /// byte stream" is the abstraction that caused the bug, and leaving it here
+    /// would invite the bug back.
     public static func stripANSI(_ text: String) -> String {
         guard text.contains("\u{1b}") else { return text }
 
@@ -95,88 +200,5 @@ public enum OutputHeuristics {
         }
 
         return out
-    }
-
-    /// The last line with any content — where a prompt would be if there is one.
-    public static func lastVisibleLine(_ window: String) -> String {
-        window
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-            .map { String($0).trimmingCharacters(in: .whitespaces) }
-            ?? ""
-    }
-
-    // MARK: - Signals
-    //
-    // Each takes an already-windowed, already-lowercased string.
-
-    public static func indicatesRateLimit(_ window: String) -> Bool {
-        matches(window, #"rate[-\s]?limit"#)
-            || matches(window, #"\busage limit\b"#)
-            || matches(window, #"\btoo many requests\b"#)
-    }
-
-    /// Only patterns that mean *the agent itself* is broken.
-    ///
-    /// Deliberately narrow. An agent printing the word "error" is usually just
-    /// doing its job — reading a stack trace, running a failing test, explaining
-    /// a bug. That is not the session being in an error state. The old
-    /// unanchored `failed` match is gone for this reason.
-    public static func indicatesFailure(_ window: String) -> Bool {
-        matches(window, #"(?m)^\s*(fatal )?error[:\s]"#)
-            || matches(window, #"\bcommand not found\b"#)
-            || matches(window, #"\b(econnrefused|enotfound|etimedout|econnreset)\b"#)
-            || matches(window, #"\b(invalid api key|authentication failed|unauthorized)\b"#)
-            || matches(window, #"(?m)^\s*panic:"#)
-            || matches(window, #"\btraceback \(most recent call last\)"#)
-    }
-
-    public static func indicatesWorking(_ window: String) -> Bool {
-        // The strongest signal any of these CLIs give: they tell you how to stop
-        // them precisely while they are busy.
-        matches(window, #"\besc to interrupt\b"#)
-            || matches(window, #"\bctrl\+?c to (interrupt|stop|cancel)\b"#)
-            || matches(window, #"\b(thinking|processing|working|analyzing|generating|running)\b"#)
-            || containsSpinner(window)
-    }
-
-    /// A trailing line that looks like an idle input prompt.
-    public static func endsWithPrompt(_ window: String) -> Bool {
-        let last = lastVisibleLine(window)
-        guard !last.isEmpty else { return false }
-
-        // A bare prompt character, optionally inside a TUI input box border.
-        // Anything typed after it means a command is in flight, not idle.
-        return matches(last, #"^[│|╰─\s]*[>❯$#»]\s*$"#)
-    }
-
-    private static let spinnerFrames = Set("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒✻✽✢")
-
-    private static func containsSpinner(_ window: String) -> Bool {
-        // A spinner only means "working" if it is on the line still being drawn.
-        lastVisibleLine(window).contains { spinnerFrames.contains($0) }
-    }
-
-    private static func matches(_ haystack: String, _ pattern: String) -> Bool {
-        haystack.range(of: pattern, options: [.regularExpression]) != nil
-    }
-
-    // MARK: - Shared resolution
-
-    /// The order matters and is not the order the old code used.
-    ///
-    /// Rate limit first — it is unambiguous and actionable. Then *working*,
-    /// before failure: an agent narrating an error it is currently fixing is
-    /// working, not broken. Failure only for the narrow patterns above. Then the
-    /// adapter's own idea of an idle prompt. Then `.unknown`, honestly.
-    public static func resolve(
-        window: String,
-        isReady: (String) -> Bool
-    ) -> AgentState {
-        if indicatesRateLimit(window) { return .rateLimited }
-        if indicatesWorking(window) { return .working }
-        if indicatesFailure(window) { return .error("Detected failure in recent output") }
-        if isReady(window) { return .ready }
-        return .unknown
     }
 }

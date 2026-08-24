@@ -11,34 +11,48 @@ public final class SessionManager: @unchecked Sendable {
     private var adapters: [AgentKind: AgentAdapter] = [:]
     private var sessionErrors: [String: (error: String, count: Int, lastAt: Date)] = [:]
     private var retryAttempts: [String: Int] = [:]
-    private var pendingModelSwitch: [String: ModelRef] = [:]
     private let markdownWriter = MarkdownWriter()
     private let lock = NSLock()
     private let maxRetries = 3
     private let errorThresholdCount = 5
 
-    // MARK: State detection throttle
+    // MARK: State detection
     //
     // Detection runs on the pty's own read queue, so whatever it costs is paid
-    // *before the next chunk can be delivered to the renderer*. Paying it per
-    // chunk meant an agent redrawing a status line several times a second was
-    // stripping ANSI out of the entire retained buffer several times a second,
-    // back-pressuring the read loop until the agent's own writes blocked.
+    // *before the next chunk reaches the renderer*. It is much cheaper than it
+    // used to be — rendering the shadow screen instead of stripping ANSI out of
+    // a 64KB buffer — but it is still throttled, because `DispatchIO` delivers
+    // one TUI repaint as many separate chunks.
 
     private var lastDetectionAt: [String: Date] = [:]
-    /// Output that arrived inside the throttle window and is waiting for the
-    /// trailing run. Exactly one trailing run is ever scheduled per session.
-    private var pendingDetection: [String: String] = [:]
     private let detectionQueue = DispatchQueue(label: "com.daddy.session.detection")
 
-    /// A state change is still noticed within a quarter second, which is far
-    /// faster than the one-second cadence the dashboard reads at.
+    /// A state change is noticed within a quarter second, far faster than the
+    /// one-second cadence the dashboard reads at.
     private static let detectionInterval: TimeInterval = 0.25
 
-    /// `OutputHeuristics.recentWindow` keeps 24 lines whatever it is handed, so
-    /// handing it a 64KB buffer was stripping ~56KB of escape codes per chunk
-    /// to throw the result away.
-    private static let detectionWindowBytes = 8192
+    // MARK: Settle timer
+    //
+    // Detection used to be triggered only by output. An idle agent produces
+    // none, so the last verdict was always computed on the tail of the working
+    // burst and nothing ever revisited it: a card that went WORKING stayed
+    // WORKING until the agent spoke again. This is what revisits it.
+    //
+    // One timer for the manager rather than one work item per session. A dead
+    // session is skipped because its pty is no longer in `ptyProcesses` — a
+    // fact, rather than a cancellation four different teardown paths each have
+    // to remember to perform.
+
+    private var settleTimer: DispatchSourceTimer?
+    private var lastScreenRevision: [String: UInt64] = [:]
+    private static let settleInterval: TimeInterval = 0.5
+
+    deinit {
+        // A `DispatchSourceTimer` holds its handler until cancelled, and the
+        // handler is what keeps firing into a manager nobody owns any more.
+        settleTimer?.cancel()
+        settleTimer = nil
+    }
 
     public init() {
         self.adapters = [
@@ -174,9 +188,11 @@ public final class SessionManager: @unchecked Sendable {
         // deadlocked the calling thread — the main thread, in the app — and the
         // window beachballed forever. It was masked for a long time by a crash
         // that happened earlier in the same click.
-        ptyProcess.registerOutputCallback { [weak self] output in
-            self?.updateSessionState(sessionID: session.id, newOutput: output)
+        ptyProcess.registerActivityCallback { [weak self] in
+            self?.noteActivity(sessionID: session.id)
         }
+
+        startSettleTimerIfNeeded()
     }
 
     /// Decides what this launch should do about history.
@@ -270,10 +286,16 @@ public final class SessionManager: @unchecked Sendable {
 
     /// Switch a running agent to a different model, by its human name.
     ///
-    /// Nothing reads the output back to confirm the switch took — see the open
-    /// Mark a model switch as pending so updateSessionState can confirm it.
-    /// Only commit the change if the next output looks successful (no error,
-    /// prompt appears).
+    /// This types `/model <name>` at the agent and returns. It does not try to
+    /// confirm the switch from the terminal output, and it deliberately no
+    /// longer keeps a "pending switch" to reconcile later: that reconciliation
+    /// matched the bare substrings "error" and "failed" anywhere in the recent
+    /// window — the exact mistake `OutputHeuristics.indicatesFailure` was
+    /// rewritten to stop making — and the entry was never cleared when a
+    /// session was torn down, so it outlived the session it described.
+    ///
+    /// Whether the switch took is answered by reading the agent's own
+    /// transcript; see `transcriptReading(for:)`.
     public func selectModel(_ humanName: String, for sessionID: String) throws {
         lock.lock()
         guard let pty = ptyProcesses[sessionID],
@@ -290,12 +312,6 @@ public final class SessionManager: @unchecked Sendable {
 
         let model = ModelRef(agent: session.agent, rawValue: rawValue)
         try adapter.selectModel(model, on: pty)
-
-        lock.lock()
-        defer { lock.unlock() }
-        // Track this as pending — only commit it to the session when we confirm
-        // the output shows success (no error, prompt appears).
-        pendingModelSwitch[sessionID] = model
     }
 
     /// Kill whatever is running and start the same session again from scratch.
@@ -390,7 +406,7 @@ public final class SessionManager: @unchecked Sendable {
         sessionErrors.removeValue(forKey: sessionID)
         retryAttempts.removeValue(forKey: sessionID)
         lastDetectionAt.removeValue(forKey: sessionID)
-        pendingDetection.removeValue(forKey: sessionID)
+        lastScreenRevision.removeValue(forKey: sessionID)
     }
 
     /// Shuts down the pty attached to a session, leaving the session itself in
@@ -430,12 +446,11 @@ public final class SessionManager: @unchecked Sendable {
         return Array(sessions.values)
     }
 
-    /// Called on the pty's read queue for every chunk. Keeps the cheap part
-    /// (when did this agent last speak) exact, and rate-limits the expensive
-    /// part (what is it doing) to `detectionInterval`.
-    private func updateSessionState(sessionID: String, newOutput: String) {
-        let window = String(newOutput.suffix(Self.detectionWindowBytes))
-
+    /// Called on the pty's read queue for every chunk.
+    ///
+    /// Keeps the cheap part — when did this agent last speak — exact, and
+    /// throttles the part that looks at the screen.
+    private func noteActivity(sessionID: String) {
         lock.lock()
         guard let session = sessions[sessionID], adapters[session.agent] != nil else {
             lock.unlock()
@@ -449,52 +464,31 @@ public final class SessionManager: @unchecked Sendable {
         }
 
         // Free, and read by the dashboard every second, so keep it truthful at
-        // the moment the output actually arrived rather than when detection
-        // eventually gets around to it.
+        // the moment the output actually arrived.
         session.lastOutputAt = Date()
 
         let now = Date()
         let elapsed = lastDetectionAt[sessionID].map { now.timeIntervalSince($0) }
             ?? .greatestFiniteMagnitude
-
-        if elapsed >= Self.detectionInterval {
-            lastDetectionAt[sessionID] = now
-            pendingDetection.removeValue(forKey: sessionID)
-            lock.unlock()
-            runStateDetection(sessionID: sessionID, window: window)
-            return
-        }
-
-        // Inside the window. Hold the newest output and make sure exactly one
-        // trailing run is queued — without it, the last chunk of a burst is
-        // precisely the one that gets dropped, and a session that finishes
-        // talking would sit on WORKING forever.
-        let alreadyScheduled = pendingDetection[sessionID] != nil
-        pendingDetection[sessionID] = window
+        let shouldRun = elapsed >= Self.detectionInterval
+        if shouldRun { lastDetectionAt[sessionID] = now }
         lock.unlock()
 
-        guard !alreadyScheduled else { return }
-
-        detectionQueue.asyncAfter(deadline: .now() + (Self.detectionInterval - elapsed)) {
-            [weak self] in
-            guard let self else { return }
-
-            self.lock.lock()
-            let pending = self.pendingDetection.removeValue(forKey: sessionID)
-            if pending != nil { self.lastDetectionAt[sessionID] = Date() }
-            self.lock.unlock()
-
-            guard let pending else { return }
-            self.runStateDetection(sessionID: sessionID, window: pending)
-        }
+        // Nothing is scheduled for the chunks skipped here. That used to matter
+        // enormously — the last chunk of a burst is exactly the one that says
+        // the agent finished, and dropping it left the card on WORKING forever
+        // — but the settle timer now re-reads the screen half a second after
+        // things go quiet, which covers it without a second scheduling path.
+        guard shouldRun else { return }
+        runStateDetection(sessionID: sessionID)
     }
 
-    /// The expensive half: ANSI stripping, windowing and pattern matching.
-    /// Never call this on every chunk — see `updateSessionState`.
-    private func runStateDetection(sessionID: String, window: String) {
+    /// Reads the agent's rendered screen and updates the session's state.
+    private func runStateDetection(sessionID: String) {
         lock.lock()
         guard let session = sessions[sessionID],
-              let adapter = adapters[session.agent] else {
+              let adapter = adapters[session.agent],
+              let pty = ptyProcesses[sessionID] else {
             lock.unlock()
             return
         }
@@ -504,42 +498,73 @@ public final class SessionManager: @unchecked Sendable {
         }
         lock.unlock()
 
-        let newState = adapter.detectState(fromRecentOutput: window)
+        // Rendered outside the lock: `currentScreen` takes the pty's own screen
+        // lock, and holding both at once is how this deadlocked before.
+        let screen = pty.currentScreen()
+        let revision = pty.screenRevision
+        let newState = adapter.detectState(from: screen)
 
         lock.lock()
         defer { lock.unlock() }
 
-        // Re-checked, because detection now runs unlocked and the trailing run
-        // is deferred: the session can have exited in between.
+        // Re-checked, because detection runs unlocked: the session can have
+        // exited in between.
         guard let updatedSession = sessions[sessionID] else { return }
         if case .exited = updatedSession.state { return }
 
-        // `.unknown` means the output did not say, which is not a reason to
+        lastScreenRevision[sessionID] = revision
+
+        // `.unknown` means the screen did not say, which is not a reason to
         // discard what it last did say. Keep the previous state instead.
         if newState != .unknown {
             updatedSession.state = newState
         }
 
-        // Confirm pending model switch: if we see the agent back at a prompt
-        // with no error, commit the model change.
-        if let pendingModel = pendingModelSwitch[sessionID] {
-            let outputLower = window.lowercased()
-            let hasError = outputLower.contains("error") || outputLower.contains("failed") ||
-                          outputLower.contains("unknown model") || outputLower.contains("not found")
-            let isReady = newState == .ready || newState == .working
-
-            if !hasError && isReady {
-                // Model switch succeeded
-                updatedSession.model = pendingModel
-                pendingModelSwitch.removeValue(forKey: sessionID)
-            } else if hasError {
-                // Model switch failed, stop waiting
-                pendingModelSwitch.removeValue(forKey: sessionID)
-            }
-            // If still waiting (output is unclear), keep the pending flag
-        }
-
         sessions[sessionID] = updatedSession
+    }
+
+    /// Starts the one shared settle timer, if it is not already running.
+    private func startSettleTimerIfNeeded() {
+        lock.lock()
+        guard settleTimer == nil else {
+            lock.unlock()
+            return
+        }
+        let timer = DispatchSource.makeTimerSource(queue: detectionQueue)
+        timer.schedule(
+            deadline: .now() + Self.settleInterval,
+            repeating: Self.settleInterval
+        )
+        timer.setEventHandler { [weak self] in self?.settleTick() }
+        settleTimer = timer
+        lock.unlock()
+
+        timer.resume()
+    }
+
+    /// Re-examines any session whose screen has moved since it was last looked
+    /// at, plus any that is currently claiming to be working.
+    ///
+    /// The second half is the point: a latched WORKING is re-checked every half
+    /// second until the screen stops saying so, which is the only way a card
+    /// that stopped producing output ever gets to be READY again.
+    private func settleTick() {
+        lock.lock()
+        var candidates: [String] = []
+        for (sessionID, pty) in ptyProcesses {
+            guard let session = sessions[sessionID] else { continue }
+            if case .exited = session.state { continue }
+
+            let moved = lastScreenRevision[sessionID] != pty.screenRevision
+            let claimsBusy: Bool
+            if case .working = session.state { claimsBusy = true } else { claimsBusy = false }
+            if moved || claimsBusy { candidates.append(sessionID) }
+        }
+        lock.unlock()
+
+        for sessionID in candidates {
+            runStateDetection(sessionID: sessionID)
+        }
     }
 
     /// Sessions that still have a process behind them. This used to be a second
@@ -551,6 +576,83 @@ public final class SessionManager: @unchecked Sendable {
             if case .exited = session.state { return false }
             return ptyProcesses[session.id]?.isProcessRunning ?? false
         }
+    }
+
+    /// How stale a transcript reading may be and still be believed.
+    ///
+    /// Beyond this it is describing a turn that ended long ago, and the screen —
+    /// which at least reflects the terminal as it is now — is the better guess.
+    private static let transcriptFreshness: TimeInterval = 120
+
+    /// What the CLI's own transcript says this session is running and doing.
+    ///
+    /// Does real file and database I/O — never call this on the main thread.
+    /// The model used to come from a hardcoded table in the app that was wrong
+    /// for three of the four providers; this asks the agent instead.
+    public func transcriptReading(for sessionID: String) -> TranscriptReading? {
+        lock.lock()
+        guard let session = sessions[sessionID] else {
+            lock.unlock()
+            return nil
+        }
+        let agent = session.agent
+        let cwd = session.cwd
+        let providerSessionID = session.providerSessionID
+        lock.unlock()
+
+        let source = AgentTranscripts.source(for: agent)
+        if let reading = source.read(cwd: cwd, providerSessionID: providerSessionID) {
+            return reading
+        }
+
+        // No transcript yet — a session that has not taken a turn. The config
+        // default is what it will use when it does.
+        guard let model = source.defaultModel() else { return nil }
+        return TranscriptReading(model: model, activity: nil, observedAt: Date())
+    }
+
+    /// Reads the transcript once and uses it for both things it can tell us:
+    /// the model, which is returned, and whose turn it is, which is applied to
+    /// the session's state.
+    ///
+    /// The screen is the fast path — it updates within a quarter second and is
+    /// the only signal Cursor has at all — but it is inferential: it reads
+    /// markers a TUI happens to print. A transcript says outright that a turn
+    /// started or finished. Where the two disagree and the transcript is recent,
+    /// the transcript wins.
+    ///
+    /// Deliberately conservative. `.rateLimited` and `.error` are never
+    /// overridden: a transcript has nothing to say about either, and losing them
+    /// would hide the two states you most need to see.
+    @discardableResult
+    public func refreshFromTranscript(_ sessionID: String) -> String? {
+        guard let reading = transcriptReading(for: sessionID) else { return nil }
+
+        guard let activity = reading.activity,
+              Date().timeIntervalSince(reading.observedAt) <= Self.transcriptFreshness else {
+            return reading.model
+        }
+
+        lock.lock()
+        defer { lock.unlock() }
+        guard let session = sessions[sessionID] else { return reading.model }
+
+        switch session.state {
+        case .exited, .rateLimited, .error, .launching:
+            return reading.model
+        case .ready, .working, .unknown:
+            break
+        }
+
+        switch activity {
+        case .idle:
+            session.state = .ready
+        case .prompted, .responding:
+            session.state = .working
+        }
+        sessions[sessionID] = session
+
+        return reading.model
     }
 
     public func getPTYProcess(for sessionID: String) -> PTYProcess? {

@@ -140,15 +140,19 @@ final class PTYIntegrationTests: XCTestCase {
             cwd: tempDir
         )
 
-        var capturedOutput = ""
-        ptyProcess.registerOutputCallback { output in
-            capturedOutput = output
+        // `registerOutputCallback` used to hand over the whole retained
+        // buffer. It carries nothing now — state comes from `currentScreen()`
+        // — so accumulate the chunks instead.
+        let captured = NSMutableString()
+        ptyProcess.registerChunkCallback { chunk in
+            captured.append(chunk)
         }
 
         try ptyProcess.launch()
 
         Thread.sleep(forTimeInterval: 0.5)
 
+        let capturedOutput = captured as String
         XCTAssert(capturedOutput.contains("hello world"), "Expected output to contain 'hello world', got: '\(capturedOutput)'")
     }
 
@@ -327,13 +331,32 @@ final class PTYIntegrationTests: XCTestCase {
     func testStateDetection() {
         let claudeAdapter = ClaudeAdapter()
 
-        let readyState = claudeAdapter.detectState(fromRecentOutput: "claude > ")
-        XCTAssertEqual(readyState, .ready)
+        func screen(_ lines: String...) -> ScreenSnapshot {
+            ScreenSnapshot(
+                rows: lines,
+                cursorRow: 0,
+                cursorColumn: 0,
+                isAlternateScreen: false,
+                columns: 120
+            )
+        }
 
-        let workingState = claudeAdapter.detectState(fromRecentOutput: "thinking... processing...")
-        XCTAssertEqual(workingState, .working)
+        XCTAssertEqual(claudeAdapter.detectState(from: screen("❯ ")), .ready)
 
-        let rateLimitedState = claudeAdapter.detectState(fromRecentOutput: "rate-limited")
-        XCTAssertEqual(rateLimitedState, .rateLimited)
+        // Deliberately inverted. This used to assert that the bare words
+        // "thinking... processing..." meant WORKING, which is exactly the
+        // vocabulary matching that made an agent describing its work
+        // indistinguishable from an agent doing it. A real status line carries
+        // an interrupt hint or an ellipsis, and prose does not.
+        XCTAssertEqual(
+            claudeAdapter.detectState(from: screen("thinking... processing...")),
+            .unknown
+        )
+        XCTAssertEqual(
+            claudeAdapter.detectState(from: screen("✻ Thinking… (esc to interrupt)")),
+            .working
+        )
+
+        XCTAssertEqual(claudeAdapter.detectState(from: screen("rate-limited")), .rateLimited)
     }
 }

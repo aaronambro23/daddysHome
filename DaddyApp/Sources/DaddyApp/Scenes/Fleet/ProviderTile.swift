@@ -143,7 +143,7 @@ struct ProviderTile: View {
             HStack(spacing: 7) {
                 StatusBadge(state: agent.state)
 
-                Text(agent.model)
+                Text(agent.modelLabel)
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(DaddyTheme.textSecondary)
                     .lineLimit(1)

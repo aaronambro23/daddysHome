@@ -374,6 +374,52 @@ final class MockStore {
         }
     }
 
+    /// Asks each live agent's CLI what model it is actually running.
+    ///
+    /// Daddy used to answer this from a hardcoded table — `opus-5` for Claude,
+    /// `gpt-5-codex` for Codex — that was wrong for three of the four
+    /// providers and never changed when you switched models mid-session. Every
+    /// one of these CLIs writes the answer to disk as it goes, so this reads it.
+    ///
+    /// Detached because it touches the filesystem and, for OpenCode, a SQLite
+    /// database. Same rule as `refreshProjects`: no I/O where SwiftUI is
+    /// drawing.
+    func refreshAgentModels() {
+        let live: [(agentID: String, sessionID: String)] = agents.compactMap { agent in
+            guard let sessionID = agent.sessionID, agent.isLive else { return nil }
+            return (agent.id, sessionID)
+        }
+        guard !live.isEmpty else { return }
+
+        let manager = sessionManager
+        Task { [weak self] in
+            // The read happens off the main actor and hands back nothing but
+            // strings; `self` is never sent across the boundary. Same shape as
+            // `refreshProjects`.
+            let found = await Task.detached(priority: .utility) { () -> [String: String] in
+                var found: [String: String] = [:]
+                for entry in live {
+                    // One read, two answers: the model comes back, and whose
+                    // turn it is gets applied to the session's state on the way
+                    // through. The screen is what makes badges quick; this is
+                    // what makes them right when the screen was guessing.
+                    if let model = manager.refreshFromTranscript(entry.sessionID),
+                       !model.isEmpty {
+                        found[entry.agentID] = model
+                    }
+                }
+                return found
+            }.value
+
+            guard let self, !found.isEmpty else { return }
+            for (agentID, model) in found {
+                self.mutate(agentID) { card in
+                    if card.model != model { card.model = model }
+                }
+            }
+        }
+    }
+
     func refreshProviderUsage() {
         Task {
             providerUsage = await providerUsageService.refresh()
@@ -420,7 +466,10 @@ final class MockStore {
                 projectID: project.id,
                 agent: kind,
                 workUnitID: unit,
-                model: Self.defaultModel(for: kind),
+                // Empty until the CLI's own transcript says otherwise. A
+                // guess here is what made every card claim a model it wasn't
+                // running; "—" is the honest answer for the first second.
+                model: "",
                 state: .launching,
                 startedAt: Date(),
                 lastOutputAt: Date(),
@@ -791,7 +840,17 @@ final class MockStore {
 
         do {
             try sessionManager.selectModel(humanName, for: sessionID)
+
+            // Shown straight away so the switch feels like it happened, but
+            // this is the alias you typed ("opus"), not what the agent calls
+            // itself ("claude-opus-5"). The agent needs a moment to act on
+            // `/model`, so re-read its transcript shortly after and let the
+            // canonical name win.
             mutate(agentID) { $0.model = humanName }
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                self?.refreshAgentModels()
+            }
             return true
         } catch {
             return false
@@ -854,13 +913,11 @@ final class MockStore {
             }
 
             if let pty = sessionManager.getPTYProcess(for: sessionID) {
-                // Only the tail is cleaned. `recentOutput` runs to 64KB and
-                // `stripANSI` walks every character of what it is given, and
-                // this loop runs for every agent every second.
-                let tail = String(pty.recentOutput.suffix(4096))
-                let line = OutputHeuristics.lastVisibleLine(
-                    OutputHeuristics.recentWindow(tail, lines: 3)
-                )
+                // From the rendered screen, and deliberately not its literal
+                // bottom row: agents pin a composer and a mode footer there
+                // permanently, so every Claude card would show the same static
+                // "accept edits on (shift+tab to cycle)" forever.
+                let line = pty.currentScreen().lastMeaningfulLine
                 if line != agent.lastLine {
                     mutate(agent.id) { $0.lastLine = line }
                 }
@@ -887,6 +944,13 @@ final class MockStore {
         // should show up without a restart.
         if tickCount % 30 == 0 { refreshProjects() }
 
+        // Reads each agent's own transcript: the model it is running, and a
+        // second opinion on whose turn it is. Deliberately slow — the rendered
+        // screen already moves badges within a quarter second, and this only
+        // has to catch the cases where the screen was unsure. Codex has to scan
+        // a directory to find its rollout file, so this is not free.
+        if tickCount % 10 == 1 { refreshAgentModels() }
+
         // Provider quota endpoints are account-wide and some are aggressively
         // rate-limited. Five minutes keeps the dashboard useful without turning
         // four fleet cards into a polling storm.
@@ -911,15 +975,6 @@ final class MockStore {
 // MARK: - Seed Data
 
 extension MockStore {
-    static func defaultModel(for kind: AgentKind) -> String {
-        switch kind {
-        case .claude: return "opus-5"
-        case .codex: return "gpt-5-codex"
-        case .cursor: return "composer-1"
-        case .opencode: return "sonnet-5"
-        }
-    }
-
     /// Reads the world as it actually is. There is no seeded data left: an
     /// empty dashboard means no agents are running, which is the truth.
     func seed() {
@@ -1026,7 +1081,12 @@ extension MockStore {
                 projectID: record.projectID,
                 workUnitID: record.workUnitID,
                 agent: record.agent,
-                model: ModelRef(agent: record.agent, rawValue: record.model),
+                // Deliberately nil. `record.model` is a *display* label read
+                // off the agent's transcript ("claude-opus-5"), and feeding it
+                // back as a `--model` value made relaunching a restored card
+                // pass a flag no adapter would ever produce and Claude rejects
+                // outright — so the agent never started.
+                model: nil,
                 cwd: URL(fileURLWithPath: record.cwd),
                 providerSessionID: record.providerSessionID
             )
@@ -1130,7 +1190,7 @@ extension MockStore {
                 projectID: project.id,
                 agent: chat.agent,
                 workUnitID: unit,
-                model: Self.defaultModel(for: chat.agent),
+                model: "",
                 state: .launching,
                 startedAt: Date(),
                 lastOutputAt: Date(),

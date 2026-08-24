@@ -48,7 +48,7 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var outputBuffer: String = ""
     private var pendingBytes: [UInt8] = []
-    private var outputCallbacks: [(String) -> Void] = []
+    private var activityCallbacks: [() -> Void] = []
     private var chunkCallbacks: [(token: UUID, callback: (String) -> Void)] = []
     private var terminationCallbacks: [(Int32) -> Void] = []
     private var lastExitCode: Int32 = 0
@@ -66,8 +66,31 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
     /// See that method for what it is for.
     private var awaitingFirstRedraw = false
 
-    /// Lines of scrollback retained in `recentOutput` for state detection.
+    /// Lines of scrollback retained in `recentOutput`.
+    ///
+    /// No longer used for state detection — see `screen`. It still backs the
+    /// renderer's backlog replay when a view attaches, which needs raw bytes.
     private let retainedLines = 200
+
+    // MARK: Shadow screen
+    //
+    // A second, rendererless emulator fed the same bytes as the visible pane,
+    // so detection can ask what the agent's terminal *shows* rather than
+    // pattern-matching the byte stream that produced it. See `ShadowScreen`.
+
+    private var screen: ShadowScreen
+
+    /// Its own lock, deliberately not `lock`.
+    ///
+    /// `Terminal.feed` calls synchronously back into its delegate, and `lock`
+    /// is a non-recursive `NSLock` already held by `write`, `send`, `resize`
+    /// and `recentOutput` — feeding underneath it would turn any future
+    /// delegate reply into a permanent deadlock of the read queue. `lock` is
+    /// also taken from the main thread once a second by the dashboard, and
+    /// holding it across a parse plus a full render would stall the UI.
+    ///
+    /// The two locks are never nested.
+    private let screenLock = NSLock()
 
     /// Off-main queue for the delayed SIGKILL in `terminate(graceSeconds:)`.
     private let terminationQueue = DispatchQueue(label: "com.daddy.pty.termination")
@@ -84,6 +107,7 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
         self.cwd = cwd
         self.columns = columns
         self.rows = rows
+        self.screen = ShadowScreen(columns: Int(columns), rows: Int(rows))
 
         // Deliver on a private serial queue rather than main: this type is used
         // headlessly by the CLI, and state detection should never contend with
@@ -365,6 +389,13 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
         self.rows = rows
         lock.unlock()
 
+        // The shadow has to agree with the child about the geometry, or it
+        // wraps differently and its bottom rows stop being the agent's bottom
+        // rows. Outside `lock`, and never while holding it.
+        screenLock.lock()
+        screen.resize(columns: Int(columns), rows: Int(rows))
+        screenLock.unlock()
+
         guard localProcess.running else { return }
         var size = winsize(ws_row: rows, ws_col: columns, ws_xpixel: 0, ws_ypixel: 0)
         _ = ioctl(localProcess.childfd, TIOCSWINSZ, &size)
@@ -372,12 +403,17 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
 
     // MARK: Observation
 
-    /// Fires with the full retained buffer on every chunk. Kept for
-    /// `SessionManager`'s state detection, which pattern-matches recent output.
-    public func registerOutputCallback(_ callback: @escaping (String) -> Void) {
+    /// Fires on every chunk, carrying nothing.
+    ///
+    /// This used to hand over the entire retained buffer — up to 96KB — so
+    /// that `SessionManager` could copy the last 8KB out of it and, nine times
+    /// out of ten, throw the copy away inside its own throttle window. State
+    /// now comes from `currentScreen()`, which the subscriber pulls when it
+    /// actually intends to look. All this has to say is "something happened".
+    public func registerActivityCallback(_ callback: @escaping () -> Void) {
         lock.lock()
         defer { lock.unlock() }
-        outputCallbacks.append(callback)
+        activityCallbacks.append(callback)
     }
 
     /// Fires with only the newly-arrived text. Use this to feed a terminal
@@ -423,10 +459,34 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
         localProcess.shellPid
     }
 
+    /// The raw retained byte stream.
+    ///
+    /// Still the right thing for replaying backlog into a newly attached
+    /// renderer, which needs the escape codes intact. It is the wrong thing for
+    /// working out what the agent is doing — use `currentScreen()`.
     public var recentOutput: String {
         lock.lock()
         defer { lock.unlock() }
         return outputBuffer
+    }
+
+    /// What the agent's terminal is showing right now.
+    ///
+    /// Rendered on demand rather than pushed on every chunk: `DispatchIO`
+    /// splits one TUI repaint across many reads, so rendering per chunk would
+    /// build a hundred-odd screens a second and discard almost all of them.
+    public func currentScreen() -> ScreenSnapshot {
+        screenLock.lock()
+        defer { screenLock.unlock() }
+        return screen.snapshot()
+    }
+
+    /// Counts feeds and resizes. Lets a poller skip the render entirely when
+    /// nothing has moved since it last looked.
+    public var screenRevision: UInt64 {
+        screenLock.lock()
+        defer { screenLock.unlock() }
+        return screen.revision
     }
 
     // MARK: - LocalProcessDelegate
@@ -447,13 +507,18 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
         outputBuffer.append(text)
         trimBufferLocked()
 
-        let snapshot = outputBuffer
-        let outputs = outputCallbacks
         let chunks = chunkCallbacks
+        let activity = activityCallbacks
         lock.unlock()
 
+        // Feed the shadow the same bytes the renderer gets, under its own lock
+        // and never while `lock` is held. Cheap: a parse, no render.
+        screenLock.lock()
+        screen.feed(text)
+        screenLock.unlock()
+
         for entry in chunks { entry.callback(text) }
-        for callback in outputs { callback(snapshot) }
+        for callback in activity { callback() }
     }
 
     public func processTerminated(_ source: LocalProcess, exitCode: Int32?) {
@@ -512,13 +577,18 @@ public final class PTYProcess: LocalProcessDelegate, @unchecked Sendable {
         outputBuffer.append(text)
         trimBufferLocked()
 
-        let snapshot = outputBuffer
-        let outputs = outputCallbacks
         let chunks = chunkCallbacks
+        let activity = activityCallbacks
         lock.unlock()
 
+        // Feed the shadow the same bytes the renderer gets, under its own lock
+        // and never while `lock` is held. Cheap: a parse, no render.
+        screenLock.lock()
+        screen.feed(text)
+        screenLock.unlock()
+
         for entry in chunks { entry.callback(text) }
-        for callback in outputs { callback(snapshot) }
+        for callback in activity { callback() }
     }
 
     /// Caller must hold `lock`.

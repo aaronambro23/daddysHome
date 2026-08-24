@@ -132,11 +132,16 @@ struct TerminalPane: View {
     /// The last output is kept, as plain selectable text rather than a live
     /// terminal — agents often say something useful on the way out (OpenCode
     /// prints the command to resume that exact session), and throwing it away
-    /// would lose it. Escape sequences are stripped, so what is left is what a
-    /// person would have read.
+    /// would lose it.
+    ///
+    /// Taken from the rendered screen rather than the byte stream. Stripping
+    /// escapes out of the stream left every *erased* repaint behind as text, so
+    /// what you actually got here was fourteen lines of stale spinner frames.
     @ViewBuilder
     private func endedState(pty: PTYProcess?) -> some View {
-        let tail = pty.map { OutputHeuristics.recentWindow($0.recentOutput, lines: 14) } ?? ""
+        let tail = pty.map {
+            $0.currentScreen().visibleRows.suffix(14).joined(separator: "\n")
+        } ?? ""
 
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
