@@ -64,14 +64,14 @@ struct ProviderUsageBattery: View {
 
     private func meter(_ window: ProviderUsageWindow) -> some View {
         GeometryReader { geometry in
-            let width = max(0, geometry.size.width * window.remainingPercent / 100)
+            let width = max(0, geometry.size.width * window.usedPercent / 100)
 
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(Color.white.opacity(0.07))
 
                 Capsule()
-                    .fill(capacityColor(window.remainingPercent))
+                    .fill(capacityColor(window.usedPercent))
                     .frame(width: width)
             }
             .overlay {
@@ -90,9 +90,9 @@ struct ProviderUsageBattery: View {
     }
 
     private func percentage(_ window: ProviderUsageWindow) -> some View {
-        Text("\(Int(window.remainingPercent.rounded()))%")
+        Text("\(Int(window.usedPercent.rounded()))%")
             .font(.system(size: compact ? 8.5 : 9.5, weight: .semibold, design: .monospaced))
-            .foregroundStyle(capacityColor(window.remainingPercent))
+            .foregroundStyle(capacityColor(window.usedPercent))
             .monospacedDigit()
             .frame(width: compact ? 30 : 34, alignment: .trailing)
     }
@@ -170,7 +170,7 @@ struct ProviderUsageBattery: View {
         case .unavailable(let reason): state = " · \(reason)"
         default: state = ""
         }
-        return "\(window.label): \(Int(window.remainingPercent.rounded()))% remaining · \(resetDescription(window.resetsAt))\(state). Click to switch window."
+        return "\(window.label): \(Int(window.usedPercent.rounded()))% used · \(resetDescription(window.resetsAt))\(state). Click to switch window."
     }
 
     private func selectNextWindow() {
@@ -189,9 +189,14 @@ struct ProviderUsageBattery: View {
         }
     }
 
-    private func capacityColor(_ remaining: Double) -> Color {
-        if remaining <= 20 { return DaddyTheme.failure }
-        if remaining <= 45 { return DaddyTheme.limited }
+    /// Keyed to usage, not headroom, because that is what the number says.
+    ///
+    /// Every provider dashboard reports *used*, so this used to force you to do
+    /// the subtraction in your head before you could tell whether Daddy and the
+    /// dashboard agreed. They agree now.
+    private func capacityColor(_ used: Double) -> Color {
+        if used >= 80 { return DaddyTheme.failure }
+        if used >= 55 { return DaddyTheme.limited }
         return DaddyTheme.ready
     }
 
