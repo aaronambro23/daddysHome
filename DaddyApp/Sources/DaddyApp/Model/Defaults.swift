@@ -15,6 +15,7 @@ enum Defaults {
         case approvalPolicy = "daddy.approvalPolicy"
         case workMode = "daddy.workMode"
         case terminalFontSize = "daddy.terminalFontSize"
+        case orchestratorModel = "daddy.orchestratorModel"
     }
 
     static func set(_ value: String, for key: Key) {

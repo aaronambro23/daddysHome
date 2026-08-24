@@ -173,6 +173,7 @@ private struct SettingsUtilityPanel: View {
         ("⌃Q", "Quit and end chat session"),
         ("⌃⇥", "Switch between active chat sessions"),
         ("⌘B", "Toggle sidebar directory menu"),
+        ("⌃O", "Open or close the Orchestrator"),
         ("⎋", "Goes to the agent, not to Daddy"),
     ]
 
@@ -225,6 +226,14 @@ private struct SettingsUtilityPanel: View {
                         "Only while Daddy is in the background.",
                         binding: $store.notifyOnReady
                     )
+
+                    setting(
+                        "Orchestrator model",
+                        "Local Ollama model tag used by the Orchestrator workspace."
+                    ) {
+                        TextField("gemma4:e4b", text: $store.orchestratorModel)
+                            .textFieldStyle(.roundedBorder)
+                    }
                 }
 
                 section("SHORTCUTS") {

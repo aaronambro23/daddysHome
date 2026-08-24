@@ -32,7 +32,14 @@ struct RootView: View {
                     // to the window edges because it *was* the window; with the
                     // rail permanently beside it, the rail would sit flush
                     // against the frame while every other panel floats.
-                    FleetView()
+                    Group {
+                        switch store.workspace {
+                        case .fleet:
+                            FleetView()
+                        case .orchestrator:
+                            OrchestratorView()
+                        }
+                    }
                         .padding(.horizontal, 18)
                         .padding(.vertical, 18)
 
@@ -67,8 +74,11 @@ struct RootView: View {
             // in the app that belongs to no panel, and reaching it means
             // `TitlebarAccessory`; content drawn under a transparent titlebar
             // does not receive clicks.
-            TitlebarAccessory(size: CGSize(width: 44, height: 28)) {
-                settingsButton
+            TitlebarAccessory(size: CGSize(width: 112, height: 28)) {
+                HStack(spacing: 6) {
+                    orchestratorButton
+                    settingsButton
+                }
             }
             .frame(width: 0, height: 0)
         }
@@ -95,6 +105,27 @@ struct RootView: View {
         .opacity(utilityPanel == .settings ? 1 : 0.6)
         .padding(.trailing, 12)
         .help("Settings")
+    }
+
+    private var orchestratorButton: some View {
+        Button {
+            withAnimation(.smooth(duration: 0.24)) {
+                store.workspace = store.workspace == .orchestrator ? .fleet : .orchestrator
+            }
+        } label: {
+            Image(systemName: "sparkles")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(
+                    store.workspace == .orchestrator
+                        ? DaddyTheme.accent : DaddyTheme.textSecondary
+                )
+                .frame(width: 28, height: 28)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .opacity(store.workspace == .orchestrator ? 1 : 0.6)
+        .help("Orchestrator")
+        .keyboardShortcut("o", modifiers: .control)
     }
 
     private func toggleUtilityPanel(_ panel: UtilityPanel) {

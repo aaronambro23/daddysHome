@@ -64,6 +64,14 @@ struct TerminalSurface: NSViewRepresentable {
 
         view.terminalDelegate = context.coordinator
 
+        // SwiftTerm narrates every escape sequence it does not implement to
+        // stdout — "Unhandled DEC Private Mode Set (DECSET) with 2031" arrives
+        // several times a second, because 2031 is the colour-scheme-change
+        // notification every one of these CLIs enables at startup. It is not a
+        // problem with our terminal and there is nothing to act on, so it is
+        // noise that buries anything we actually print.
+        view.getTerminal().silentLog = true
+
         // Dropping a file types its path, exactly as Terminal.app and iTerm2
         // do. The agent on the other end just sees a path arrive in its input.
         view.onDropFiles = { [weak coordinator = context.coordinator] urls in

@@ -13,6 +13,9 @@ import DaddyCore
 @Observable
 @MainActor
 final class MockStore {
+    // Workspace
+    var workspace: OrchestratorWorkspace = .fleet
+
     // Navigation
     var selectedProjectID: String?
     var selectedAgentID: String?
@@ -34,6 +37,24 @@ final class MockStore {
     var agents: [MockAgent] = []
     var voiceLog: [VoiceEntry] = []
     var providerUsage: [AgentKind: ProviderUsageSnapshot] = [:]
+
+    // Orchestrator
+    var orchestratorMessages: [OrchestratorMessage] = []
+    var orchestratorAttachments: [OrchestratorAttachment] = []
+    var pendingOrchestratorAttachmentIDs: [UUID] = []
+    var orchestratorCategory: OrchestratorWorkCategory?
+    @ObservationIgnored var orchestratorMessagesByCategory: [String: [OrchestratorMessage]] = [:]
+    @ObservationIgnored var orchestratorAttachmentsByCategory: [String: [OrchestratorAttachment]] = [:]
+    @ObservationIgnored var pendingOrchestratorAttachmentIDsByCategory: [String: [UUID]] = [:]
+    var orchestratorWorkItems: [OrchestratorWorkItem] = []
+    var selectedOrchestratorWorkItemID: UUID?
+    var orchestratorStreamingText = ""
+    var orchestratorBusy = false
+    var orchestratorError: String?
+    var pendingOrchestratorDispatch: PendingOrchestratorDispatch?
+
+    @ObservationIgnored var orchestratorTurnTask: Task<Void, Never>?
+    @ObservationIgnored var orchestratorTurnID: UUID?
 
     /// Work units marked done by hand. The units themselves are derived from
     /// live sessions, so only this override needs storing.
@@ -75,6 +96,11 @@ final class MockStore {
     /// it afterwards without disturbing this — see `setWorkMode`.
     var workMode: WorkMode = .detailed {
         didSet { Defaults.set(workMode.rawValue, for: .workMode) }
+    }
+
+    /// The local model used by the Orchestrator workspace.
+    var orchestratorModel: String = "gemma4:e4b" {
+        didSet { Defaults.set(orchestratorModel, for: .orchestratorModel) }
     }
 
     /// Posts a notification when a background session wants input.
@@ -126,6 +152,9 @@ final class MockStore {
     /// before anything called it.
     @ObservationIgnored let commandParser = CommandParser()
 
+    @ObservationIgnored let orchestratorMarkdownStore = OrchestratorMarkdownStore()
+    @ObservationIgnored let ollamaClient = OllamaClient()
+
     /// Reads HEX's own recording history, so voice commands do not depend on
     /// whichever SwiftUI control or embedded terminal currently owns focus.
     @ObservationIgnored private var hexWatcher: HEXWatcher?
@@ -140,6 +169,7 @@ final class MockStore {
         loadDefaults()
 
         seed()
+        orchestratorWorkItems = orchestratorMarkdownStore.loadWorkItems()
         restoreSessions()
         selectedProjectID = projects.first?.id
         selectedAgentID = agents.first?.id
@@ -975,6 +1005,9 @@ extension MockStore {
         }
         if let raw = Defaults.string(.workMode), let mode = WorkMode(rawValue: raw) {
             workMode = mode
+        }
+        if let model = Defaults.string(.orchestratorModel), !model.isEmpty {
+            orchestratorModel = model
         }
         if let size = Defaults.double(.terminalFontSize),
            Self.terminalFontRange.contains(size) {

@@ -35,6 +35,7 @@ struct ProviderLaunchMenu<Label: View>: View {
             chromelessLabel: chromelessLabel,
             externalIsOpen: $isOpen,
             highlightedIndex: hasKeyboardSelection ? highlightedIndex : nil,
+            selectedIndex: hasKeyboardSelection ? highlightedIndex : firstEnabledIndex,
             onKeyboardMove: moveSelection,
             onKeyboardActivate: activateSelection,
             label: label
