@@ -172,19 +172,8 @@ enum ProviderUsageCollector {
         return try ProviderUsageParser.cursor(data)
     }
 
-    /// How long to wait for the Codex app-server to answer before giving up.
-    private static let codexDeadline: TimeInterval = 10
-
-    /// Codex reports quota over its app-server JSON-RPC channel on stdio.
-    ///
-    /// This used to write `initialize`, sleep 650ms, write the request, sleep
-    /// again, close stdin and read whatever had turned up. That happens to work
-    /// on a warm machine and returns nothing at all on a cold one — after which
-    /// the parser reports "Codex usage format changed", which is a lie about
-    /// the format and sends you looking in the wrong place. Read until the
-    /// reply actually lands instead, bounded by a deadline.
     private static func fetchCodex() async throws -> ProviderUsageSnapshot {
-        let data = try await Task.detached(priority: .utility) { () throws -> Data in
+        let data = try await Task.detached(priority: .utility) {
             guard let executable = ExecutableResolver.resolve("codex"),
                   FileManager.default.isExecutableFile(atPath: executable) else {
                 throw ProviderUsageError.unavailable("Codex CLI is not installed")
@@ -200,85 +189,33 @@ enum ProviderUsageCollector {
             process.standardOutput = output
             process.standardError = errors
 
-            func send(_ line: String) throws {
-                try input.fileHandleForWriting.write(contentsOf: Data((line + "\n").utf8))
-            }
-
             do {
                 try process.run()
-            } catch {
-                throw ProviderUsageError.failed("Could not start the Codex usage service")
-            }
+                let initialize = """
+                {"method":"initialize","id":0,"params":{"clientInfo":{"name":"daddy","title":"Daddy","version":"1"}}}
+                """
+                try input.fileHandleForWriting.write(contentsOf: Data((initialize + "\n").utf8))
+                try await Task.sleep(for: .milliseconds(650))
+                let request = #"{"method":"account/rateLimits/read","id":1,"params":{}}"#
+                try input.fileHandleForWriting.write(contentsOf: Data((request + "\n").utf8))
+                try await Task.sleep(for: .milliseconds(650))
+                try input.fileHandleForWriting.close()
 
-            // The child keeps stdout open for as long as it lives, so a
-            // blocking read only returns once it exits. Terminating on the
-            // deadline is what turns a hung app-server into an error rather
-            // than a read that never comes back.
-            let watchdog = DispatchWorkItem {
-                if process.isRunning { process.terminate() }
-            }
-            DispatchQueue.global(qos: .utility)
-                .asyncAfter(deadline: .now() + Self.codexDeadline, execute: watchdog)
-
-            defer {
-                watchdog.cancel()
-                try? input.fileHandleForWriting.close()
-                if process.isRunning { process.terminate() }
+                let data = output.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
-            }
-
-            do {
-                try send(
-                    #"{"method":"initialize","id":0,"params":{"clientInfo":{"name":"daddy","title":"Daddy","version":"1"}}}"#
-                )
-
-                var buffer = Data()
-                var askedForLimits = false
-
-                while true {
-                    let chunk = output.fileHandleForReading.availableData
-                    if chunk.isEmpty { break }          // EOF — the child exited
-                    buffer.append(chunk)
-
-                    // The server answers `initialize` before it will serve
-                    // anything else, and the protocol wants the `initialized`
-                    // notification after that. Neither can be timed; both can
-                    // be waited for.
-                    if !askedForLimits, hasResponse(buffer, id: 0) {
-                        try send(#"{"method":"initialized","params":{}}"#)
-                        try send(#"{"method":"account/rateLimits/read","id":1,"params":{}}"#)
-                        askedForLimits = true
-                    }
-
-                    if askedForLimits, hasResponse(buffer, id: 1) { break }
+                guard process.terminationStatus == 0 else {
+                    throw ProviderUsageError.failed("Codex usage service failed")
                 }
-
-                guard hasResponse(buffer, id: 1) else {
-                    throw ProviderUsageError.failed("Codex did not answer the usage request")
-                }
-                return buffer
+                return data
             } catch let error as ProviderUsageError {
                 throw error
             } catch {
+                if process.isRunning { process.terminate() }
                 throw ProviderUsageError.failed("Could not query Codex usage")
             }
         }.value
 
         return try ProviderUsageParser.codex(data)
-    }
-
-    /// Whether `buffer` already holds a complete JSON-RPC *response* with this
-    /// id. A half-written trailing line simply fails to parse, which is the
-    /// right answer: keep reading.
-    private static func hasResponse(_ buffer: Data, id: Int) -> Bool {
-        String(decoding: buffer, as: UTF8.self)
-            .split(separator: "\n")
-            .contains { line in
-                guard let bytes = line.data(using: .utf8),
-                      let root = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-                      root["result"] != nil else { return false }
-                return (root["id"] as? NSNumber)?.intValue == id
-            }
     }
 
     private static func responseData(
@@ -307,16 +244,6 @@ enum ProviderUsageCollector {
         }
     }
 
-    /// The keychain item's name. `security` is the only way in without linking
-    /// Security.framework and dealing with its ACL prompts by hand.
-    private static let claudeKeychainService = "Claude Code-credentials"
-
-    /// `security` exits 44 when the item simply is not there — which means not
-    /// signed in. Every other non-zero status means the item exists but this
-    /// process was not allowed to read it, which is a completely different
-    /// problem with a completely different fix.
-    private static let keychainItemNotFound: Int32 = 44
-
     private static func claudeToken() async throws -> String {
         if let token = ProcessInfo.processInfo.environment["CLAUDE_CODE_OAUTH_TOKEN"],
            !token.isEmpty {
@@ -326,41 +253,27 @@ enum ProviderUsageCollector {
         let path = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/.credentials.json")
         if let data = try? Data(contentsOf: path),
-           let token = claudeAccessToken(in: data) {
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let oauth = object["claudeAiOauth"] as? [String: Any],
+           let token = oauth["accessToken"] as? String,
+           !token.isEmpty {
             return token
         }
 
         #if os(macOS)
-        // Claude Code stores its credentials in the login keychain, and a
-        // keychain item is bound to the binaries on its ACL. Daddy is a
-        // different binary from the terminal you ran `claude` in, so this can
-        // fail for a reason that has nothing to do with being signed in —
-        // saying "Sign in to Claude Code" then sends you to re-authenticate an
-        // account that was never the problem.
-        if let result = await runProcessStatus(
+        if let data = try? await runProcess(
             "/usr/bin/security",
-            ["find-generic-password", "-s", claudeKeychainService, "-w"]
-        ) {
-            if result.status == 0, let token = claudeAccessToken(in: result.data) {
-                return token
-            }
-            if result.status != keychainItemNotFound {
-                throw ProviderUsageError.unavailable(
-                    "Allow Daddy to read Claude credentials"
-                )
-            }
+            ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
+        ),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let oauth = object["claudeAiOauth"] as? [String: Any],
+           let token = oauth["accessToken"] as? String,
+           !token.isEmpty {
+            return token
         }
         #endif
 
         throw ProviderUsageError.unavailable("Sign in to Claude Code")
-    }
-
-    private static func claudeAccessToken(in data: Data) -> String? {
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let oauth = object["claudeAiOauth"] as? [String: Any],
-              let token = oauth["accessToken"] as? String,
-              !token.isEmpty else { return nil }
-        return token
     }
 
     private static func openCodeToken() throws -> String {
@@ -401,29 +314,6 @@ enum ProviderUsageCollector {
             throw ProviderUsageError.unavailable("Cursor is not signed in")
         }
         return token
-    }
-
-    /// Like `runProcess`, but hands back the exit status instead of collapsing
-    /// every non-zero result into a single error. Some callers need to tell
-    /// failures apart — see `claudeToken`.
-    private static func runProcessStatus(
-        _ executable: String,
-        _ arguments: [String]
-    ) async -> (data: Data, status: Int32)? {
-        await Task.detached(priority: .utility) { () -> (data: Data, status: Int32)? in
-            let process = Process()
-            let output = Pipe()
-            let errors = Pipe()
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = arguments
-            process.standardOutput = output
-            process.standardError = errors
-
-            guard (try? process.run()) != nil else { return nil }
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            return (data, process.terminationStatus)
-        }.value
     }
 
     private static func runProcess(_ executable: String, _ arguments: [String]) async throws -> Data {
@@ -497,59 +387,34 @@ enum ProviderUsageParser {
         return ProviderUsageSnapshot(provider: .opencode, windows: windows)
     }
 
-    /// Cursor reports three different percentages and this used to read the
-    /// wrong one.
-    ///
-    /// `autoPercentUsed` covers the auto-model pool alone. The number the
-    /// dashboard leads with — the one Cursor's own
-    /// `autoModelSelectedDisplayMessage` quotes back at you as "You've used
-    /// N% of your included total usage" — is `totalPercentUsed`. Reading 9%
-    /// off a dashboard saying 21% is what made the whole battery untrustworthy.
     static func cursor(_ data: Data) throws -> ProviderUsageSnapshot {
         let root = try dictionary(data, provider: "Cursor")
         guard let plan = root["planUsage"] as? [String: Any] else {
             throw ProviderUsageError.failed("Cursor usage format changed")
         }
         let reset = date(root["billingCycleEnd"])
-
-        guard let total = number(plan["totalPercentUsed"]) else {
+        guard let cursorModels = number(plan["autoPercentUsed"]),
+              let otherModels = number(plan["apiPercentUsed"]) else {
             throw ProviderUsageError.failed("Cursor usage format changed")
         }
 
-        var windows = [
-            ProviderUsageWindow(
-                id: "total",
-                label: "Included usage",
-                usedPercent: total,
-                resetsAt: reset
-            )
-        ]
-
-        // The per-pool breakdown, reachable by clicking through. Optional on
-        // purpose: if Cursor drops or renames one of these, that should cost
-        // you the breakdown, not the headline number.
-        if let cursorModels = number(plan["autoPercentUsed"]) {
-            windows.append(
+        return ProviderUsageSnapshot(
+            provider: .cursor,
+            windows: [
                 ProviderUsageWindow(
                     id: "cursor-models",
                     label: "Cursor models",
                     usedPercent: cursorModels,
                     resetsAt: reset
-                )
-            )
-        }
-        if let otherModels = number(plan["apiPercentUsed"]) {
-            windows.append(
+                ),
                 ProviderUsageWindow(
                     id: "other-models",
                     label: "Other models",
                     usedPercent: otherModels,
                     resetsAt: reset
-                )
-            )
-        }
-
-        return ProviderUsageSnapshot(provider: .cursor, windows: windows)
+                ),
+            ]
+        )
     }
 
     static func codex(_ data: Data) throws -> ProviderUsageSnapshot {

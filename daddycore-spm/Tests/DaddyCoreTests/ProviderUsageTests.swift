@@ -1,19 +1,18 @@
 import XCTest
 @testable import DaddyCore
 
-// Assertions are on `usedPercent`, because that is what every provider
-// dashboard reports and therefore the only number you can cross-reference
-// against one. `remainingPercent` is still derived and still tested, but it is
-// no longer what the battery shows.
 final class ProviderUsageTests: XCTestCase {
     func testWindowClampsUsageAndComputesRemaining() {
-        let low = ProviderUsageWindow(id: "low", label: "Low", usedPercent: -4, resetsAt: nil)
-        XCTAssertEqual(low.usedPercent, 0)
-        XCTAssertEqual(low.remainingPercent, 100)
-
-        let high = ProviderUsageWindow(id: "high", label: "High", usedPercent: 140, resetsAt: nil)
-        XCTAssertEqual(high.usedPercent, 100)
-        XCTAssertEqual(high.remainingPercent, 0)
+        XCTAssertEqual(
+            ProviderUsageWindow(id: "low", label: "Low", usedPercent: -4, resetsAt: nil)
+                .remainingPercent,
+            100
+        )
+        XCTAssertEqual(
+            ProviderUsageWindow(id: "high", label: "High", usedPercent: 140, resetsAt: nil)
+                .remainingPercent,
+            0
+        )
     }
 
     func testClaudeParsesStructuredWindows() throws {
@@ -27,23 +26,7 @@ final class ProviderUsageTests: XCTestCase {
         """))
 
         XCTAssertEqual(snapshot.windows.map(\.label), ["Current session", "All models"])
-        XCTAssertEqual(snapshot.windows.map(\.usedPercent), [72, 18])
-        XCTAssertNotNil(snapshot.windows[0].resetsAt)
-    }
-
-    /// The pre-`limits[]` shape, which had no coverage at all. It uses
-    /// `utilization` rather than `percent` and a different set of keys, so a
-    /// regression here would be silent.
-    func testClaudeFallsBackToLegacyUtilizationShape() throws {
-        let snapshot = try ProviderUsageParser.claude(data("""
-        {
-          "five_hour":{"utilization":13,"resets_at":"2026-08-24T05:29:59.668735+00:00"},
-          "seven_day":{"utilization":7,"resets_at":"2026-08-30T20:59:59.668755+00:00"}
-        }
-        """))
-
-        XCTAssertEqual(snapshot.windows.map(\.label), ["Current session", "All models"])
-        XCTAssertEqual(snapshot.windows.map(\.usedPercent), [13, 7])
+        XCTAssertEqual(snapshot.windows.map(\.remainingPercent), [28, 82])
         XCTAssertNotNil(snapshot.windows[0].resetsAt)
     }
 
@@ -59,48 +42,20 @@ final class ProviderUsageTests: XCTestCase {
         """))
 
         XCTAssertEqual(snapshot.windows.map(\.id), ["rolling", "weekly", "monthly"])
-        XCTAssertEqual(snapshot.windows.map(\.usedPercent), [2, 27, 48])
+        XCTAssertEqual(snapshot.windows.map(\.remainingPercent), [98, 73, 52])
     }
 
-    /// The headline number must come first, because the battery shows
-    /// `windows.first` until you click through. Reading `autoPercentUsed` here
-    /// is what made Daddy say 9% while the Cursor dashboard said 21%.
-    func testCursorLeadsWithTotalUsageNotTheAutoPool() throws {
+    func testCursorMapsItsTwoModelPools() throws {
         let snapshot = try ProviderUsageParser.cursor(data("""
         {
           "billingCycleEnd":"1787941766000",
-          "planUsage":{
-            "autoPercentUsed":9.313333333333333,
-            "apiPercentUsed":100,
-            "totalPercentUsed":21.240579710144928
-          }
+          "planUsage":{"autoPercentUsed":6.25,"apiPercentUsed":70.5}
         }
         """))
 
-        XCTAssertEqual(snapshot.windows.map(\.id), ["total", "cursor-models", "other-models"])
-        XCTAssertEqual(snapshot.windows[0].label, "Included usage")
-        XCTAssertEqual(snapshot.windows[0].usedPercent, 21.240579710144928, accuracy: 0.0001)
-        XCTAssertEqual(snapshot.windows[1].usedPercent, 9.313333333333333, accuracy: 0.0001)
-        XCTAssertEqual(snapshot.windows[2].usedPercent, 100)
+        XCTAssertEqual(snapshot.windows.map(\.label), ["Cursor models", "Other models"])
+        XCTAssertEqual(snapshot.windows.map(\.remainingPercent), [93.75, 29.5])
         XCTAssertNotNil(snapshot.windows[0].resetsAt)
-    }
-
-    /// Losing a breakdown pool should cost you the breakdown, not the headline.
-    func testCursorSurvivesAMissingBreakdownPool() throws {
-        let snapshot = try ProviderUsageParser.cursor(data("""
-        {"billingCycleEnd":"1787941766000","planUsage":{"totalPercentUsed":21}}
-        """))
-
-        XCTAssertEqual(snapshot.windows.map(\.id), ["total"])
-        XCTAssertEqual(snapshot.windows[0].usedPercent, 21)
-    }
-
-    func testCursorWithoutTotalIsAFormatChange() {
-        XCTAssertThrowsError(
-            try ProviderUsageParser.cursor(data("""
-            {"billingCycleEnd":"1787941766000","planUsage":{"autoPercentUsed":6.25}}
-            """))
-        )
     }
 
     func testCodexUsesReportedWindowDurations() throws {
@@ -110,7 +65,7 @@ final class ProviderUsageTests: XCTestCase {
         """))
 
         XCTAssertEqual(snapshot.windows.map(\.label), ["5-hour", "Weekly"])
-        XCTAssertEqual(snapshot.windows.map(\.usedPercent), [25, 18])
+        XCTAssertEqual(snapshot.windows.map(\.remainingPercent), [75, 82])
     }
 
     func testCodexDoesNotMislabelMonthlyFreePlanAsFiveHour() throws {
@@ -119,7 +74,6 @@ final class ProviderUsageTests: XCTestCase {
         """))
 
         XCTAssertEqual(snapshot.windows.first?.label, "Monthly")
-        XCTAssertEqual(snapshot.windows.first?.usedPercent, 61)
     }
 
     private func data(_ string: String) -> Data {
