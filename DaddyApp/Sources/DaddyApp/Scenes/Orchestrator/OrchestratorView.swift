@@ -146,6 +146,10 @@ struct OrchestratorView: View {
                                 .id(message.id)
                         }
 
+                        if store.orchestratorBusy && store.orchestratorStreamingText.isEmpty {
+                            typingIndicator
+                        }
+
                         if !store.orchestratorStreamingText.isEmpty {
                             messageBubble(
                                 role: .assistant,
@@ -447,6 +451,38 @@ struct OrchestratorView: View {
         }
         .padding(12)
         .insetSurface(cornerRadius: 14, selected: role == .user, filled: role == .user)
+    }
+
+    private var typingIndicator: some View {
+        TimelineView(.animation(minimumInterval: 0.18)) { context in
+            let phase = Int(context.date.timeIntervalSinceReferenceDate / 0.18) % 3
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(DaddyTheme.accent)
+                    .frame(width: 24, height: 24)
+                    .insetSurface(cornerRadius: 12)
+
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("DADDY")
+                        .font(.system(size: 9, weight: .bold))
+                        .tracking(0.7)
+                        .foregroundStyle(DaddyTheme.textMuted)
+                    HStack(spacing: 4) {
+                        ForEach(0..<3, id: \.self) { index in
+                            Circle()
+                                .fill(DaddyTheme.textSecondary)
+                                .frame(width: 5, height: 5)
+                                .opacity(index == phase ? 0.95 : 0.28)
+                        }
+                    }
+                    .frame(height: 16, alignment: .leading)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .insetSurface(cornerRadius: 14)
+        }
     }
 
     private var emptyConversation: some View {

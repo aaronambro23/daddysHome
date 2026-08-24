@@ -97,7 +97,10 @@ public final class OllamaClient: @unchecked Sendable {
                         if let message = chunk.message {
                             if !message.content.isEmpty {
                                 assistant.content += message.content
-                                continuation.yield(Event.text(message.content))
+                                for character in message.content {
+                                    continuation.yield(Event.text(String(character)))
+                                    try await Task.sleep(for: .milliseconds(12))
+                                }
                             }
                             if let calls = message.toolCalls, !calls.isEmpty {
                                 assistant.toolCalls = calls
