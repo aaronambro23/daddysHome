@@ -168,3 +168,23 @@ struct PendingOrchestratorDispatch: Identifiable {
     let existingSessionID: String?
     let prompt: String
 }
+
+struct OrchestratorConversationSnapshot: Codable {
+    var key: String
+    var category: OrchestratorWorkCategory?
+    var messages: [OrchestratorMessage]
+    var attachments: [OrchestratorAttachment]
+    var pendingAttachmentIDs: [UUID]
+    var createdAt: Date
+    var updatedAt: Date
+    var keepLongTerm: Bool
+
+    var expiresAt: Date? {
+        guard !keepLongTerm else { return nil }
+        return Calendar.current.date(byAdding: .day, value: 30, to: createdAt)
+    }
+
+    var hasContent: Bool {
+        !messages.isEmpty || !attachments.isEmpty || !pendingAttachmentIDs.isEmpty
+    }
+}

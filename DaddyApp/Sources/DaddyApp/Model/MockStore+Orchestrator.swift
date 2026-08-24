@@ -2,6 +2,57 @@ import Foundation
 import DaddyCore
 
 extension MockStore {
+    func restoreOrchestratorConversations() {
+        let snapshots = orchestratorMarkdownStore.loadConversations()
+        for snapshot in snapshots.values {
+            setMessages(snapshot.messages, for: snapshot.key)
+            setAttachments(snapshot.attachments, for: snapshot.key)
+            setPendingAttachmentIDs(snapshot.pendingAttachmentIDs, for: snapshot.key)
+            orchestratorConversationCreatedAtByCategory[snapshot.key] = snapshot.createdAt
+            orchestratorConversationLongTermByCategory[snapshot.key] = snapshot.keepLongTerm
+        }
+        applyOrchestratorConversation(for: orchestratorConversationKey(orchestratorCategory))
+    }
+
+    func orchestratorChatCount(for category: OrchestratorWorkCategory?) -> Int {
+        if let category {
+            return orchestratorConversationHasActivity(orchestratorConversationKey(category)) ? 1 : 0
+        }
+
+        let keys = Set(
+            ["all"] +
+            OrchestratorWorkCategory.allCases.map(\.rawValue) +
+            Array(orchestratorMessagesByCategory.keys) +
+            Array(orchestratorAttachmentsByCategory.keys) +
+            Array(orchestratorBusyByCategory.keys)
+        )
+        return keys.filter(orchestratorConversationHasActivity).count
+    }
+
+    func orchestratorCategoryIsBusy(_ category: OrchestratorWorkCategory?) -> Bool {
+        guard let category else {
+            return orchestratorBusyByCategory.values.contains(true)
+        }
+        return orchestratorBusyByCategory[orchestratorConversationKey(category)] ?? false
+    }
+
+    var currentOrchestratorConversationIsLongTerm: Bool {
+        orchestratorConversationLongTermByCategory[orchestratorConversationKey(orchestratorCategory)] ?? false
+    }
+
+    func toggleCurrentOrchestratorConversationLongTerm() {
+        let key = orchestratorConversationKey(orchestratorCategory)
+        guard orchestratorConversationHasActivity(key) else { return }
+        var longTermValues = orchestratorConversationLongTermByCategory
+        longTermValues[key] = !currentOrchestratorConversationIsLongTerm
+        orchestratorConversationLongTermByCategory = longTermValues
+        persistOrchestratorConversation(for: key)
+    }
+
+    func dismissCurrentOrchestratorError() {
+        setError(nil, for: orchestratorConversationKey(orchestratorCategory))
+    }
+
     private static var orchestratorSystemPrompt: String {
         """
         You are an internal project assistant for the operator who built Daddy.
@@ -111,95 +162,122 @@ extension MockStore {
     }
 
     func attachOrchestratorFile(_ url: URL) {
+        let key = orchestratorConversationKey(orchestratorCategory)
         do {
             let attachment = try OrchestratorAttachmentLoader.load(url)
             guard !orchestratorAttachments.contains(where: { $0.path == attachment.path }) else { return }
-            orchestratorAttachments.append(attachment)
-            pendingOrchestratorAttachmentIDs.append(attachment.id)
+            setAttachments(orchestratorAttachments + [attachment], for: key)
+            setPendingAttachmentIDs(pendingOrchestratorAttachmentIDs + [attachment.id], for: key)
+            persistOrchestratorConversation(for: key)
         } catch {
-            orchestratorError = error.localizedDescription
+            setError(error.localizedDescription, for: key)
         }
     }
 
     func removeOrchestratorAttachment(_ attachment: OrchestratorAttachment) {
-        orchestratorAttachments.removeAll { $0.id == attachment.id }
-        pendingOrchestratorAttachmentIDs.removeAll { $0 == attachment.id }
+        let key = orchestratorConversationKey(orchestratorCategory)
+        setAttachments(orchestratorAttachments.filter { $0.id != attachment.id }, for: key)
+        setPendingAttachmentIDs(pendingOrchestratorAttachmentIDs.filter { $0 != attachment.id }, for: key)
+        persistOrchestratorConversation(for: key)
     }
 
     func switchOrchestratorCategory(to category: OrchestratorWorkCategory?) {
-        guard category != orchestratorCategory, !orchestratorBusy else { return }
+        guard category != orchestratorCategory else { return }
 
         let currentKey = orchestratorConversationKey(orchestratorCategory)
-        orchestratorMessagesByCategory[currentKey] = orchestratorMessages
-        orchestratorAttachmentsByCategory[currentKey] = orchestratorAttachments
-        pendingOrchestratorAttachmentIDsByCategory[currentKey] = pendingOrchestratorAttachmentIDs
+        setMessages(orchestratorMessages, for: currentKey)
+        setAttachments(orchestratorAttachments, for: currentKey)
+        setPendingAttachmentIDs(pendingOrchestratorAttachmentIDs, for: currentKey)
+        setStreamingText(orchestratorStreamingText, for: currentKey)
+        setBusy(orchestratorBusy, for: currentKey)
+        setError(orchestratorError, for: currentKey)
+        if let pendingOrchestratorDispatch {
+            pendingOrchestratorDispatchByCategory[currentKey] = pendingOrchestratorDispatch
+        } else {
+            pendingOrchestratorDispatchByCategory.removeValue(forKey: currentKey)
+        }
 
         orchestratorCategory = category
         let nextKey = orchestratorConversationKey(category)
-        orchestratorMessages = orchestratorMessagesByCategory[nextKey] ?? []
-        orchestratorAttachments = orchestratorAttachmentsByCategory[nextKey] ?? []
-        pendingOrchestratorAttachmentIDs = pendingOrchestratorAttachmentIDsByCategory[nextKey] ?? []
-        orchestratorStreamingText = ""
-        orchestratorError = nil
-        pendingOrchestratorDispatch = nil
+        applyOrchestratorConversation(for: nextKey)
     }
 
     func sendOrchestratorMessage(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !orchestratorBusy else { return }
+        let key = orchestratorConversationKey(orchestratorCategory)
+        guard !trimmed.isEmpty, !(orchestratorBusyByCategory[key] ?? false) else { return }
 
         let attachmentIDs = pendingOrchestratorAttachmentIDs
-        orchestratorMessages.append(
-            OrchestratorMessage(role: .user, content: trimmed, attachmentIDs: attachmentIDs)
+        setMessages(
+            orchestratorMessages + [
+                OrchestratorMessage(role: .user, content: trimmed, attachmentIDs: attachmentIDs)
+            ],
+            for: key
         )
-        pendingOrchestratorAttachmentIDs.removeAll()
-        orchestratorStreamingText = ""
-        orchestratorBusy = true
-        orchestratorError = nil
-        let turnID = UUID()
-        orchestratorTurnID = turnID
+        setPendingAttachmentIDs([], for: key)
+        setStreamingText("", for: key)
+        setBusy(true, for: key)
+        setError(nil, for: key)
+        pendingOrchestratorDispatchByCategory.removeValue(forKey: key)
+        if key == orchestratorConversationKey(orchestratorCategory) {
+            pendingOrchestratorDispatch = nil
+        }
+        persistOrchestratorConversation(for: key)
 
-        orchestratorTurnTask = Task { [weak self] in
+        let turnID = UUID()
+        orchestratorTurnIDsByCategory[key] = turnID
+
+        orchestratorTurnTasksByCategory[key]?.cancel()
+        orchestratorTurnTasksByCategory[key] = Task { [weak self] in
             guard let self else { return }
-            await self.runOrchestratorTurn(text: trimmed, turnID: turnID)
+            await self.runOrchestratorTurn(text: trimmed, turnID: turnID, key: key)
         }
     }
 
     func cancelOrchestratorTurn() {
-        guard orchestratorBusy else { return }
-        let partial = orchestratorStreamingText
-        orchestratorTurnTask?.cancel()
-        orchestratorTurnTask = nil
-        orchestratorTurnID = nil
-        orchestratorBusy = false
-        orchestratorStreamingText = ""
-        orchestratorError = nil
+        let key = orchestratorConversationKey(orchestratorCategory)
+        guard orchestratorBusyByCategory[key] ?? false else { return }
+        let partial = orchestratorStreamingTextByCategory[key] ?? ""
+        orchestratorTurnTasksByCategory[key]?.cancel()
+        orchestratorTurnTasksByCategory.removeValue(forKey: key)
+        orchestratorTurnIDsByCategory.removeValue(forKey: key)
+        setBusy(false, for: key)
+        setStreamingText("", for: key)
+        setError(nil, for: key)
         if !partial.isEmpty {
-            orchestratorMessages.append(
-                OrchestratorMessage(role: .assistant, content: partial, wasStopped: true)
-            )
+            var messages = messages(for: key)
+            messages.append(OrchestratorMessage(role: .assistant, content: partial, wasStopped: true))
+            setMessages(messages, for: key)
         }
+        persistOrchestratorConversation(for: key)
     }
 
     func clearOrchestratorConversation() {
-        guard !orchestratorBusy else { return }
+        let key = orchestratorConversationKey(orchestratorCategory)
+        guard !(orchestratorBusyByCategory[key] ?? false) else { return }
         resetOrchestratorConversation()
     }
 
     func resetOrchestratorConversation() {
-        orchestratorMessages.removeAll()
-        orchestratorAttachments.removeAll()
-        pendingOrchestratorAttachmentIDs.removeAll()
         let key = orchestratorConversationKey(orchestratorCategory)
+        setMessages([], for: key)
+        setAttachments([], for: key)
+        setPendingAttachmentIDs([], for: key)
         orchestratorMessagesByCategory.removeValue(forKey: key)
         orchestratorAttachmentsByCategory.removeValue(forKey: key)
         pendingOrchestratorAttachmentIDsByCategory.removeValue(forKey: key)
-        orchestratorStreamingText = ""
-        orchestratorError = nil
-        pendingOrchestratorDispatch = nil
+        orchestratorStreamingTextByCategory.removeValue(forKey: key)
+        orchestratorBusyByCategory.removeValue(forKey: key)
+        orchestratorErrorByCategory.removeValue(forKey: key)
+        orchestratorConversationCreatedAtByCategory.removeValue(forKey: key)
+        orchestratorConversationLongTermByCategory.removeValue(forKey: key)
+        pendingOrchestratorDispatchByCategory.removeValue(forKey: key)
+        applyOrchestratorConversation(for: key)
+        orchestratorMarkdownStore.deleteConversation(key: key)
     }
 
     func approveOrchestratorDispatch() {
+        let key = orchestratorConversationKey(orchestratorCategory)
         guard let pending = pendingOrchestratorDispatch,
               let project = project(pending.projectID) else { return }
 
@@ -212,7 +290,7 @@ extension MockStore {
         }
 
         guard let target else {
-            orchestratorError = launchError ?? "Could not launch the requested agent"
+            setError(launchError ?? "Could not launch the requested agent", for: key)
             return
         }
 
@@ -224,20 +302,25 @@ extension MockStore {
             replaceWorkItem(item)
         }
         pendingOrchestratorDispatch = nil
-        orchestratorMessages.append(
+        pendingOrchestratorDispatchByCategory.removeValue(forKey: key)
+        setMessages(messages(for: key) + [
             OrchestratorMessage(
                 role: .assistant,
                 content: "Dispatched \(workItem(pending.workItemID)?.title ?? "the work item") to \(pending.agent.rawValue)."
             )
-        )
+        ], for: key)
+        persistOrchestratorConversation(for: key)
     }
 
     func rejectOrchestratorDispatch() {
+        let key = orchestratorConversationKey(orchestratorCategory)
         guard pendingOrchestratorDispatch != nil else { return }
         pendingOrchestratorDispatch = nil
-        orchestratorMessages.append(
+        pendingOrchestratorDispatchByCategory.removeValue(forKey: key)
+        setMessages(messages(for: key) + [
             OrchestratorMessage(role: .assistant, content: "Dispatch cancelled. The work item remains saved.")
-        )
+        ], for: key)
+        persistOrchestratorConversation(for: key)
     }
 
     func workItem(_ id: UUID) -> OrchestratorWorkItem? {
@@ -258,40 +341,44 @@ extension MockStore {
     ) {
         let resolvedProjectID = projectID ?? item.projectID ?? selectedProjectID
         guard let resolvedProjectID, project(resolvedProjectID) != nil else {
-            orchestratorError = "Choose a project before dispatching this work item"
+            setError("Choose a project before dispatching this work item", for: orchestratorConversationKey(orchestratorCategory))
             return
         }
 
-        pendingOrchestratorDispatch = PendingOrchestratorDispatch(
+        let pending = PendingOrchestratorDispatch(
             workItemID: item.id,
             agent: agent,
             projectID: resolvedProjectID,
             existingSessionID: existingSessionID,
             prompt: dispatchPrompt(for: item)
         )
+        let key = orchestratorConversationKey(orchestratorCategory)
+        pendingOrchestratorDispatch = pending
+        pendingOrchestratorDispatchByCategory[key] = pending
     }
 
-    private func runOrchestratorTurn(text: String, turnID: UUID) async {
-        var messages: [OllamaMessage] = [
+    private func runOrchestratorTurn(text: String, turnID: UUID, key: String) async {
+        var ollamaMessages: [OllamaMessage] = [
             OllamaMessage(role: .system, content: Self.orchestratorSystemPrompt)
         ]
 
-        for message in orchestratorMessages where message.role == .user || message.role == .assistant {
-            messages.append(
+        for message in self.messages(for: key) where message.role == .user || message.role == .assistant {
+            ollamaMessages.append(
                 OllamaMessage(
                     role: message.role == .user ? .user : .assistant,
-                    content: messageContent(message),
-                    images: imageData(for: message.attachmentIDs)
+                    content: messageContent(message, in: key),
+                    images: imageData(for: message.attachmentIDs, in: key)
                 )
             )
         }
 
         defer {
-            if orchestratorTurnID == turnID {
-                orchestratorBusy = false
-                orchestratorStreamingText = ""
-                orchestratorTurnTask = nil
-                orchestratorTurnID = nil
+            if orchestratorTurnIDsByCategory[key] == turnID {
+                setBusy(false, for: key)
+                setStreamingText("", for: key)
+                orchestratorTurnTasksByCategory.removeValue(forKey: key)
+                orchestratorTurnIDsByCategory.removeValue(forKey: key)
+                persistOrchestratorConversation(for: key)
             }
         }
 
@@ -299,49 +386,49 @@ extension MockStore {
 
         for _ in 0..<4 {
             var response: OllamaResponse?
-            orchestratorStreamingText = ""
+            setStreamingText("", for: key)
 
             do {
                 for try await event in ollamaClient.chatStream(
                     model: orchestratorModel,
-                    messages: messages,
+                    messages: ollamaMessages,
                     tools: tools
                 ) {
                     switch event {
                     case .text(let chunk):
-                        guard !Task.isCancelled, orchestratorTurnID == turnID else { return }
-                        orchestratorStreamingText += chunk
+                        guard !Task.isCancelled, orchestratorTurnIDsByCategory[key] == turnID else { return }
+                        setStreamingText((orchestratorStreamingTextByCategory[key] ?? "") + chunk, for: key)
                     case .finished(let value):
-                        guard !Task.isCancelled, orchestratorTurnID == turnID else { return }
+                        guard !Task.isCancelled, orchestratorTurnIDsByCategory[key] == turnID else { return }
                         response = value
                     }
                 }
             } catch {
-                guard !Task.isCancelled, orchestratorTurnID == turnID else { return }
-                orchestratorError = error.localizedDescription
+                guard !Task.isCancelled, orchestratorTurnIDsByCategory[key] == turnID else { return }
+                setError(error.localizedDescription, for: key)
                 return
             }
 
-            guard !Task.isCancelled, orchestratorTurnID == turnID else { return }
+            guard !Task.isCancelled, orchestratorTurnIDsByCategory[key] == turnID else { return }
             guard let response else {
-                orchestratorError = "Ollama returned no response"
+                setError("Ollama returned no response", for: key)
                 return
             }
 
-            messages.append(response.message)
+            ollamaMessages.append(response.message)
             guard let calls = response.message.toolCalls, !calls.isEmpty else {
-                if !orchestratorStreamingText.isEmpty {
-                    orchestratorMessages.append(
-                        OrchestratorMessage(role: .assistant, content: orchestratorStreamingText)
-                    )
+                if let streamingText = orchestratorStreamingTextByCategory[key], !streamingText.isEmpty {
+                    setMessages(self.messages(for: key) + [
+                        OrchestratorMessage(role: .assistant, content: streamingText)
+                    ], for: key)
                 }
                 return
             }
 
             var approvalNeeded = false
             for call in calls {
-                let result = executeOrchestratorTool(call)
-                messages.append(
+                let result = executeOrchestratorTool(call, in: key)
+                ollamaMessages.append(
                     OllamaMessage(
                         role: .tool,
                         content: result.content,
@@ -352,17 +439,17 @@ extension MockStore {
             }
 
             if approvalNeeded {
-                orchestratorMessages.append(
+                setMessages(self.messages(for: key) + [
                     OrchestratorMessage(
                         role: .assistant,
                         content: "I prepared a dispatch request. Review it before I contact a coding agent."
                     )
-                )
+                ], for: key)
                 return
             }
         }
 
-        orchestratorError = "The orchestrator reached its tool-call limit for this turn"
+        setError("The orchestrator reached its tool-call limit for this turn", for: key)
     }
 
     private struct ToolResult {
@@ -370,7 +457,7 @@ extension MockStore {
         let needsApproval: Bool
     }
 
-    private func executeOrchestratorTool(_ call: OllamaToolCall) -> ToolResult {
+    private func executeOrchestratorTool(_ call: OllamaToolCall, in key: String) -> ToolResult {
         let args = call.function.arguments
 
         switch call.function.name {
@@ -406,7 +493,7 @@ extension MockStore {
                 priority: normalizePriority(args["priority"]?.stringValue),
                 projectID: args["project_id"]?.stringValue,
                 attachmentIDs: attachmentIDs(from: args["attachment_ids"])
-                    ?? latestAttachmentIDs()
+                    ?? latestAttachmentIDs(in: key)
             )
             orchestratorWorkItems.insert(item, at: 0)
             selectedOrchestratorWorkItemID = item.id
@@ -441,13 +528,17 @@ extension MockStore {
                 return ToolResult(content: "No valid project is associated with this work item.", needsApproval: false)
             }
             let prompt = args["prompt"]?.stringValue ?? dispatchPrompt(for: item)
-            pendingOrchestratorDispatch = PendingOrchestratorDispatch(
+            let pending = PendingOrchestratorDispatch(
                 workItemID: item.id,
                 agent: agent,
                 projectID: projectID,
                 existingSessionID: args["existing_session_id"]?.stringValue,
                 prompt: prompt
             )
+            pendingOrchestratorDispatchByCategory[key] = pending
+            if key == orchestratorConversationKey(orchestratorCategory) {
+                pendingOrchestratorDispatch = pending
+            }
             return ToolResult(content: "Dispatch prepared and waiting for user approval.", needsApproval: true)
 
         default:
@@ -455,9 +546,9 @@ extension MockStore {
         }
     }
 
-    private func imageData(for ids: [UUID]) -> [String]? {
+    private func imageData(for ids: [UUID], in key: String) -> [String]? {
         let values = ids.compactMap { id -> String? in
-            guard let attachment = orchestratorAttachments.first(where: { $0.id == id }),
+            guard let attachment = attachments(for: key).first(where: { $0.id == id }),
                   attachment.kind == .image,
                   let data = try? Data(contentsOf: URL(fileURLWithPath: attachment.path)) else { return nil }
             return data.base64EncodedString()
@@ -465,9 +556,9 @@ extension MockStore {
         return values.isEmpty ? nil : values
     }
 
-    private func messageContent(_ message: OrchestratorMessage) -> String {
+    private func messageContent(_ message: OrchestratorMessage, in key: String) -> String {
         let context = message.attachmentIDs.compactMap { id -> String? in
-            guard let attachment = orchestratorAttachments.first(where: { $0.id == id }),
+            guard let attachment = attachments(for: key).first(where: { $0.id == id }),
                   !attachment.extractedText.isEmpty else { return nil }
             return "\n\n--- Attached context: \(attachment.name) ---\n\(attachment.extractedText)\n--- End attached context ---"
         }
@@ -480,8 +571,8 @@ extension MockStore {
         return ids.isEmpty ? nil : ids
     }
 
-    private func latestAttachmentIDs() -> [UUID] {
-        orchestratorMessages.reversed().first(where: { !$0.attachmentIDs.isEmpty })?.attachmentIDs ?? []
+    private func latestAttachmentIDs(in key: String) -> [UUID] {
+        messages(for: key).reversed().first(where: { !$0.attachmentIDs.isEmpty })?.attachmentIDs ?? []
     }
 
     private func orchestratorConversationKey(_ category: OrchestratorWorkCategory?) -> String {
@@ -504,7 +595,7 @@ extension MockStore {
         prompt += "## Original Capture\n\(item.rawCapture)\n"
 
         let attachments = item.attachmentIDs.compactMap { id in
-            orchestratorAttachments.first { $0.id == id }
+            attachment(id)
         }
         if !attachments.isEmpty {
             prompt += "\n## Attached Context\n"
@@ -533,5 +624,178 @@ extension MockStore {
     private func normalizePriority(_ value: String?) -> OrchestratorPriority {
         guard let value, let priority = OrchestratorPriority(rawValue: value.lowercased()) else { return .medium }
         return priority
+    }
+
+    private func applyOrchestratorConversation(for key: String) {
+        orchestratorMessages = orchestratorMessagesByCategory[key] ?? []
+        orchestratorAttachments = orchestratorAttachmentsByCategory[key] ?? []
+        pendingOrchestratorAttachmentIDs = pendingOrchestratorAttachmentIDsByCategory[key] ?? []
+        orchestratorStreamingText = orchestratorStreamingTextByCategory[key] ?? ""
+        orchestratorBusy = orchestratorBusyByCategory[key] ?? false
+        orchestratorError = orchestratorErrorByCategory[key]
+        pendingOrchestratorDispatch = pendingOrchestratorDispatchByCategory[key]
+    }
+
+    private func messages(for key: String) -> [OrchestratorMessage] {
+        if key == orchestratorConversationKey(orchestratorCategory) {
+            return orchestratorMessages
+        }
+        return orchestratorMessagesByCategory[key] ?? []
+    }
+
+    private func attachments(for key: String) -> [OrchestratorAttachment] {
+        if key == orchestratorConversationKey(orchestratorCategory) {
+            return orchestratorAttachments
+        }
+        return orchestratorAttachmentsByCategory[key] ?? []
+    }
+
+    private func pendingAttachmentIDs(for key: String) -> [UUID] {
+        if key == orchestratorConversationKey(orchestratorCategory) {
+            return pendingOrchestratorAttachmentIDs
+        }
+        return pendingOrchestratorAttachmentIDsByCategory[key] ?? []
+    }
+
+    private func setMessages(_ messages: [OrchestratorMessage], for key: String) {
+        var values = orchestratorMessagesByCategory
+        if messages.isEmpty {
+            values.removeValue(forKey: key)
+        } else {
+            values[key] = messages
+        }
+        orchestratorMessagesByCategory = values
+        if key == orchestratorConversationKey(orchestratorCategory) {
+            orchestratorMessages = messages
+        }
+    }
+
+    private func setAttachments(_ attachments: [OrchestratorAttachment], for key: String) {
+        var values = orchestratorAttachmentsByCategory
+        if attachments.isEmpty {
+            values.removeValue(forKey: key)
+        } else {
+            values[key] = attachments
+        }
+        orchestratorAttachmentsByCategory = values
+        if key == orchestratorConversationKey(orchestratorCategory) {
+            orchestratorAttachments = attachments
+        }
+    }
+
+    private func setPendingAttachmentIDs(_ ids: [UUID], for key: String) {
+        var values = pendingOrchestratorAttachmentIDsByCategory
+        if ids.isEmpty {
+            values.removeValue(forKey: key)
+        } else {
+            values[key] = ids
+        }
+        pendingOrchestratorAttachmentIDsByCategory = values
+        if key == orchestratorConversationKey(orchestratorCategory) {
+            pendingOrchestratorAttachmentIDs = ids
+        }
+    }
+
+    private func setStreamingText(_ text: String, for key: String) {
+        var values = orchestratorStreamingTextByCategory
+        if text.isEmpty {
+            values.removeValue(forKey: key)
+        } else {
+            values[key] = text
+        }
+        orchestratorStreamingTextByCategory = values
+        if key == orchestratorConversationKey(orchestratorCategory) {
+            orchestratorStreamingText = text
+        }
+    }
+
+    private func setBusy(_ busy: Bool, for key: String) {
+        var values = orchestratorBusyByCategory
+        if busy {
+            values[key] = true
+        } else {
+            values.removeValue(forKey: key)
+        }
+        orchestratorBusyByCategory = values
+        if key == orchestratorConversationKey(orchestratorCategory) {
+            orchestratorBusy = busy
+        }
+    }
+
+    private func setError(_ error: String?, for key: String) {
+        var values = orchestratorErrorByCategory
+        if let error {
+            values[key] = error
+        } else {
+            values.removeValue(forKey: key)
+        }
+        orchestratorErrorByCategory = values
+        if key == orchestratorConversationKey(orchestratorCategory) {
+            orchestratorError = error
+        }
+    }
+
+    private func persistOrchestratorConversation(for key: String) {
+        guard orchestratorConversationHasActivity(key) else {
+            orchestratorMarkdownStore.deleteConversation(key: key)
+            return
+        }
+
+        let existingCreatedAt = orchestratorConversationCreatedAtByCategory[key]
+        let createdAt = existingCreatedAt
+            ?? messages(for: key).first?.createdAt
+            ?? Date()
+        let keepLongTerm = orchestratorConversationLongTermByCategory[key] ?? false
+        var createdValues = orchestratorConversationCreatedAtByCategory
+        createdValues[key] = createdAt
+        orchestratorConversationCreatedAtByCategory = createdValues
+
+        var longTermValues = orchestratorConversationLongTermByCategory
+        longTermValues[key] = keepLongTerm
+        orchestratorConversationLongTermByCategory = longTermValues
+
+        orchestratorMarkdownStore.saveConversation(
+            OrchestratorConversationSnapshot(
+                key: key,
+                category: category(from: key),
+                messages: messages(for: key),
+                attachments: attachments(for: key),
+                pendingAttachmentIDs: pendingAttachmentIDs(for: key),
+                createdAt: createdAt,
+                updatedAt: Date(),
+                keepLongTerm: keepLongTerm
+            )
+        )
+    }
+
+    private func orchestratorConversationHasActivity(_ key: String) -> Bool {
+        if key == orchestratorConversationKey(orchestratorCategory) {
+            return !orchestratorMessages.isEmpty ||
+                !orchestratorAttachments.isEmpty ||
+                !pendingOrchestratorAttachmentIDs.isEmpty ||
+                !orchestratorStreamingText.isEmpty ||
+                orchestratorBusy
+        }
+        return !(orchestratorMessagesByCategory[key] ?? []).isEmpty ||
+            !(orchestratorAttachmentsByCategory[key] ?? []).isEmpty ||
+            !(pendingOrchestratorAttachmentIDsByCategory[key] ?? []).isEmpty ||
+            !(orchestratorStreamingTextByCategory[key] ?? "").isEmpty ||
+            (orchestratorBusyByCategory[key] ?? false)
+    }
+
+    private func category(from key: String) -> OrchestratorWorkCategory? {
+        OrchestratorWorkCategory(rawValue: key)
+    }
+
+    private func attachment(_ id: UUID) -> OrchestratorAttachment? {
+        if let current = orchestratorAttachments.first(where: { $0.id == id }) {
+            return current
+        }
+        for attachments in orchestratorAttachmentsByCategory.values {
+            if let attachment = attachments.first(where: { $0.id == id }) {
+                return attachment
+            }
+        }
+        return nil
     }
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import UniformTypeIdentifiers
 import DaddyCore
 
@@ -33,10 +34,14 @@ struct OrchestratorView: View {
             conversationPane
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            inspectorPane
-                .frame(width: 310)
+            if selectedItem != nil || store.pendingOrchestratorDispatch != nil {
+                inspectorPane
+                    .frame(width: 310)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .padding(18)
+        .animation(.easeOut(duration: 0.2), value: store.selectedOrchestratorWorkItemID)
         .onKeyPress(.escape, phases: .down) { _ in
             guard store.orchestratorBusy else { return .ignored }
             store.cancelOrchestratorTurn()
@@ -119,6 +124,15 @@ struct OrchestratorView: View {
                 .disabled(store.orchestratorBusy || store.orchestratorMessages.isEmpty)
 
                 Button {
+                    store.toggleCurrentOrchestratorConversationLongTerm()
+                } label: {
+                    Image(systemName: store.currentOrchestratorConversationIsLongTerm ? "bookmark.fill" : "bookmark")
+                }
+                .buttonStyle(.inset)
+                .disabled(store.orchestratorMessages.isEmpty && store.orchestratorAttachments.isEmpty)
+                .help(store.currentOrchestratorConversationIsLongTerm ? "Saved long-term" : "Save chat long-term")
+
+                Button {
                     store.clearOrchestratorConversation()
                 } label: {
                     Image(systemName: "trash")
@@ -136,7 +150,7 @@ struct OrchestratorView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 14) {
                         if store.orchestratorMessages.isEmpty && store.orchestratorStreamingText.isEmpty {
                             emptyConversation
                         }
@@ -173,7 +187,7 @@ struct OrchestratorView: View {
                     Text(error)
                         .lineLimit(2)
                     Spacer()
-                    Button("dismiss") { store.orchestratorError = nil }
+                    Button("dismiss") { store.dismissCurrentOrchestratorError() }
                         .buttonStyle(.inset)
                 }
                 .font(.system(size: 10, design: .monospaced))
@@ -189,75 +203,91 @@ struct OrchestratorView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 9) {
-            if !pendingAttachments.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(pendingAttachments) { attachment in
-                            HStack(spacing: 5) {
-                                Image(systemName: attachmentGlyph(attachment))
-                                Text(attachment.name)
-                                    .lineLimit(1)
-                                Button { store.removeOrchestratorAttachment(attachment) } label: {
-                                    Image(systemName: "xmark")
+            ZStack(alignment: .bottomLeading) {
+                VStack(alignment: .leading, spacing: 7) {
+                    if !pendingAttachments.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(pendingAttachments) { attachment in
+                                    HStack(spacing: 5) {
+                                        Image(systemName: attachmentGlyph(attachment))
+                                        Text(attachment.name)
+                                            .lineLimit(1)
+                                        Button { store.removeOrchestratorAttachment(attachment) } label: {
+                                            Image(systemName: "xmark")
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                    .font(.system(size: 9.5, design: .monospaced))
+                                    .foregroundStyle(DaddyTheme.textSecondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 5)
+                                    .insetCapsule(opacity: 0.08)
                                 }
-                                .buttonStyle(.plain)
                             }
-                            .font(.system(size: 9.5, design: .monospaced))
-                            .foregroundStyle(DaddyTheme.textSecondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .insetCapsule(opacity: 0.08)
+                            .padding(.horizontal, 7)
+                            .padding(.top, 7)
                         }
                     }
-                }
-            }
 
-            HStack(alignment: .bottom, spacing: 10) {
-                Button { fileImporterPresented = true } label: {
+                    TextEditor(text: $draft)
+                        .font(.system(size: 12))
+                        .foregroundStyle(DaddyTheme.textPrimary)
+                        .scrollContentBackground(.hidden)
+                        .frame(height: pendingAttachments.isEmpty ? 68 : 54)
+                        .padding(.horizontal, 8)
+                        .padding(.top, 8)
+                        .padding(.bottom, 30)
+                        .onKeyPress(.return, phases: .down) { keyPress in
+                            guard keyPress.modifiers.isEmpty else { return .ignored }
+                            submitDraft()
+                            return .handled
+                        }
+                        .onKeyPress(.escape, phases: .down) { _ in
+                            guard store.orchestratorBusy else { return .ignored }
+                            store.cancelOrchestratorTurn()
+                            return .handled
+                        }
+                }
+                .frame(maxWidth: .infinity)
+
+                Button {
+                    DispatchQueue.main.async { fileImporterPresented = true }
+                } label: {
                     Image(systemName: "paperclip")
                         .font(.system(size: 13, weight: .semibold))
                         .frame(width: 30, height: 30)
                 }
                 .buttonStyle(.plain)
-                .insetSurface(cornerRadius: 15)
+                .foregroundStyle(DaddyTheme.textSecondary)
+                .padding(.leading, 10)
+                .padding(.bottom, 9)
                 .help("Attach text, PDF, or image")
 
-                        TextEditor(text: $draft)
-                            .font(.system(size: 12))
-                            .foregroundStyle(DaddyTheme.textPrimary)
-                            .scrollContentBackground(.hidden)
-                            .frame(minHeight: 34, maxHeight: 110)
-                            .padding(5)
-                            .insetSurface(cornerRadius: 12)
-                            .onKeyPress(.return, phases: .down) { keyPress in
-                                guard keyPress.modifiers.isEmpty else { return .ignored }
-                                submitDraft()
-                                return .handled
-                            }
-                            .onKeyPress(.escape, phases: .down) { _ in
-                                guard store.orchestratorBusy else { return .ignored }
-                                store.cancelOrchestratorTurn()
-                                return .handled
-                            }
-
-                Button {
-                    submitDraft()
-                } label: {
-                    Image(systemName: store.orchestratorBusy ? "hourglass" : "arrow.up")
-                        .font(.system(size: 12, weight: .bold))
-                        .frame(width: 34, height: 34)
+                HStack {
+                    Spacer()
+                    Button { submitDraft() } label: {
+                        Image(systemName: store.orchestratorBusy ? "hourglass" : "arrow.up")
+                            .font(.system(size: 12, weight: .bold))
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(DaddyTheme.textPrimary)
+                    .background(Circle().fill(DaddyTheme.accent.opacity(0.8)))
+                    .clipShape(Circle())
+                    .disabled(store.orchestratorBusy || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .padding(.trailing, 10)
+                    .padding(.bottom, 9)
                 }
-                .buttonStyle(.plain)
-                .insetSurface(cornerRadius: 17, selected: true)
-                .disabled(store.orchestratorBusy || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .keyboardShortcut(.return, modifiers: .command)
             }
+            .frame(maxWidth: .infinity)
+            .insetSurface(cornerRadius: 12)
 
             Text("Drop files here or attach them. Ollama stays local.")
                 .font(.system(size: 9.5))
                 .foregroundStyle(DaddyTheme.textVeryDim)
         }
-        .padding(14)
+        .padding(12)
     }
 
     private var inspectorPane: some View {
@@ -423,6 +453,17 @@ struct OrchestratorView: View {
                         .font(.system(size: 9, weight: .bold))
                         .tracking(0.7)
                         .foregroundStyle(DaddyTheme.textMuted)
+                    Spacer(minLength: 0)
+                    if role == .assistant && !text.isEmpty {
+                        Button { copyMessage(text) } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 10, weight: .semibold))
+                                .frame(width: 24, height: 24)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(DaddyTheme.textMuted)
+                        .help("Copy message")
+                    }
                     if wasStopped {
                         Text("STOPPED")
                             .font(.system(size: 8, weight: .bold, design: .monospaced))
@@ -435,7 +476,6 @@ struct OrchestratorView: View {
                 Text(text)
                     .font(.system(size: 12))
                     .foregroundStyle(DaddyTheme.textPrimary)
-                    .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 if !attachments.isEmpty {
                     HStack(spacing: 6) {
@@ -450,7 +490,21 @@ struct OrchestratorView: View {
             Spacer(minLength: 0)
         }
         .padding(12)
-        .insetSurface(cornerRadius: 14, selected: role == .user, filled: role == .user)
+        .textSelection(.enabled)
+        .insetSurface(cornerRadius: 14, selected: role == .user, filled: true)
+        .overlay(alignment: .leading) {
+            if role == .assistant {
+                Capsule()
+                    .fill(DaddyTheme.accent.opacity(0.75))
+                    .frame(width: 2)
+                    .padding(.vertical, 14)
+            }
+        }
+    }
+
+    private func copyMessage(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     private var typingIndicator: some View {
@@ -510,10 +564,8 @@ struct OrchestratorView: View {
     }
 
     private func categoryButton(_ category: OrchestratorWorkCategory?, title: String) -> some View {
-        let count = category.map { selected in
-            store.orchestratorWorkItems.filter { $0.category == selected }.count
-        }
-            ?? store.orchestratorWorkItems.count
+        let count = store.orchestratorChatCount(for: category)
+        let busy = store.orchestratorCategoryIsBusy(category)
         return Button {
             store.switchOrchestratorCategory(to: category)
         } label: {
@@ -522,9 +574,14 @@ struct OrchestratorView: View {
                     .font(.system(size: 10, weight: store.orchestratorCategory == category ? .semibold : .regular))
                     .tracking(0.5)
                 Spacer()
+                if busy {
+                    Circle()
+                        .fill(DaddyTheme.accent)
+                        .frame(width: 6, height: 6)
+                }
                 Text("\(count)")
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(DaddyTheme.textMuted)
+                    .foregroundStyle(busy ? DaddyTheme.textSecondary : DaddyTheme.textMuted)
             }
             .foregroundStyle(store.orchestratorCategory == category ? DaddyTheme.textPrimary : DaddyTheme.textSecondary)
             .padding(.horizontal, 10)

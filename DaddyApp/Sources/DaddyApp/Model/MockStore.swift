@@ -43,9 +43,14 @@ final class MockStore {
     var orchestratorAttachments: [OrchestratorAttachment] = []
     var pendingOrchestratorAttachmentIDs: [UUID] = []
     var orchestratorCategory: OrchestratorWorkCategory?
-    @ObservationIgnored var orchestratorMessagesByCategory: [String: [OrchestratorMessage]] = [:]
-    @ObservationIgnored var orchestratorAttachmentsByCategory: [String: [OrchestratorAttachment]] = [:]
-    @ObservationIgnored var pendingOrchestratorAttachmentIDsByCategory: [String: [UUID]] = [:]
+    var orchestratorMessagesByCategory: [String: [OrchestratorMessage]] = [:]
+    var orchestratorAttachmentsByCategory: [String: [OrchestratorAttachment]] = [:]
+    var pendingOrchestratorAttachmentIDsByCategory: [String: [UUID]] = [:]
+    var orchestratorStreamingTextByCategory: [String: String] = [:]
+    var orchestratorBusyByCategory: [String: Bool] = [:]
+    var orchestratorErrorByCategory: [String: String] = [:]
+    var orchestratorConversationCreatedAtByCategory: [String: Date] = [:]
+    var orchestratorConversationLongTermByCategory: [String: Bool] = [:]
     var orchestratorWorkItems: [OrchestratorWorkItem] = []
     var selectedOrchestratorWorkItemID: UUID?
     var orchestratorStreamingText = ""
@@ -53,8 +58,9 @@ final class MockStore {
     var orchestratorError: String?
     var pendingOrchestratorDispatch: PendingOrchestratorDispatch?
 
-    @ObservationIgnored var orchestratorTurnTask: Task<Void, Never>?
-    @ObservationIgnored var orchestratorTurnID: UUID?
+    @ObservationIgnored var pendingOrchestratorDispatchByCategory: [String: PendingOrchestratorDispatch] = [:]
+    @ObservationIgnored var orchestratorTurnTasksByCategory: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored var orchestratorTurnIDsByCategory: [String: UUID] = [:]
 
     /// Work units marked done by hand. The units themselves are derived from
     /// live sessions, so only this override needs storing.
@@ -170,6 +176,7 @@ final class MockStore {
 
         seed()
         orchestratorWorkItems = orchestratorMarkdownStore.loadWorkItems()
+        restoreOrchestratorConversations()
         restoreSessions()
         selectedProjectID = projects.first?.id
         selectedAgentID = agents.first?.id

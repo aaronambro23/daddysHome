@@ -27,6 +27,28 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
+    func loadConversations() -> [String: OrchestratorConversationSnapshot] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let directory = conversationsDirectory()
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) else { return [:] }
+
+        var snapshots: [String: OrchestratorConversationSnapshot] = [:]
+        for file in files where file.pathExtension == "md" {
+            guard let snapshot = parseConversation(at: file) else { continue }
+            if let expiresAt = snapshot.expiresAt, expiresAt <= Date() {
+                try? FileManager.default.removeItem(at: file)
+                continue
+            }
+            snapshots[snapshot.key] = snapshot
+        }
+        return snapshots
+    }
+
     func save(_ item: OrchestratorWorkItem) {
         lock.lock()
         defer { lock.unlock() }
@@ -42,11 +64,35 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
         try? format(item).write(to: url, atomically: true, encoding: .utf8)
     }
 
+    func saveConversation(_ snapshot: OrchestratorConversationSnapshot) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let directory = conversationsDirectory()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("\(conversationFileName(for: snapshot.key)).md")
+        if snapshot.hasContent {
+            try? formatConversation(snapshot).write(to: url, atomically: true, encoding: .utf8)
+        } else {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    func deleteConversation(key: String) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let url = conversationsDirectory()
+            .appendingPathComponent("\(conversationFileName(for: key)).md")
+        try? FileManager.default.removeItem(at: url)
+    }
+
     private func allMarkdownFiles() throws -> [URL] {
         let contents = try FileManager.default.subpathsOfDirectory(atPath: rootURL.path)
         return contents
             .map { rootURL.appendingPathComponent($0) }
             .filter { $0.pathExtension == "md" && $0.lastPathComponent != "conversation.md" }
+            .filter { !$0.path.contains("/conversations/") }
     }
 
     private func format(_ item: OrchestratorWorkItem) -> String {
@@ -113,6 +159,48 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
             createdAt: created,
             updatedAt: updated
         )
+    }
+
+    private func conversationsDirectory() -> URL {
+        rootURL.appendingPathComponent("conversations", isDirectory: true)
+    }
+
+    private func formatConversation(_ snapshot: OrchestratorConversationSnapshot) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = (try? encoder.encode(snapshot)) ?? Data()
+        let json = String(data: data, encoding: .utf8) ?? "{}"
+
+        var output = "---\n"
+        output += "key: \(snapshot.key)\n"
+        output += "category: \(snapshot.category?.rawValue ?? "all")\n"
+        output += "created: \(Self.formatDate(snapshot.createdAt))\n"
+        output += "updated: \(Self.formatDate(snapshot.updatedAt))\n"
+        output += "keep-long-term: \(snapshot.keepLongTerm ? "true" : "false")\n"
+        output += "expires: \(snapshot.expiresAt.map(Self.formatDate) ?? "never")\n"
+        output += "---\n\n"
+        output += "# Orchestrator Chat: \(snapshot.category?.title ?? "ALL")\n\n"
+        output += "```json\n\(json)\n```\n"
+        return output
+    }
+
+    private func parseConversation(at url: URL) -> OrchestratorConversationSnapshot? {
+        guard let content = try? String(contentsOf: url, encoding: .utf8),
+              let blockStart = content.range(of: "```json\n") else { return nil }
+        let remainder = content[blockStart.upperBound...]
+        guard let blockEnd = remainder.range(of: "\n```") else { return nil }
+        let json = String(remainder[..<blockEnd.lowerBound])
+        guard let data = json.data(using: .utf8) else { return nil }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(OrchestratorConversationSnapshot.self, from: data)
+    }
+
+    private func conversationFileName(for key: String) -> String {
+        key.replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
     }
 
     private func subsection(_ heading: String, in body: String) -> String? {
