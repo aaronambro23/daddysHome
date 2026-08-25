@@ -4,6 +4,7 @@ import DaddyCore
 enum UtilityPanel: Equatable {
     case hex
     case settings
+    case companion
 }
 
 /// Contextual utilities that sit over Fleet without changing its geometry.
@@ -31,13 +32,17 @@ struct UtilityDrawer: View {
                     .buttonStyle(.plain)
                     .insetSurface(cornerRadius: 13)
                     .help("Back to settings")
+                } else if panel == .companion {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(DaddyTheme.textSecondary)
                 } else {
                     Image(systemName: "gearshape")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(DaddyTheme.textSecondary)
                 }
 
-                Text(panel == .hex ? "TRANSCRIPTS" : "SETTINGS")
+                Text(panel == .hex ? "TRANSCRIPTS" : (panel == .companion ? "COMPANION" : "SETTINGS"))
                     .font(.system(size: 12, weight: .bold))
                     .tracking(0.8)
                     .foregroundStyle(DaddyTheme.textPrimary)
@@ -64,6 +69,8 @@ struct UtilityDrawer: View {
                 HEXUtilityPanel()
             case .settings:
                 SettingsUtilityPanel(onOpenHEX: { onSwitchPanel(.hex) })
+            case .companion:
+                PokeCompanionWidget()
             }
         }
         .background {

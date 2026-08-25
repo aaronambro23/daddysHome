@@ -130,6 +130,13 @@ final class MockStore {
     /// whichever SwiftUI control or embedded terminal currently owns focus.
     @ObservationIgnored private var hexWatcher: HEXWatcher?
 
+    /// Reads PokeTokenBar's companion state, so daddy displays the live Pokémon
+    /// companion without running the simulation logic itself.
+    @ObservationIgnored private var pokeWatcher: PokeCompanionWatcher?
+
+    /// The current PokeTokenBar companion state, if PokeTokenBar is running.
+    var pokeState: PokeCompanionState?
+
     /// Surfaced in the UI when a launch fails (missing binary, bad cwd).
     var launchError: String?
 
@@ -149,6 +156,11 @@ final class MockStore {
         hexWatcher = HEXWatcher()
         hexWatcher?.start { [weak self] transcript in
             self?.submitVoice(transcript)
+        }
+
+        pokeWatcher = PokeCompanionWatcher()
+        pokeWatcher?.start { [weak self] state in
+            self?.pokeState = state
         }
     }
 

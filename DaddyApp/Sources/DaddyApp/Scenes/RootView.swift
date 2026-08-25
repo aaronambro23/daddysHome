@@ -67,8 +67,12 @@ struct RootView: View {
             // in the app that belongs to no panel, and reaching it means
             // `TitlebarAccessory`; content drawn under a transparent titlebar
             // does not receive clicks.
-            TitlebarAccessory(size: CGSize(width: 44, height: 28)) {
-                settingsButton
+            TitlebarAccessory(size: CGSize(width: 90, height: 28)) {
+                HStack(spacing: 4) {
+                    Spacer()
+                    companionButton
+                    settingsButton
+                }
             }
             .frame(width: 0, height: 0)
         }
@@ -79,6 +83,21 @@ struct RootView: View {
                 store.tick()
             }
         }
+    }
+
+    private var companionButton: some View {
+        Button {
+            toggleUtilityPanel(.companion)
+        } label: {
+            Image(systemName: "star.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(DaddyTheme.textSecondary)
+                .frame(width: 28, height: 28)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .opacity(utilityPanel == .companion ? 1 : 0.6)
+        .help("Pokémon Companion")
     }
 
     private var settingsButton: some View {
