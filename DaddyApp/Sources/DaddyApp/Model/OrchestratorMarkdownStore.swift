@@ -64,6 +64,12 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
         try? format(item).write(to: url, atomically: true, encoding: .utf8)
     }
 
+    func fileURL(for item: OrchestratorWorkItem) -> URL {
+        rootURL
+            .appendingPathComponent(item.category.folderName, isDirectory: true)
+            .appendingPathComponent("\(item.id.uuidString).md")
+    }
+
     /// Removes a work item's Markdown file. The board can delete cards, and
     /// without this the file would survive and reappear on the next load.
     /// Searches every category folder rather than trusting `item.category`,

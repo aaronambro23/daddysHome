@@ -161,9 +161,7 @@ struct ShellPane: View {
 
     private var collapseButton: some View {
         Button {
-            withAnimation(.smooth(duration: 0.3)) {
-                store.userShellCollapsed = true
-            }
+            store.userShellCollapsed = true
         } label: {
             Image(systemName: "arrow.right.to.line")
                 .font(.system(size: 10, weight: .bold))
@@ -198,7 +196,7 @@ struct ShellPane: View {
 
                         TerminalSurface(
                             pty: pty,
-                            isActive: isActive,
+                            isActive: isActive && store.workspace == .fleet,
                             // The one place that sends Ctrl-L to fix a prompt
                             // printed before the pane's real width was known.
                             redrawsOnFirstAttach: true,

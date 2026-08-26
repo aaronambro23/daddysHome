@@ -295,12 +295,7 @@ extension MockStore {
         }
 
         send(pending.prompt, to: target.id)
-        if var item = workItem(pending.workItemID) {
-            item.status = .dispatched
-            item.linkedSessionIDs.append(target.id)
-            item.updatedAt = Date()
-            replaceWorkItem(item)
-        }
+        markWorkItemDispatched(pending.workItemID, session: target.id)
         pendingOrchestratorDispatch = nil
         pendingOrchestratorDispatchByCategory.removeValue(forKey: key)
         setMessages(messages(for: key) + [
@@ -331,6 +326,39 @@ extension MockStore {
         guard let index = orchestratorWorkItems.firstIndex(where: { $0.id == item.id }) else { return }
         orchestratorWorkItems[index] = item
         orchestratorMarkdownStore.save(item)
+        syncGitPushWatchers()
+    }
+
+    /// Board dispatch: mark the card, hop, paste once the live terminal exists.
+    func dispatchWorkItem(_ id: UUID, onto agent: MockAgent) {
+        guard let item = workItem(id) else { return }
+        markWorkItemDispatched(id, session: agent.id)
+        hopToFleetSession(agent.id)
+        enqueueComposerPaste(dispatchPrompt(for: item), onto: agent.id)
+    }
+
+    /// Board dispatch: launch, hop immediately, paste once the composer exists.
+    func dispatchWorkItem(_ id: UUID, launching kind: AgentKind) {
+        guard let item = workItem(id) else { return }
+        let projectID = item.projectID ?? selectedProjectID
+        guard let projectID, let project = project(projectID) else {
+            launchError = "Choose a project before dispatching this work item"
+            return
+        }
+        guard let target = launchReal(kind, in: project, workUnitID: item.id.uuidString) else { return }
+        markWorkItemDispatched(id, session: target.id)
+        hopToFleetSession(target.id)
+        enqueueComposerPaste(dispatchPrompt(for: item), onto: target.id)
+    }
+
+    func markWorkItemDispatched(_ id: UUID, session agentID: String) {
+        guard var item = workItem(id) else { return }
+        item.status = .dispatched
+        if !item.linkedSessionIDs.contains(agentID) {
+            item.linkedSessionIDs.append(agentID)
+        }
+        item.updatedAt = Date()
+        replaceWorkItem(item)
     }
 
     /// The one way a work item enters the app. The Ollama `create_work_item`
@@ -340,6 +368,7 @@ extension MockStore {
         orchestratorWorkItems.insert(item, at: 0)
         selectedOrchestratorWorkItemID = item.id
         orchestratorMarkdownStore.save(item)
+        syncGitPushWatchers()
     }
 
     func deleteWorkItem(_ id: UUID) {
@@ -347,6 +376,7 @@ extension MockStore {
         let item = orchestratorWorkItems.remove(at: index)
         if selectedOrchestratorWorkItemID == id { selectedOrchestratorWorkItemID = nil }
         orchestratorMarkdownStore.delete(item)
+        syncGitPushWatchers()
     }
 
     /// Moving a card between columns. Returns false when nothing changed, so a
@@ -386,6 +416,7 @@ extension MockStore {
            !onDisk.contains(where: { $0.id == selected }) {
             selectedOrchestratorWorkItemID = nil
         }
+        syncGitPushWatchers()
     }
 
     /// The board's query. `scope` is three-way, not a filter: `.all` ignores
@@ -701,6 +732,8 @@ extension MockStore {
                 }
             }
         }
+
+        prompt += "\nWhen you finish, move this card to VERIFY: set `status: refined` in \(orchestratorMarkdownStore.fileURL(for: item).path). Do not leave it dispatched, and do not mark it done.\n"
         return prompt
     }
 

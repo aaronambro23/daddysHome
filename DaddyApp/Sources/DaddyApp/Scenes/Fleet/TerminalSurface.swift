@@ -32,6 +32,10 @@ struct TerminalSurface: NSViewRepresentable {
     /// Point size of the monospaced face. Owned by settings, not by the pane.
     var fontSize: CGFloat = 11.5
 
+    /// Work-item text to drop into the composer once this surface is attached.
+    var composerPaste: PendingComposerPaste? = nil
+    var onComposerPasteConsumed: (() -> Void)? = nil
+
     private var terminalFont: NSFont {
         NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
     }
@@ -175,6 +179,11 @@ struct TerminalSurface: NSViewRepresentable {
         // shown, and must not fight over first responder every update.
         context.coordinator.setActive(isActive, view: view)
         context.coordinator.enableMetalIfNeeded(view)
+        context.coordinator.consumeComposerPasteIfNeeded(
+            composerPaste,
+            view: view,
+            onConsumed: onComposerPasteConsumed
+        )
 
         // Self-heal, because the cost of this being wrong is a session you have
         // to throw away. Nothing in the app leaves mouse reporting off — the
@@ -233,6 +242,9 @@ struct TerminalSurface: NSViewRepresentable {
         /// report the next one. See `sizeChanged`.
         @MainActor private var lastReportedSize: (cols: Int, rows: Int)?
         @MainActor private var pendingResize: DispatchWorkItem?
+        @MainActor private var consumedPasteID: UUID?
+        @MainActor private var catchUpReveal: DispatchWorkItem?
+        @MainActor private var catchUpDeadline: DispatchWorkItem?
 
         /// Bytes of a synchronized-output frame the agent has opened and not
         /// yet closed. See `flushPending`.
@@ -350,11 +362,14 @@ struct TerminalSurface: NSViewRepresentable {
             pty.resize(columns: UInt16(size.cols), rows: UInt16(size.rows))
 
             // Replay what the session already produced, so selecting a session
-            // mid-flight does not show an empty pane. Through the *view*, for
-            // the reason spelled out in `flushPending`.
+            // mid-flight does not show an empty pane. Hidden until the feed
+            // lands at the bottom — a long Cursor transcript used to paint
+            // from the first message and scroll the whole way down.
             let backlog = pty.recentOutput
             if !backlog.isEmpty {
+                beginCatchUp(view)
                 view.feed(text: backlog)
+                snapToBottom(view)
             }
 
             // The chunk callback, not registerOutputCallback — the latter
@@ -411,7 +426,67 @@ struct TerminalSurface: NSViewRepresentable {
         func setActive(_ active: Bool, view: TerminalView) {
             guard active != isActive else { return }
             isActive = active
-            if active { takeKeyboardFocus(view) }
+            if active {
+                takeKeyboardFocus(view)
+            } else if view.window?.firstResponder === view {
+                // Nil is how the whole window stopped taking keys. Cursor's
+                // mouse-reporting also skips `becomeFirstResponder` on click,
+                // so a nil first responder is a session you cannot type into
+                // and cannot click back into.
+                view.window?.makeFirstResponder(view.window?.contentView)
+            }
+        }
+
+        /// Hide the emulator while a dump or a SIGWINCH reflow paints, then
+        /// reveal the last screen. Cursor redraws a long chat from the top;
+        /// without this you watch every message scroll past.
+        @MainActor
+        private func beginCatchUp(_ view: TerminalView) {
+            view.alphaValue = 0
+            catchUpReveal?.cancel()
+            catchUpDeadline?.cancel()
+            let deadline = DispatchWorkItem { [weak self, weak view] in
+                MainActor.assumeIsolated { self?.endCatchUp(view) }
+            }
+            catchUpDeadline = deadline
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: deadline)
+            bumpCatchUpReveal(view)
+        }
+
+        @MainActor
+        private func bumpCatchUpReveal(_ view: TerminalView) {
+            guard view.alphaValue == 0 else { return }
+            catchUpReveal?.cancel()
+            let work = DispatchWorkItem { [weak self, weak view] in
+                MainActor.assumeIsolated { self?.endCatchUp(view) }
+            }
+            catchUpReveal = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+        }
+
+        @MainActor
+        private func endCatchUp(_ view: TerminalView?) {
+            catchUpReveal?.cancel()
+            catchUpReveal = nil
+            catchUpDeadline?.cancel()
+            catchUpDeadline = nil
+            guard let view else { return }
+            snapToBottom(view)
+            view.alphaValue = 1
+        }
+
+        @MainActor
+        private func snapToBottom(_ view: TerminalView) {
+            view.scrollTo(row: Int.max)
+        }
+
+        @MainActor
+        private func cancelCatchUp() {
+            catchUpReveal?.cancel()
+            catchUpReveal = nil
+            catchUpDeadline?.cancel()
+            catchUpDeadline = nil
+            view?.alphaValue = 1
         }
 
         /// Draw the grid on the GPU instead of rasterising it with CoreText.
@@ -447,9 +522,16 @@ struct TerminalSurface: NSViewRepresentable {
         /// when it is first made.
         @MainActor
         private func takeKeyboardFocus(_ view: TerminalView) {
-            DispatchQueue.main.async {
-                view.window?.makeFirstResponder(view)
+            let hop = { [weak view] in
+                MainActor.assumeIsolated {
+                    guard let view, view.window != nil else { return }
+                    view.window?.makeFirstResponder(view)
+                }
             }
+            DispatchQueue.main.async(execute: hop)
+            // Board cover is gone on the next turn; one hop is sometimes still
+            // under the outgoing view.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: hop)
         }
 
         /// Called on `PTYProcess`'s private serial queue.
@@ -550,6 +632,8 @@ struct TerminalSurface: NSViewRepresentable {
 
             guard !ready.isEmpty else { return }
 
+            if view.alphaValue == 0 { bumpCatchUpReveal(view) }
+
             // Through the **view**, never `view.getTerminal().feed(...)`.
             //
             // `TerminalView.feed(text:)` is `feedPrepare()` → `terminal.feed`
@@ -596,6 +680,8 @@ struct TerminalSurface: NSViewRepresentable {
             heldFrameRelease?.cancel()
             heldFrameRelease = nil
 
+            cancelCatchUp()
+
             pty = newPTY
             isAttached = false
             lastReportedSize = nil
@@ -619,6 +705,7 @@ struct TerminalSurface: NSViewRepresentable {
             heldFrameRelease?.cancel()
             heldFrameRelease = nil
             heldFrame = ""
+            cancelCatchUp()
 
             view = nil
             if let controlCMonitor {
@@ -676,8 +763,8 @@ struct TerminalSurface: NSViewRepresentable {
             guard mouseUpMonitor == nil else { return }
             mouseUpMonitor = NSEvent.addLocalMonitorForEvents(
                 matching: [.leftMouseUp, .rightMouseUp, .otherMouseUp]
-            ) { [weak view] event in
-                guard let view, event.window === view.window else { return event }
+            ) { [weak self, weak view] event in
+                guard let self, self.isActive, let view, event.window === view.window else { return event }
                 if !view.allowMouseReporting {
                     view.allowMouseReporting = true
                     #if DEBUG
@@ -692,8 +779,8 @@ struct TerminalSurface: NSViewRepresentable {
         private func installScrollMonitor(for view: TerminalView) {
             guard scrollMonitor == nil else { return }
             scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) {
-                [weak view] event in
-                guard let view, event.window === view.window else { return event }
+                [weak self, weak view] event in
+                guard let self, self.isActive, let view, event.window === view.window else { return event }
 
                 let point = view.convert(event.locationInWindow, from: nil)
                 guard view.bounds.contains(point) else { return event }
@@ -764,7 +851,7 @@ struct TerminalSurface: NSViewRepresentable {
             guard controlCMonitor == nil else { return }
             controlCMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
                 [weak self, weak view] event in
-                guard view?.window?.firstResponder === view else { return event }
+                guard let self, self.isActive, view?.window?.firstResponder === view else { return event }
 
                 let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 let isPlainControl = modifiers.contains(.control)
@@ -772,7 +859,7 @@ struct TerminalSurface: NSViewRepresentable {
                     && !modifiers.contains(.option)
                 if isPlainControl,
                    event.charactersIgnoringModifiers?.lowercased() == "c" {
-                    self?.noteControlCInput()
+                    self.noteControlCInput()
                 }
                 return event
             }
@@ -805,6 +892,36 @@ struct TerminalSurface: NSViewRepresentable {
             }
 
             try? pty.write(payload)
+        }
+
+        /// A work item's prompt, as one paste, not a burst of keystrokes.
+        ///
+        /// Newlines in these prompts are the freeze: without bracketed paste
+        /// each `\n` is a submit (or a full TUI redraw), and doing that while
+        /// the emulator is mid-attach leaves the pane dead except for Close.
+        @MainActor
+        func consumeComposerPasteIfNeeded(
+            _ pending: PendingComposerPaste?,
+            view: TerminalView,
+            onConsumed: (() -> Void)?
+        ) {
+            guard let pending,
+                  consumedPasteID != pending.id,
+                  isAttached,
+                  isActive,
+                  view.window != nil
+            else { return }
+
+            consumedPasteID = pending.id
+            onConsumed?()
+            let payload = "\u{1b}[200~" + pending.text + "\u{1b}[201~"
+            DispatchQueue.main.async { [weak self, weak view] in
+                MainActor.assumeIsolated {
+                    guard let self, let view else { return }
+                    try? self.pty.write(payload)
+                    self.takeKeyboardFocus(view)
+                }
+            }
         }
 
         /// Capture intent before SwiftTerm turns the key into legacy, Kitty, or
@@ -857,6 +974,12 @@ struct TerminalSurface: NSViewRepresentable {
         /// resize, at the size it settles on.
         func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
             MainActor.assumeIsolated {
+                // A 0-column pty is how every live session died when the
+                // fleet was laid out hidden: SwiftUI proposed an empty
+                // frame, SwiftTerm reported it, and we forwarded a
+                // TIOCSWINSZ the child cannot survive.
+                guard newCols > 1, newRows > 1 else { return }
+
                 guard lastReportedSize?.cols != newCols
                     || lastReportedSize?.rows != newRows
                 else { return }

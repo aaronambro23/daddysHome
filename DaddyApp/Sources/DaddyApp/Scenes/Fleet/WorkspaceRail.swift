@@ -33,7 +33,7 @@ struct WorkspaceRail: View {
     /// open directory watchers survive the section being rebuilt.
     @State private var fileTree = FileTreeStore()
 
-    /// The project list is folded to the eight most recent by default.
+    /// The project list is folded to its first eight by default (`daddy`, then recency).
     @State private var showingAllProjects = false
 
     /// True while a drag is somewhere over the rail.

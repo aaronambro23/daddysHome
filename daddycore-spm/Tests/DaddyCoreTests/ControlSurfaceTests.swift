@@ -37,6 +37,19 @@ final class ControlSurfaceTests: XCTestCase {
         )
     }
 
+    func testPastePromptReachesTheProcessWithoutSubmitting() throws {
+        let pty = PTYProcess(executablePath: "/bin/cat", arguments: [], cwd: URL(fileURLWithPath: "/tmp"))
+        try pty.launch()
+        defer { pty.shutdown() }
+
+        try ClaudeAdapter().pastePrompt("hello", to: pty)
+
+        XCTAssertTrue(
+            waitFor { pty.recentOutput.contains("hello") },
+            "paste never reached the pty; saw \(pty.recentOutput.debugDescription)"
+        )
+    }
+
     func testSubmitKeyIsCarriageReturnNotLineFeed() {
         // Asserted on the encoding rather than end-to-end, because the tty's
         // line discipline rewrites CR to LF on the way in (ICRNL) — an echo test
@@ -323,6 +336,22 @@ final class ControlSurfaceTests: XCTestCase {
         )
     }
 
+    func testPastePromptThroughSessionManager() throws {
+        let manager = SessionManager()
+        manager.register(StubAdapter(), for: .claude)
+
+        let session = try makeCatSession(manager)
+        try manager.launchSession(session)
+        defer { try? manager.terminateSession(session.id) }
+
+        try manager.pastePrompt("pasted", to: session.id)
+
+        XCTAssertTrue(
+            waitFor { manager.getPTYProcess(for: session.id)?.recentOutput.contains("pasted") == true },
+            "paste never reached the session"
+        )
+    }
+
     func testControlOnAnUnknownSessionThrows() {
         let manager = SessionManager()
 
@@ -330,5 +359,6 @@ final class ControlSurfaceTests: XCTestCase {
         XCTAssertThrowsError(try manager.resumeSession("nope"))
         XCTAssertThrowsError(try manager.terminateSession("nope"))
         XCTAssertThrowsError(try manager.restartSession("nope"))
+        XCTAssertThrowsError(try manager.pastePrompt("hello", to: "nope"))
     }
 }

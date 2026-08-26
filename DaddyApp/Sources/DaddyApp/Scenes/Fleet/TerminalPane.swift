@@ -97,7 +97,13 @@ struct TerminalPane: View {
             } else if let pty = store.pty(for: agent), pty.isProcessRunning {
                 // Real pty: SwiftTerm renders it, including colour and any
                 // interactive prompts the agent draws.
-                TerminalSurface(pty: pty, fontSize: store.terminalFontSize)
+                TerminalSurface(
+                    pty: pty,
+                    isActive: store.workspace == .fleet,
+                    fontSize: store.terminalFontSize,
+                    composerPaste: composerPasteForSelection,
+                    onComposerPasteConsumed: { store.consumeComposerPaste() }
+                )
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
             } else {
@@ -125,6 +131,14 @@ struct TerminalPane: View {
     private func isLaunching(_ agent: MockAgent) -> Bool {
         if case .launching = agent.state { return true }
         return false
+    }
+
+    /// Only the session this prompt was queued for, and only while it is the
+    /// one on screen — a hop to a different agent must not steal the paste.
+    private var composerPasteForSelection: PendingComposerPaste? {
+        guard let pending = store.pendingComposerPaste,
+              pending.agentID == store.selectedAgentID else { return nil }
+        return pending
     }
 
     /// What a finished session looks like.

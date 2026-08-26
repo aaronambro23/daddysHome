@@ -331,7 +331,7 @@ struct OrchestratorView: View {
                 status: $inspectorStatus,
                 priority: $inspectorPriority,
                 projectID: $inspectorProjectID,
-                projects: store.projects,
+                projects: store.rootProjects,
                 onSave: saveInspector
             )
 

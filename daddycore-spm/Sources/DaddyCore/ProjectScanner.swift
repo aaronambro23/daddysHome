@@ -43,8 +43,8 @@ public enum ProjectScanner {
     /// subdirectories — so an agent can work either at a project root or inside
     /// one focused subdirectory, and the file tree has something to open.
     ///
-    /// Results are sorted by most recently modified, so what you were last
-    /// working on is at the top. Children are alphabetical, like Finder.
+    /// `daddy` is pinned first so the app always lands there. Everything else
+    /// is most recently modified. Children are alphabetical, like Finder.
     /// `WorkspaceRail` folds the list to its first few; the ordering here is
     /// what decides which few those are.
     public static func scan(
@@ -63,12 +63,7 @@ public enum ProjectScanner {
 
         return Array(
             found
-                .sorted { lhs, rhs in
-                    let l = modifiedAt(lhs.url) ?? .distantPast
-                    let r = modifiedAt(rhs.url) ?? .distantPast
-                    if l != r { return l > r }
-                    return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-                }
+                .sorted(by: roots)
                 .prefix(limit)
         )
     }
@@ -145,6 +140,22 @@ public enum ProjectScanner {
 
     private static func alphabetical(_ lhs: Found, _ rhs: Found) -> Bool {
         lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
+
+    /// Home project first, then recency. The name match is case-insensitive
+    /// because the folder on disk is `daddy` and the app is Daddy.
+    private static func roots(_ lhs: Found, _ rhs: Found) -> Bool {
+        let lHome = isHomeProject(lhs.name)
+        let rHome = isHomeProject(rhs.name)
+        if lHome != rHome { return lHome }
+        let l = modifiedAt(lhs.url) ?? .distantPast
+        let r = modifiedAt(rhs.url) ?? .distantPast
+        if l != r { return l > r }
+        return alphabetical(lhs, rhs)
+    }
+
+    private static func isHomeProject(_ name: String) -> Bool {
+        name.caseInsensitiveCompare("daddy") == .orderedSame
     }
 
     private static func modifiedAt(_ url: URL) -> Date? {

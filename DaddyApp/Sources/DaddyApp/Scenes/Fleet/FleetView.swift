@@ -100,8 +100,7 @@ struct FleetView: View {
             // for as long as the rail is open.
             //
             // Collapsing the shell is the exception: there is no parked pane
-            // to steal space from, so the session lays out against the rail
-            // that is actually showing and takes whatever is left.
+            // to steal space from, so the session takes whatever is left.
             let usePushLayout = isDetail && !store.userShellCollapsed
             let layoutX = (usePushLayout ? sidebarNarrow : sidebarWidth) + gap
             let contentWidth = max(0, geo.size.width - layoutX)
@@ -133,9 +132,12 @@ struct FleetView: View {
                 .offset(x: contentX)
 
                 // The one and only agent terminal. Only its rectangle changes.
+                // Never animate this frame: interpolating width is a SIGWINCH
+                // per tick, and Cursor replays the chat for each one.
                 TerminalPane(isFocused: isDetail)
                     .frame(width: terminal.width, height: terminal.height)
                     .offset(x: terminal.minX, y: terminal.minY)
+                    .transaction { $0.animation = nil }
 
                 // Your own shell, to the right of the agent's.
                 //
@@ -161,6 +163,7 @@ struct FleetView: View {
                     .opacity(shellVisible ? 1 : 0)
                     .allowsHitTesting(shellVisible)
                     .accessibilityHidden(!shellVisible)
+                    .animation(.smooth(duration: 0.3), value: shellVisible)
 
                 if isDetail, store.userShellCollapsed {
                     restoreShellHandle
@@ -203,7 +206,6 @@ struct FleetView: View {
             // transactions on one property.
             .animation(.smooth(duration: 0.3), value: progressPanelOpen)
             .animation(.smooth(duration: 0.3), value: isDetail)
-            .animation(.smooth(duration: 0.3), value: store.userShellCollapsed)
         }
         .onAppear { installKeyboardMonitor() }
         .onDisappear { removeKeyboardMonitor() }
@@ -228,9 +230,9 @@ struct FleetView: View {
         contentWidth: CGFloat
     ) -> CGRect {
         if isDetail {
-            // Below the toolbar, with the same gap under it that separates the
-            // two terminals from each other. A collapsed shell donates its
-            // width to the session — that reflow is the point of collapsing.
+            // Below the toolbar. A collapsed shell donates its width to the
+            // session — that reflow is the point of collapsing. The frame
+            // itself is not animated, so it is one SIGWINCH, not a dozen.
             let top = detailToolbarHeight + gap
             let shellTaken = store.userShellCollapsed
                 ? 0 : shellWidth(for: contentWidth) + gap
@@ -293,9 +295,7 @@ struct FleetView: View {
     /// back without digging through the overflow menu.
     private var restoreShellHandle: some View {
         Button {
-            withAnimation(.smooth(duration: 0.3)) {
-                store.userShellCollapsed = false
-            }
+            store.userShellCollapsed = false
         } label: {
             Image(systemName: "chevron.left")
                 .font(.system(size: 10, weight: .bold))
@@ -370,6 +370,11 @@ struct FleetView: View {
     private func installKeyboardMonitor() {
         guard keyboardMonitor == nil else { return }
         keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Fleet stays in the hierarchy under the board. Without this
+            // guard, ⌘B / ⌘T / ⌘← would still fire while you are looking
+            // at cards.
+            guard store.workspace == .fleet else { return event }
+
             if handleFocusShortcut(event) { return nil }
 
             let chords = event.modifierFlags.intersection([.command, .option, .control, .shift])
@@ -380,6 +385,16 @@ struct FleetView: View {
             // reaches a pty, which is the same reasoning behind ⌘← above.
             if chords == [.command], event.charactersIgnoringModifiers?.lowercased() == "b" {
                 toggleSidebar()
+                return nil
+            }
+
+            // ⌘T toggles your shell beside a focused session. Same reasoning
+            // as ⌘B: Command never reaches the pty, and the shell is not a
+            // tab the agent is entitled to.
+            if chords == [.command],
+               event.charactersIgnoringModifiers?.lowercased() == "t",
+               store.detailAgent != nil {
+                store.userShellCollapsed.toggle()
                 return nil
             }
 

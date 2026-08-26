@@ -8,9 +8,8 @@ import AppKit
 /// item's fields look like and one definition of what "save" writes.
 ///
 /// Dispatch is deliberately *not* here. Sending an item to a coding agent
-/// needs an agent picker, a session picker and an approval step, and all of
-/// that belongs to the Orchestrator; the board hands off to it rather than
-/// growing a second copy.
+/// lives on the board's detail pane (and the Orchestrator's own DISPATCH
+/// block), so this stays a form.
 struct WorkItemFields: View {
     @Binding var title: String
     @Binding var summary: String
@@ -26,7 +25,8 @@ struct WorkItemFields: View {
     var titleFocus: FocusState<Bool>.Binding?
 
     /// Called on Enter in the title field as well as by the save button, so a
-    /// freshly created card commits with one keystroke.
+    /// freshly created card commits with one keystroke. Dropdowns call it on
+    /// pick too — a status change should not wait on a separate save.
     let onSave: () -> Void
 
     @State private var copied = false
@@ -72,32 +72,163 @@ struct WorkItemFields: View {
                 .padding(7)
                 .insetSurface(cornerRadius: 10)
 
-            Picker("Category", selection: $category) {
-                ForEach(OrchestratorWorkCategory.allCases) { category in
-                    Text(category.title).tag(category)
-                }
+            FieldRow(
+                label: "CATEGORY",
+                items: OrchestratorWorkCategory.allCases.map { option in
+                    GlassDropdownItem(
+                        id: option.rawValue,
+                        title: option.title,
+                        isSelected: option == category,
+                        leading: AnyView(
+                            Circle().fill(option.tint).frame(width: 7, height: 7)
+                        )
+                    ) {
+                        guard category != option else { return }
+                        pick { category = option }
+                    }
+                },
+                selectedIndex: OrchestratorWorkCategory.allCases.firstIndex(of: category)
+            ) {
+                fieldTrigger(
+                    title: category.title,
+                    tint: category.tint,
+                    leading: AnyView(
+                        Circle().fill(category.tint).frame(width: 7, height: 7)
+                    )
+                )
             }
-            Picker("Status", selection: $status) {
-                ForEach(OrchestratorWorkStatus.editableStatuses, id: \.self) { status in
-                    Text(status.title).tag(status)
-                }
+
+            FieldRow(
+                label: "STATUS",
+                items: OrchestratorWorkStatus.editableStatuses.map { option in
+                    GlassDropdownItem(
+                        id: option.rawValue,
+                        title: option.title,
+                        isSelected: option == status,
+                        leading: AnyView(
+                            Circle().fill(option.boardTint).frame(width: 7, height: 7)
+                        )
+                    ) {
+                        guard status != option else { return }
+                        pick { status = option }
+                    }
+                },
+                selectedIndex: OrchestratorWorkStatus.editableStatuses.firstIndex(of: status)
+            ) {
+                fieldTrigger(
+                    title: status.title,
+                    tint: status.boardTint,
+                    leading: AnyView(
+                        Circle().fill(status.boardTint).frame(width: 7, height: 7)
+                    )
+                )
             }
-            Picker("Priority", selection: $priority) {
-                ForEach(OrchestratorPriority.allCases, id: \.self) { priority in
-                    Text(priority.rawValue.capitalized).tag(priority)
-                }
+
+            FieldRow(
+                label: "PRIORITY",
+                items: OrchestratorPriority.allCases.map { option in
+                    GlassDropdownItem(
+                        id: option.rawValue,
+                        title: option.title,
+                        isSelected: option == priority,
+                        leading: AnyView(
+                            Circle().fill(option.tint).frame(width: 7, height: 7)
+                        )
+                    ) {
+                        guard priority != option else { return }
+                        pick { priority = option }
+                    }
+                },
+                selectedIndex: OrchestratorPriority.allCases.firstIndex(of: priority)
+            ) {
+                fieldTrigger(
+                    title: priority.title,
+                    tint: priority.tint,
+                    leading: AnyView(
+                        Circle().fill(priority.tint).frame(width: 7, height: 7)
+                    )
+                )
             }
-            Picker("Project", selection: $projectID) {
-                Text("No project").tag("")
-                ForEach(projects) { project in
-                    Text(project.name).tag(project.id)
-                }
+
+            FieldRow(
+                label: "PROJECT",
+                items: [GlassDropdownItem(
+                    id: "",
+                    title: "No project",
+                    isSelected: projectID.isEmpty
+                ) {
+                    guard !projectID.isEmpty else { return }
+                    pick { projectID = "" }
+                }] + projects.map { project in
+                    GlassDropdownItem(
+                        id: project.id,
+                        title: project.name,
+                        isSelected: project.id == projectID
+                    ) {
+                        guard projectID != project.id else { return }
+                        pick { projectID = project.id }
+                    }
+                },
+                selectedIndex: projectID.isEmpty
+                    ? 0
+                    : projects.firstIndex(where: { $0.id == projectID }).map { $0 + 1 }
+            ) {
+                fieldTrigger(
+                    title: projects.first { $0.id == projectID }?.name ?? "No project",
+                    tint: DaddyTheme.textPrimary
+                )
             }
 
             Button("save work item", action: onSave)
                 .buttonStyle(.inset)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func pick(_ apply: () -> Void) {
+        apply()
+        onSave()
+    }
+
+    private struct FieldRow<Trigger: View>: View {
+        let label: String
+        let items: [GlassDropdownItem]
+        var selectedIndex: Int?
+        @ViewBuilder let trigger: () -> Trigger
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(label)
+                    .workItemFieldLabel()
+                GlassDropdown(
+                    items: items,
+                    width: 268,
+                    chromelessLabel: true,
+                    selectedIndex: selectedIndex,
+                    label: trigger
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func fieldTrigger(title: String, tint: Color, leading: AnyView? = nil) -> some View {
+        HStack(spacing: 8) {
+            if let leading { leading }
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(tint)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(DaddyTheme.textMuted)
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .insetSurface(cornerRadius: 10)
     }
 
     // `focused(_:)` needs a concrete binding, so the two cases are built

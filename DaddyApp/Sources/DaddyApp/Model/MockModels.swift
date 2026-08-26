@@ -140,6 +140,22 @@ struct VoiceEntry: Identifiable {
     let didSucceed: Bool
 }
 
+/// A work item waiting to land in a live composer's input.
+///
+/// Not written to the pty until `TerminalSurface` is attached: dumping a
+/// multi-line prompt into a detached session is what froze the pane.
+struct PendingComposerPaste: Equatable {
+    let id: UUID
+    let agentID: String
+    let text: String
+
+    init(agentID: String, text: String) {
+        self.id = UUID()
+        self.agentID = agentID
+        self.text = text
+    }
+}
+
 // MARK: - Formatting
 
 func formatTimeAgo(_ date: Date) -> String {

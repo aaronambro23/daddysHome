@@ -126,4 +126,19 @@ final class ProjectScannerTests: XCTestCase {
 
         XCTAssertEqual(ProjectScanner.scan(root: root).count, 1)
     }
+
+    func testDaddyIsPinnedFirstRegardlessOfRecency() throws {
+        let daddy = try makeDirectory("daddy", containing: ["Package.swift"])
+        let other = try makeDirectory("other", containing: ["Package.swift"])
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-60)],
+            ofItemAtPath: daddy.path
+        )
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date()],
+            ofItemAtPath: other.path
+        )
+
+        XCTAssertEqual(ProjectScanner.scan(root: root).map(\.name).first, "daddy")
+    }
 }

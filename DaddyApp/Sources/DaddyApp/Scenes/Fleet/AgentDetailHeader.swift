@@ -256,11 +256,10 @@ struct AgentDetailHeader: View {
             },
             GlassDropdownItem(
                 id: "shell",
-                title: store.userShellCollapsed ? "Show your shell" : "Hide your shell"
+                title: store.userShellCollapsed ? "Show your shell" : "Hide your shell",
+                note: "⌘T"
             ) {
-                withAnimation(.smooth(duration: 0.3)) {
-                    store.userShellCollapsed.toggle()
-                }
+                store.userShellCollapsed.toggle()
             },
         ]
 

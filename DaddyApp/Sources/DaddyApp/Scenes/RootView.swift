@@ -34,14 +34,17 @@ struct RootView: View {
                     // to the window edges because it *was* the window; with the
                     // rail permanently beside it, the rail would sit flush
                     // against the frame while every other panel floats.
-                    Group {
-                        switch store.workspace {
-                        case .fleet:
-                            FleetView()
-                        case .orchestrator:
-                            OrchestratorView()
-                        case .board:
-                            BoardView()
+                    ZStack {
+                        // Always mounted, always at a real size, always hit-testable.
+                        // Covering this with an `if` plus animation left a ghost
+                        // overlay, and `makeFirstResponder(nil)` plus Cursor's
+                        // mouse-reporting (clicks never focus) is how typing died.
+                        FleetView()
+
+                        if store.workspace == .board {
+                            workspaceCover { BoardView() }
+                        } else if store.workspace == .orchestrator {
+                            workspaceCover { OrchestratorView() }
                         }
                     }
                         .padding(.horizontal, 18)
@@ -132,9 +135,7 @@ struct RootView: View {
 
     private var orchestratorButton: some View {
         Button {
-            withAnimation(.smooth(duration: 0.24)) {
-                store.workspace = store.workspace == .orchestrator ? .fleet : .orchestrator
-            }
+            store.workspace = store.workspace == .orchestrator ? .fleet : .orchestrator
         } label: {
             Image(systemName: "sparkles")
                 .font(.system(size: 12, weight: .semibold))
@@ -152,9 +153,21 @@ struct RootView: View {
     }
 
     private func toggleBoard() {
-        withAnimation(.smooth(duration: 0.24)) {
-            store.workspace = store.workspace == .board ? .fleet : .board
+        store.workspace = store.workspace == .board ? .fleet : .board
+    }
+
+    /// Opaque cover so the live terminals stay laid out underneath at a real
+    /// size. Instant, no transition — a fading `if` left an invisible view
+    /// eating clicks after you came back.
+    private func workspaceCover<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        ZStack {
+            DaddyTheme.focusSurface
+            AuroraBackground()
+            content()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .transaction { $0.animation = nil }
     }
 
     /// ⌘K has to live here, not on the titlebar button and not in `FleetView`.

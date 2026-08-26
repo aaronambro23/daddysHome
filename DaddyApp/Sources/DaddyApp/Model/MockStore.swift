@@ -195,6 +195,19 @@ final class MockStore {
     /// Surfaced in the UI when a launch fails (missing binary, bad cwd).
     var launchError: String?
 
+    /// One pending "paste once the CLI is up" per agent, so dispatching twice
+    /// at a launching session does not queue two prompts.
+    @ObservationIgnored private var pendingPasteTasks: [String: Task<Void, Never>] = [:]
+
+    /// Work-item text waiting for the live terminal to exist and take focus.
+    /// Consumed by `TerminalSurface`, never written straight into a detached pty.
+    var pendingComposerPaste: PendingComposerPaste?
+
+    /// kqueue on `.git/refs/remotes` for projects with dispatched cards.
+    @ObservationIgnored var gitPushWatchers: [String: DirectoryWatcher] = [:]
+    @ObservationIgnored var gitPushWatchPaths: [String: String] = [:]
+    @ObservationIgnored var gitAheadByProject: [String: Int] = [:]
+
     init() {
         // Before anything that could write them back: these assignments fire
         // the `didSet` observers above, and reading has to come first or a
@@ -205,7 +218,7 @@ final class MockStore {
         orchestratorWorkItems = orchestratorMarkdownStore.loadWorkItems()
         restoreOrchestratorConversations()
         restoreSessions()
-        selectedProjectID = projects.first?.id
+        selectedProjectID = Self.defaultProjectID(in: projects)
         selectedAgentID = agents.first?.id
         refreshInstalledAgents()
         refreshProviderUsage()
@@ -214,6 +227,7 @@ final class MockStore {
         hexWatcher?.start { [weak self] transcript in
             self?.submitVoice(transcript)
         }
+        syncGitPushWatchers()
     }
 
     // MARK: - Derived
@@ -252,10 +266,10 @@ final class MockStore {
     /// The head of `rootProjects`, plus whichever one is selected.
     ///
     /// `ProjectScanner` finds every directory under `~/Documents` that looks
-    /// like code — dozens of them — and sorts them most-recently-modified
-    /// first. The top of that list is almost always the answer and the tail is
-    /// almost never it, so the rail folds to the head and offers the rest
-    /// behind one click. Nothing is filtered out; it is only folded.
+    /// like code — dozens of them — and pins `daddy` first, then most recently
+    /// modified. The top of that list is almost always the answer and the
+    /// tail is almost never it, so the rail folds to the head and offers the
+    /// rest behind one click. Nothing is filtered out; it is only folded.
     ///
     /// The selected project is appended wherever it sits, because otherwise
     /// choosing something from the full list and letting the list fold again
@@ -807,6 +821,57 @@ final class MockStore {
         mutate(agentID) { $0.lastOutputAt = Date() }
     }
 
+    /// Same destination as `send`, but the composer does not submit. Used when
+    /// a work item is handed to a session you were already in.
+    func paste(_ text: String, to agentID: String) {
+        guard !text.isEmpty,
+              let id = agents.first(where: { $0.id == agentID })?.sessionID else { return }
+
+        try? sessionManager.pastePrompt(text, to: id)
+        mutate(agentID) { $0.lastOutputAt = Date() }
+    }
+
+    /// Hop first, then park the prompt until the agent is idle and the
+    /// terminal view exists. Writing into the pty while BoardView still owns
+    /// the window (Fleet unmounted) is what froze the session: the TUI ate a
+    /// burst of raw keystrokes, then the remount replayed a desynced tail.
+    func enqueueComposerPaste(_ text: String, onto agentID: String) {
+        pendingPasteTasks[agentID]?.cancel()
+        pendingPasteTasks[agentID] = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(280))
+            let deadline = Date().addingTimeInterval(30)
+            while Date() < deadline {
+                guard !Task.isCancelled else { return }
+                guard let agent = agents.first(where: { $0.id == agentID }) else { return }
+                if case .exited = agent.state { return }
+                if case .ready = agent.state { break }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            guard !Task.isCancelled else { return }
+            guard agents.contains(where: { $0.id == agentID }) else { return }
+            pendingComposerPaste = PendingComposerPaste(agentID: agentID, text: text)
+            pendingPasteTasks[agentID] = nil
+        }
+    }
+
+    func consumeComposerPaste() {
+        pendingComposerPaste = nil
+    }
+
+    /// Launching agents have no composer yet. Wait until the card leaves
+    /// `.launching` — which, via `tick`, means the CLI has actually printed
+    /// something — then paste. Timeout still pastes, so a quiet boot does not
+    /// eat the work item.
+    func pasteWhenReady(_ text: String, to agentID: String) {
+        enqueueComposerPaste(text, onto: agentID)
+    }
+
+    /// Focus mode for this session, from whichever workspace you were in.
+    func hopToFleetSession(_ agentID: String) {
+        openDetail(agentID)
+        workspace = .fleet
+    }
+
     /// Remove a finished agent from the dashboard.
     ///
     /// Without this a dead card stays forever: `stop` leaves it visible on
@@ -1120,7 +1185,7 @@ extension MockStore {
             guard found != projects else { return }
 
             projects = found
-            if selectedProjectID == nil { selectedProjectID = found.first?.id }
+            if selectedProjectID == nil { selectedProjectID = Self.defaultProjectID(in: found) }
         }
     }
 
@@ -1147,6 +1212,18 @@ extension MockStore {
                 continuation.resume(returning: projects)
             }
         }
+    }
+
+    /// `daddy` if it is on disk, otherwise the first root. The scanner already
+    /// pins that folder first, but selection should not depend on sort staying
+    /// that way — a child named daddy must not steal the root.
+    private static func defaultProjectID(in projects: [MockProject]) -> String? {
+        if let daddy = projects.first(where: {
+            $0.parentID == nil && $0.name.caseInsensitiveCompare("daddy") == .orderedSame
+        }) {
+            return daddy.id
+        }
+        return projects.first(where: { $0.parentID == nil })?.id ?? projects.first?.id
     }
 
     // MARK: - Settings that persist

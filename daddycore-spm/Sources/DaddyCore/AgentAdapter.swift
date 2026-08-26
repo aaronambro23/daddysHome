@@ -69,6 +69,10 @@ public protocol AgentAdapter: AnyObject {
 
     func sendPrompt(_ text: String, to pty: PTYProcess) throws
 
+    /// Drop text into the composer without submitting. Dispatch from the
+    /// board uses this so you can edit before hitting enter.
+    func pastePrompt(_ text: String, to pty: PTYProcess) throws
+
     func selectModel(_ model: ModelRef, on pty: PTYProcess) throws
 
     func interrupt(_ pty: PTYProcess) throws
@@ -113,6 +117,10 @@ extension AgentAdapter {
         // A TTY submits on carriage return. `\n` is a line feed, which some of
         // these composers insert as a newline instead of sending.
         try pty.send(.key(.enter))
+    }
+
+    public func pastePrompt(_ text: String, to pty: PTYProcess) throws {
+        try pty.send(.text(text))
     }
 
     public func selectModel(_ model: ModelRef, on pty: PTYProcess) throws {

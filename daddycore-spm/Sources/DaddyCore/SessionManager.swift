@@ -267,6 +267,16 @@ public final class SessionManager: @unchecked Sendable {
         }
     }
 
+    /// Text only — no enter. For stuffing a work item into a live composer.
+    public func pastePrompt(_ prompt: String, to sessionID: String) throws {
+        let (pty, adapter) = try liveSession(sessionID)
+        try adapter.pastePrompt(prompt, to: pty)
+
+        lock.lock()
+        defer { lock.unlock() }
+        sessions[sessionID]?.lastOutputAt = Date()
+    }
+
     public func interruptSession(_ sessionID: String) throws {
         let (pty, adapter) = try liveSession(sessionID)
         try adapter.interrupt(pty)

@@ -185,6 +185,17 @@ enum OrchestratorPriority: String, CaseIterable, Codable, Hashable {
     case medium
     case high
     case urgent
+
+    var title: String { rawValue.uppercased() }
+
+    var tint: Color {
+        switch self {
+        case .urgent: return DaddyTheme.failure
+        case .high: return DaddyTheme.working
+        case .medium: return DaddyTheme.textPrimary
+        case .low: return DaddyTheme.textMuted
+        }
+    }
 }
 
 struct OrchestratorWorkItem: Identifiable, Codable, Hashable {

@@ -18,6 +18,9 @@ struct GlassDropdownItem: Identifiable {
     /// line of text, so the one item you cannot undo never reads as a peer of
     /// the ones you can.
     var isDestructive: Bool = false
+    /// Accent stroke, for "this is the current value" in a picker-style menu
+    /// and "this is the session you were in" in a dispatch submenu.
+    var isSelected: Bool = false
     /// Optional mark before the title. Type-erased on purpose: the dropdown is
     /// a generic component and has no business knowing about providers, but a
     /// list of four products reads far faster with their logos on it.
@@ -37,6 +40,7 @@ struct GlassDropdownItem: Identifiable {
         note: String? = nil,
         isEnabled: Bool = true,
         isDestructive: Bool = false,
+        isSelected: Bool = false,
         leading: AnyView? = nil,
         childrenWidth: CGFloat? = nil,
         children: [GlassDropdownItem] = [],
@@ -47,6 +51,7 @@ struct GlassDropdownItem: Identifiable {
         self.note = note
         self.isEnabled = isEnabled
         self.isDestructive = isDestructive
+        self.isSelected = isSelected
         self.leading = leading
         self.children = children
         self.childrenWidth = childrenWidth
@@ -137,7 +142,7 @@ struct GlassDropdown<Label: View>: View {
                     GlassDropdownRow(
                         item: item,
                         isHighlighted: highlightedIndex == index,
-                        isSelected: selectedIndex == index
+                        isSelected: selectedIndex == index || item.isSelected
                     ) { selected in
                         if !staysOpenOnPick { openBinding.wrappedValue = false }
                         selected.action()
@@ -276,7 +281,7 @@ private struct GlassDropdownRow: View {
     private var submenu: some View {
         VStack(alignment: .leading, spacing: 3) {
             ForEach(item.children) { child in
-                GlassDropdownRow(item: child, isHighlighted: false, isSelected: false) { selected in
+                GlassDropdownRow(item: child, isHighlighted: false, isSelected: child.isSelected) { selected in
                     submenuOpen = false
                     onSelect(selected)
                 }

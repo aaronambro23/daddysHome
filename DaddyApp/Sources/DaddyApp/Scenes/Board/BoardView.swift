@@ -231,7 +231,7 @@ struct BoardView: View {
             items: [
                 GlassDropdownItem(id: "all", title: "All projects") { applyScope(.all) },
                 GlassDropdownItem(id: "unassigned", title: "Unassigned") { applyScope(.unassigned) }
-            ] + store.projects.map { project in
+            ] + store.rootProjects.map { project in
                 GlassDropdownItem(id: project.id, title: project.name) {
                     applyScope(.project(project.id))
                     // The rail and the board share one idea of "the project
@@ -367,18 +367,16 @@ struct BoardView: View {
                         status: $editorStatus,
                         priority: $editorPriority,
                         projectID: $editorProjectID,
-                        projects: store.projects,
+                        projects: store.rootProjects,
                         onSave: saveEditor
                     )
 
                     GlassHairline()
 
                     HStack(spacing: 7) {
-                        Button("send to orchestrator") {
-                            guard let item = selectedItem else { return }
-                            sendToOrchestrator(item)
+                        if let item = selectedItem {
+                            WorkItemDispatchMenu(item: item, onWillDispatch: saveEditor)
                         }
-                        .buttonStyle(.inset)
 
                         Button("delete") {
                             guard let id = store.selectedOrchestratorWorkItemID else { return }
@@ -412,6 +410,8 @@ struct BoardView: View {
     private func installKeyboardMonitor() {
         guard keyboardMonitor == nil else { return }
         keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard store.workspace == .board else { return event }
+
             let chords = event.modifierFlags.intersection([.command, .option, .control, .shift])
             guard event.keyCode == 53, chords.isEmpty else { return event }
 
@@ -425,9 +425,7 @@ struct BoardView: View {
                 closeDetail()
                 return nil
             }
-            withAnimation(.smooth(duration: 0.24)) {
-                store.workspace = store.workspaceBeforeBoard
-            }
+            store.workspace = store.workspaceBeforeBoard
             return nil
         }
     }
@@ -449,9 +447,12 @@ struct BoardView: View {
 
     /// The board follows Fleet's current project so cards from one repo do not
     /// keep sitting on another. "All" and "Unassigned" are explicit overrides.
+    /// Subdirectories are not projects on this picker — fold them into the
+    /// Documents-level folder they sit in.
     private func syncScopeFromProject() {
         if let id = store.selectedProjectID {
-            applyScope(.project(id))
+            let rootID = store.project(id)?.parentID ?? id
+            applyScope(.project(rootID))
         } else {
             applyScope(.all)
         }
@@ -531,9 +532,7 @@ struct BoardView: View {
     /// board selects the item and hands the window over.
     private func sendToOrchestrator(_ item: OrchestratorWorkItem) {
         store.selectedOrchestratorWorkItemID = item.id
-        withAnimation(.smooth(duration: 0.24)) {
-            store.workspace = .orchestrator
-        }
+        store.workspace = .orchestrator
     }
 
     private func syncEditor() {

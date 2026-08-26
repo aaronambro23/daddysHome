@@ -47,6 +47,15 @@ final class DroppableTerminalView: TerminalView {
         registerForDraggedTypes([.fileURL, .tiff, .png])
     }
 
+    /// Cursor (and the other TUIs) enable mouse reporting, and SwiftTerm's
+    /// `mouseDown` then sends the click to the child and returns without
+    /// becoming first responder. After the board steals focus, a click that
+    /// never focuses is a session you cannot type into.
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
     // MARK: NSDraggingDestination
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
