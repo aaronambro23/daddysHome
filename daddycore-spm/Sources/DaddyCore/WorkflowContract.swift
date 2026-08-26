@@ -143,6 +143,20 @@ public enum WorkflowContract {
         - **Do** read the most recent documents in `\(handoffDirectory)/` before
           starting, so you know what came before and what was left undone.
 
+        ## 7. Commits
+
+        Applies in both modes. When asked to commit, do not run `git add` /
+        `git commit` / `git push` yourself. Use the system-wide `commit`
+        command — it adds, commits and pushes as one step.
+
+        - No quotes, no extra flags. The message is a single shell token.
+        - Think like a programmer: name the change, not a sentence.
+        - PascalCase per distinct thing that changed, hyphens between them.
+
+        ```
+        commit UiUxFixes-KanbanColumnChange-DockBug
+        ```
+
         ---
 
         _Managed by Daddy. Regenerated on install; edit the project's own docs
