@@ -1,8 +1,10 @@
 import SwiftUI
+import AppKit
 
 struct RootView: View {
     @Environment(MockStore.self) private var store
     @State private var utilityPanel: UtilityPanel?
+    @State private var keyboardMonitor: Any?
 
     var body: some View {
         ZStack {
@@ -32,7 +34,16 @@ struct RootView: View {
                     // to the window edges because it *was* the window; with the
                     // rail permanently beside it, the rail would sit flush
                     // against the frame while every other panel floats.
-                    FleetView()
+                    Group {
+                        switch store.workspace {
+                        case .fleet:
+                            FleetView()
+                        case .orchestrator:
+                            OrchestratorView()
+                        case .board:
+                            BoardView()
+                        }
+                    }
                         .padding(.horizontal, 18)
                         .padding(.vertical, 18)
 
@@ -67,12 +78,18 @@ struct RootView: View {
             // in the app that belongs to no panel, and reaching it means
             // `TitlebarAccessory`; content drawn under a transparent titlebar
             // does not receive clicks.
-            TitlebarAccessory(size: CGSize(width: 44, height: 28)) {
-                settingsButton
+            TitlebarAccessory(size: CGSize(width: 146, height: 28)) {
+                HStack(spacing: 6) {
+                    boardButton
+                    orchestratorButton
+                    settingsButton
+                }
             }
             .frame(width: 0, height: 0)
         }
         .preferredColorScheme(.dark)
+        .onAppear { installKeyboardMonitor() }
+        .onDisappear { removeKeyboardMonitor() }
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
@@ -95,6 +112,76 @@ struct RootView: View {
         .opacity(utilityPanel == .settings ? 1 : 0.6)
         .padding(.trailing, 12)
         .help("Settings")
+    }
+
+    private var boardButton: some View {
+        Button(action: toggleBoard) {
+            Image(systemName: "rectangle.split.3x1")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(
+                    store.workspace == .board
+                        ? DaddyTheme.accent : DaddyTheme.textSecondary
+                )
+                .frame(width: 28, height: 28)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .opacity(store.workspace == .board ? 1 : 0.6)
+        .help("Board")
+    }
+
+    private var orchestratorButton: some View {
+        Button {
+            withAnimation(.smooth(duration: 0.24)) {
+                store.workspace = store.workspace == .orchestrator ? .fleet : .orchestrator
+            }
+        } label: {
+            Image(systemName: "sparkles")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(
+                    store.workspace == .orchestrator
+                        ? DaddyTheme.accent : DaddyTheme.textSecondary
+                )
+                .frame(width: 28, height: 28)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .opacity(store.workspace == .orchestrator ? 1 : 0.6)
+        .help("Orchestrator")
+        .keyboardShortcut("o", modifiers: .control)
+    }
+
+    private func toggleBoard() {
+        withAnimation(.smooth(duration: 0.24)) {
+            store.workspace = store.workspace == .board ? .fleet : .board
+        }
+    }
+
+    /// ⌘K has to live here, not on the titlebar button and not in `FleetView`.
+    ///
+    /// `.keyboardShortcut` on a control inside `TitlebarAccessory` is a
+    /// SwiftUI view that is not in the window's key-view loop, so the chord
+    /// never fires once the terminal has first responder — the same reason
+    /// ⌘B is an `NSEvent` monitor. `FleetView`'s monitor dies with the fleet
+    /// when the board opens, so close would have no listener. Root owns both.
+    private func installKeyboardMonitor() {
+        guard keyboardMonitor == nil else { return }
+        keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let chords = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            guard chords == [.command],
+                  event.charactersIgnoringModifiers?.lowercased() == "k" else {
+                return event
+            }
+            toggleBoard()
+            return nil
+        }
+    }
+
+    private func removeKeyboardMonitor() {
+        if let keyboardMonitor {
+            NSEvent.removeMonitor(keyboardMonitor)
+            self.keyboardMonitor = nil
+        }
     }
 
     private func toggleUtilityPanel(_ panel: UtilityPanel) {

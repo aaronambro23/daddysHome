@@ -254,6 +254,14 @@ struct AgentDetailHeader: View {
             GlassDropdownItem(id: "docs", title: "View project docs") {
                 onOpenProgress(agent.projectID)
             },
+            GlassDropdownItem(
+                id: "shell",
+                title: store.userShellCollapsed ? "Show your shell" : "Hide your shell"
+            ) {
+                withAnimation(.smooth(duration: 0.3)) {
+                    store.userShellCollapsed.toggle()
+                }
+            },
         ]
 
         if agent.isLive {

@@ -15,6 +15,8 @@ enum Defaults {
         case approvalPolicy = "daddy.approvalPolicy"
         case workMode = "daddy.workMode"
         case terminalFontSize = "daddy.terminalFontSize"
+        case orchestratorModel = "daddy.orchestratorModel"
+        case userShellCollapsed = "daddy.userShellCollapsed"
     }
 
     static func set(_ value: String, for key: Key) {
@@ -22,6 +24,10 @@ enum Defaults {
     }
 
     static func set(_ value: Double, for key: Key) {
+        UserDefaults.standard.set(value, forKey: key.rawValue)
+    }
+
+    static func set(_ value: Bool, for key: Key) {
         UserDefaults.standard.set(value, forKey: key.rawValue)
     }
 
@@ -34,5 +40,11 @@ enum Defaults {
     static func double(_ key: Key) -> Double? {
         guard UserDefaults.standard.object(forKey: key.rawValue) != nil else { return nil }
         return UserDefaults.standard.double(forKey: key.rawValue)
+    }
+
+    /// Nil when never chosen, so a stored `false` is not the same as unset.
+    static func bool(_ key: Key) -> Bool? {
+        guard UserDefaults.standard.object(forKey: key.rawValue) != nil else { return nil }
+        return UserDefaults.standard.bool(forKey: key.rawValue)
     }
 }
