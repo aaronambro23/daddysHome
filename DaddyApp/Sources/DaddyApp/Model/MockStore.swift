@@ -14,7 +14,17 @@ import DaddyCore
 @MainActor
 final class MockStore {
     // Workspace
-    var workspace: OrchestratorWorkspace = .fleet
+    var workspace: OrchestratorWorkspace = .fleet {
+        didSet {
+            // Where Escape sends you back to. Fleet's own focus state is
+            // separate, so returning to `.fleet` lands on the terminal if that
+            // is what was open, and on the grid otherwise.
+            if oldValue != .board { workspaceBeforeBoard = oldValue }
+        }
+    }
+
+    /// The workspace that was showing before the board was opened.
+    @ObservationIgnored private(set) var workspaceBeforeBoard: OrchestratorWorkspace = .fleet
 
     // Navigation
     var selectedProjectID: String?
@@ -217,6 +227,36 @@ final class MockStore {
 
     func childProjects(for projectID: String) -> [MockProject] {
         projects.filter { $0.parentID == projectID }
+    }
+
+    /// How many projects the rail shows before you ask it for the rest.
+    static let railPreviewCount = 8
+
+    /// The head of `rootProjects`, plus whichever one is selected.
+    ///
+    /// `ProjectScanner` finds every directory under `~/Documents` that looks
+    /// like code — dozens of them — and sorts them most-recently-modified
+    /// first. The top of that list is almost always the answer and the tail is
+    /// almost never it, so the rail folds to the head and offers the rest
+    /// behind one click. Nothing is filtered out; it is only folded.
+    ///
+    /// The selected project is appended wherever it sits, because otherwise
+    /// choosing something from the full list and letting the list fold again
+    /// would hide the very project you are working in — agents, badge and all.
+    var previewRootProjects: [MockProject] {
+        let roots = rootProjects
+        guard roots.count > Self.railPreviewCount else { return roots }
+
+        var shown = Array(roots.prefix(Self.railPreviewCount))
+
+        if let selected = selectedProject {
+            let rootID = selected.parentID ?? selected.id
+            if let root = roots.first(where: { $0.id == rootID }), !shown.contains(root) {
+                shown.append(root)
+            }
+        }
+
+        return shown
     }
 
     var liveAgentCount: Int {

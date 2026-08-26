@@ -64,6 +64,21 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
         try? format(item).write(to: url, atomically: true, encoding: .utf8)
     }
 
+    /// Removes a work item's Markdown file. The board can delete cards, and
+    /// without this the file would survive and reappear on the next load.
+    /// Searches every category folder rather than trusting `item.category`,
+    /// because the file may predate a category change.
+    func delete(_ item: OrchestratorWorkItem) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let fileName = "\(item.id.uuidString).md"
+        guard let files = try? allMarkdownFiles() else { return }
+        for file in files where file.lastPathComponent == fileName {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
     func saveConversation(_ snapshot: OrchestratorConversationSnapshot) {
         lock.lock()
         defer { lock.unlock() }

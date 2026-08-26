@@ -324,47 +324,16 @@ struct OrchestratorView: View {
 
     private var inspectorEditor: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("TITLE")
-                .sectionLabel()
-            TextField("Title", text: $inspectorTitle)
-                .textFieldStyle(.plain)
-                .padding(9)
-                .insetSurface(cornerRadius: 10)
-
-            Text("SUMMARY")
-                .sectionLabel()
-            TextEditor(text: $inspectorSummary)
-                .font(.system(size: 11))
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: 100)
-                .padding(7)
-                .insetSurface(cornerRadius: 10)
-
-            Picker("Category", selection: $inspectorCategory) {
-                ForEach(OrchestratorWorkCategory.allCases) { category in
-                    Text(category.title).tag(category)
-                }
-            }
-            Picker("Status", selection: $inspectorStatus) {
-                ForEach(OrchestratorWorkStatus.allCases, id: \.self) { status in
-                    Text(status.title).tag(status)
-                }
-            }
-            Picker("Priority", selection: $inspectorPriority) {
-                ForEach(OrchestratorPriority.allCases, id: \.self) { priority in
-                    Text(priority.rawValue.capitalized).tag(priority)
-                }
-            }
-            Picker("Project", selection: $inspectorProjectID) {
-                Text("No project").tag("")
-                ForEach(store.projects) { project in
-                    Text(project.name).tag(project.id)
-                }
-            }
-
-            Button("save work item") { saveInspector() }
-                .buttonStyle(.inset)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            WorkItemFields(
+                title: $inspectorTitle,
+                summary: $inspectorSummary,
+                category: $inspectorCategory,
+                status: $inspectorStatus,
+                priority: $inspectorPriority,
+                projectID: $inspectorProjectID,
+                projects: store.projects,
+                onSave: saveInspector
+            )
 
             GlassHairline()
 

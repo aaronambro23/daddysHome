@@ -1,9 +1,11 @@
 import Foundation
+import SwiftUI
 import DaddyCore
 
 enum OrchestratorWorkspace: String, Equatable {
     case fleet
     case orchestrator
+    case board
 }
 
 enum OrchestratorMessageRole: String, Codable, Equatable {
@@ -86,6 +88,34 @@ enum OrchestratorWorkCategory: String, CaseIterable, Codable, Identifiable, Hash
     }
 
     var folderName: String { rawValue }
+
+    /// Short enough for a group header in a 244pt column.
+    var boardTitle: String {
+        switch self {
+        case .bugs: return "BUGS"
+        case .uiux: return "UI/UX"
+        case .futureFeatures: return "FEATURES"
+        case .concepts: return "CONCEPTS"
+        case .other: return "OTHER"
+        }
+    }
+
+    /// Five hues you can tell apart at a glance, which is the whole job.
+    ///
+    /// Deliberately not drawn from the agent-state palette: `ready` green and
+    /// `working` amber mean something specific about a running process, and
+    /// reusing them for "this is a UI task" would make two unrelated things
+    /// look related. These are desaturated to sit on dark glass without
+    /// shouting over the card text.
+    var tint: Color {
+        switch self {
+        case .bugs: return Color(hex: "#ff8f8f")
+        case .uiux: return Color(hex: "#c9a7ff")
+        case .futureFeatures: return Color(hex: "#7fe0c4")
+        case .concepts: return Color(hex: "#ffcf7f")
+        case .other: return Color(hex: "#9aa4b2")
+        }
+    }
 }
 
 enum OrchestratorWorkStatus: String, CaseIterable, Codable, Hashable {
@@ -106,6 +136,36 @@ enum OrchestratorWorkStatus: String, CaseIterable, Codable, Hashable {
         case .blocked: return "BLOCKED"
         case .done: return "DONE"
         case .archived: return "ARCHIVED"
+        }
+    }
+}
+
+extension OrchestratorWorkStatus {
+    /// The columns the board actually shows.
+    ///
+    /// `inProgress` is deliberately absent. An agent is the thing doing the
+    /// work, so a card would never be dragged into a "doing" column and then
+    /// out of it again — dispatching *is* the transition. Items that already
+    /// carry `inProgress` (the Orchestrator's own tools can still set it) are
+    /// folded into DISPATCHED by `boardColumn` rather than disappearing.
+    /// `archived` is a column only when the board is asked to show it.
+    static let boardColumns: [OrchestratorWorkStatus] = [
+        .inbox, .refined, .dispatched, .blocked, .done
+    ]
+
+    /// Which visible column this status belongs in.
+    var boardColumn: OrchestratorWorkStatus {
+        self == .inProgress ? .dispatched : self
+    }
+
+    var boardTint: Color {
+        switch self {
+        case .inbox: return DaddyTheme.idle
+        case .refined: return DaddyTheme.accent
+        case .dispatched, .inProgress: return DaddyTheme.working
+        case .blocked: return DaddyTheme.failure
+        case .done: return DaddyTheme.ready
+        case .archived: return DaddyTheme.textVeryDim
         }
     }
 }
@@ -158,6 +218,24 @@ struct OrchestratorWorkItem: Identifiable, Codable, Hashable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
+}
+
+/// One category's run of cards inside one column. Collapse state is keyed by
+/// the pair, so folding BUGS away in DONE does not also fold it in INBOX.
+struct BoardGroupKey: Hashable {
+    let status: OrchestratorWorkStatus
+    let category: OrchestratorWorkCategory
+}
+
+/// Which project's cards the board is showing.
+///
+/// Not an optional project id, because "no project selected" and "items that
+/// belong to no project" are different questions and the board has to be able
+/// to ask both.
+enum BoardProjectScope: Hashable {
+    case all
+    case unassigned
+    case project(String)
 }
 
 struct PendingOrchestratorDispatch: Identifiable {

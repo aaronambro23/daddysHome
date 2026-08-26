@@ -28,6 +28,32 @@ struct WorkspaceRail: View {
     @Binding var pinned: Bool
     @State private var expandedProjectIDs: Set<String> = []
 
+    /// What is on disk under each project, and what you are doing to it.
+    /// Owned here rather than by the section, so expansion, selection and the
+    /// open directory watchers survive the section being rebuilt.
+    @State private var fileTree = FileTreeStore()
+
+    /// The project list is folded to the eight most recent by default.
+    @State private var showingAllProjects = false
+
+    /// True while a drag is somewhere over the rail.
+    ///
+    /// This exists because `.onHover` is silent during a drag session — AppKit
+    /// is not sending mouse-moved events, the pointer belongs to the drag — so
+    /// none of the hover machinery below can see a file being carried across
+    /// the rail. Without it, the rail collapses out from under a drag exactly
+    /// when it is most in the way.
+    @State private var dragHovering = false
+    @State private var dragClearTask: Task<Void, Never>?
+
+    /// The file tree's shortcuts, read from the event stream.
+    @State private var treeKeyMonitor: Any?
+
+    /// Disarms the tree on any click, so a click into a terminal hands the
+    /// keyboard straight back. A row click re-arms it on mouse-*up*, which is
+    /// after this fires.
+    @State private var treeClickMonitor: Any?
+
     /// Leaving the panel starts a short countdown instead of collapsing at
     /// once. Without it, clipping the edge on the way to the grid — or crossing
     /// the gap between the rail and its own popovers — slams it shut
@@ -68,6 +94,17 @@ struct WorkspaceRail: View {
     private static let collapseDelay: Duration = .milliseconds(200)
     private static let settleWindow: Duration = .milliseconds(360)
 
+    /// How long "no drag is over me" has to hold before it counts.
+    ///
+    /// Moving between two rows reports a leave and then an enter, with a gap
+    /// between them. Acting on the leave would schedule a collapse every time
+    /// the pointer crossed a row boundary.
+    private static let dragClearDelay: Duration = .milliseconds(400)
+
+    /// How long the rail stays open after a file lands, so you can see where
+    /// it went before it gets out of the way.
+    private static let postDropHold: Duration = .seconds(2)
+
     private var liveAgents: [MockAgent] {
         store.agents
             .filter(\.isLive)
@@ -81,7 +118,17 @@ struct WorkspaceRail: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        ProjectsSection(expandedProjectIDs: $expandedProjectIDs)
+                        ProjectsSection(
+                            expandedProjectIDs: $expandedProjectIDs,
+                            showingAllProjects: $showingAllProjects,
+                            fileTree: fileTree,
+                            // Pinned, or with a file in flight. There is no way
+                            // to pin the rail once a drag has started, so a
+                            // drag has to be able to unfold the tree itself.
+                            showsFileTree: pinned || dragHovering,
+                            actionsEnabled: pinned,
+                            onDragTarget: dragTargetChanged
+                        )
 
                         if !liveAgents.isEmpty {
                             GlassHairline()
@@ -115,6 +162,13 @@ struct WorkspaceRail: View {
         .glassPanel()
         // Hover follows the shape you can see, not the layout rectangle.
         .contentShape(Rectangle())
+        // Double-click anywhere on the rail pins it, the way double-clicking a
+        // title bar zooms a window. Aiming at a 10pt chevron to keep the thing
+        // open is a bad deal for the most common gesture there is.
+        //
+        // Rows are safe from this: a `Button` consumes its own clicks, so a
+        // double-click on a project or a file never reaches here.
+        .onTapGesture(count: 2) { togglePin() }
         // Anywhere on the panel keeps an open rail open.
         .onHover { hovering in
             pointerInPanel = hovering
@@ -138,10 +192,35 @@ struct WorkspaceRail: View {
                     hoverChanged()
                 }
         }
+        .onChange(of: fileTree.lastDropAt) { _, landed in
+            if landed != nil { holdOpenAfterDrop() }
+        }
+        .onAppear {
+            syncTreeRoots()
+            installTreeKeyMonitor()
+        }
+        .onChange(of: store.projects) { _, _ in syncTreeRoots() }
+        // A trashed or renamed project root is still a row until `MockStore`
+        // rescans, and it does that on a 30-second timer. Ask it now instead.
+        .onChange(of: fileTree.lastStructuralChangeAt) { _, changed in
+            if changed != nil { store.refreshProjects() }
+        }
+        .onChange(of: store.selectedProjectID) { _, _ in syncTreeRoots() }
+        .alert(
+            fileTree.errorMessage ?? "",
+            isPresented: Binding(
+                get: { fileTree.errorMessage != nil },
+                set: { if !$0 { fileTree.errorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        }
         .onDisappear {
             collapseTask?.cancel()
             expandTask?.cancel()
             settleTask?.cancel()
+            dragClearTask?.cancel()
+            removeTreeKeyMonitor()
         }
     }
 
@@ -234,7 +313,9 @@ struct WorkspaceRail: View {
 
             ScrollView {
                 VStack(spacing: 8) {
-                    ForEach(store.rootProjects) { project in
+                    // Folded the same way the open rail is. A strip of thirty
+                    // identical dots is not a glance at anything.
+                    ForEach(store.previewRootProjects) { project in
                         Button(action: {
                             withAnimation(.smooth(duration: 0.3)) {
                                 store.select(project: project.id)
@@ -289,6 +370,138 @@ struct WorkspaceRail: View {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 10)
+        .frame(maxHeight: .infinity)
+        // The drag equivalent of the hover trigger strip, and it belongs *on*
+        // the collapsed content rather than in an overlay above it.
+        //
+        // It was an overlay first, and that broke the rail outright: a
+        // `Color.clear` with a content shape is hit-testable like anything
+        // else, so a strip laid over the collapsed rail ate the hover that
+        // opens it and the click on the folder button underneath. Attached
+        // here it is the same region, but the buttons inside it are hit first
+        // and the drop target only catches what nothing else wanted.
+        //
+        // `accepts: false` on purpose: this opens the rail and then gets out
+        // of the way. The drag is still in flight, and the folder you actually
+        // want is a row that has not been drawn yet. It disappears with the
+        // collapsed branch, so an open rail lets its own rows take the drop.
+        .modifier(
+            FolderDropTarget(
+                accepts: false,
+                onFiles: { _ in },
+                onTargetChanged: dragTargetChanged,
+                onSpringLoad: {}
+            )
+        )
+    }
+
+    // MARK: The file tree's keyboard
+
+    /// Keeps `FileTreeStore` told which project roots exist and which one is
+    /// selected, so the key handler below can work out where a new file goes
+    /// without reaching into the environment from an event monitor.
+    private func syncTreeRoots() {
+        fileTree.setProjectRoots(store.rootProjects.map(\.path))
+
+        guard let selected = store.selectedProject else {
+            fileTree.setSelectedRoot(nil)
+            return
+        }
+        let rootID = selected.parentID ?? selected.id
+        fileTree.setSelectedRoot(store.project(rootID)?.path ?? selected.path)
+    }
+
+    private func installTreeKeyMonitor() {
+        if treeKeyMonitor == nil {
+            treeKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                handleTreeKey(event) ? nil : event
+            }
+        }
+
+        // Every click disarms the tree, and a click that lands on a row arms it
+        // again from the row's own action — which runs on mouse-up, after this.
+        // So clicking a terminal, the dashboard, or the rail's own header all
+        // give the keyboard back, without any of them needing to know the tree
+        // exists.
+        if treeClickMonitor == nil {
+            treeClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
+                fileTree.deactivate()
+                return event
+            }
+        }
+    }
+
+    private func removeTreeKeyMonitor() {
+        if let treeKeyMonitor { NSEvent.removeMonitor(treeKeyMonitor) }
+        treeKeyMonitor = nil
+        if let treeClickMonitor { NSEvent.removeMonitor(treeClickMonitor) }
+        treeClickMonitor = nil
+    }
+
+    /// Enter, ⌘⌫ and the rest — but only when all three gates are open.
+    ///
+    /// **Pinned**, because a hover rail is gone before your hand arrives.
+    /// **Armed**, meaning a tree row was the last thing clicked. **Not
+    /// renaming**, because the field owns every key while it is up.
+    ///
+    /// The middle one used to ask AppKit who held first responder, and that is
+    /// why Enter would stop working once a folder was expanded: first responder
+    /// moves during a relayout, so inserting rows was enough to make the tree go
+    /// deaf. What you last clicked cannot drift out from under you like that.
+    ///
+    /// `charactersIgnoringModifiers` rather than `characters`, so Option stays
+    /// out of it. On a Spanish layout Option is a compose layer and ⌥⌘C would
+    /// otherwise arrive as something that is not a "c" at all.
+    private func handleTreeKey(_ event: NSEvent) -> Bool {
+        guard pinned, fileTree.isActive, fileTree.renaming == nil else { return false }
+
+        let chord = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let character = event.charactersIgnoringModifiers?.lowercased() ?? ""
+
+        // Creating needs no selection: with nothing picked it lands in the
+        // selected project's root.
+        if let directory = fileTree.creationDirectory {
+            if chord == [.command], character == "n" {
+                fileTree.createFile(in: directory)
+                return true
+            }
+            if chord == [.command, .shift], character == "n" {
+                fileTree.createFolder(in: directory)
+                return true
+            }
+        }
+
+        // Finder's chord. Shift survives `charactersIgnoringModifiers`, so the
+        // key arrives as ">" rather than ".".
+        if chord == [.command, .shift], character == "." || character == ">" {
+            fileTree.toggleHiddenFiles()
+            return true
+        }
+
+        guard let path = fileTree.selection, let entry = fileTree.entry(at: path) else {
+            return false
+        }
+
+        // Return (36) and the keypad's own Enter (76).
+        if chord.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
+            fileTree.beginRenamingSelection()
+            return true
+        }
+        // 51 is Delete — the backspace key, which is what ⌘⌫ means on a Mac.
+        if chord == [.command], event.keyCode == 51 {
+            fileTree.trash(entry)
+            return true
+        }
+        if chord == [.command, .shift], character == "r" {
+            fileTree.revealInFinder(path)
+            return true
+        }
+        if chord == [.command, .option], character == "c" {
+            fileTree.copyPath(path)
+            return true
+        }
+
+        return false
     }
 
     // MARK: Behaviour
@@ -299,8 +512,12 @@ struct WorkspaceRail: View {
         setExpanded(pinned)
     }
 
-    /// Whether the pointer is on the rail at all, by either route.
-    private var pointerIsOver: Bool { pointerInTrigger || pointerInPanel }
+    /// Whether the pointer is on the rail at all, by any route.
+    ///
+    /// A drag counts. It is the same question — is this rail the thing the user
+    /// is currently pointed at — asked of a pointer that hover events cannot
+    /// see.
+    private var pointerIsOver: Bool { pointerInTrigger || pointerInPanel || dragHovering }
 
     /// One entry point for both hover targets, so the two can never disagree
     /// about what the pointer is doing.
@@ -323,7 +540,10 @@ struct WorkspaceRail: View {
     /// rail. Short enough to still feel like hover, long enough that a sweep
     /// past it is not an instruction.
     private func scheduleExpand() {
-        guard !expanded, !pinned, hoverExpansionEnabled else { return }
+        // `hoverExpansionEnabled` is `FleetView` suppressing hover after a
+        // transition, and it is about a pointer wandering past. A drag is not
+        // wandering, and refusing it would leave the file with nowhere to go.
+        guard !expanded, !pinned, hoverExpansionEnabled || dragHovering else { return }
 
         expandTask?.cancel()
         expandTask = Task {
@@ -360,6 +580,52 @@ struct WorkspaceRail: View {
             // refused rather than queued, so ask again now that the geometry
             // has stopped moving.
             if !pointerIsOver { scheduleCollapse() }
+        }
+    }
+
+    /// One entry point for every drop target in the rail, from the strip over
+    /// the collapsed edge down to the deepest folder row.
+    private func dragTargetChanged(_ targeted: Bool) {
+        dragClearTask?.cancel()
+        dragClearTask = nil
+
+        if targeted {
+            if !dragHovering {
+                dragHovering = true
+                // Carrying a file onto Daddy is a statement that you want
+                // Daddy. Left alone, macOS keeps a background window behind
+                // whatever you dragged from until its own raise-on-hover dwell
+                // elapses, which is a long time to hold a file over a window
+                // you cannot see.
+                NSApp.activate()
+            }
+            hoverChanged()
+            return
+        }
+
+        dragClearTask = Task {
+            try? await Task.sleep(for: Self.dragClearDelay)
+            guard !Task.isCancelled else { return }
+            dragHovering = false
+            hoverChanged()
+        }
+    }
+
+    /// Held open after a drop lands.
+    ///
+    /// Collapsing the instant the file is released would be the fastest thing
+    /// and the least useful: a drop into a spring-loaded folder three levels
+    /// down is exactly the case where you want to see it arrive. Moving the
+    /// pointer onto the rail during the hold picks it up as ordinary hover.
+    private func holdOpenAfterDrop() {
+        dragClearTask?.cancel()
+        dragHovering = true
+
+        dragClearTask = Task {
+            try? await Task.sleep(for: Self.postDropHold)
+            guard !Task.isCancelled else { return }
+            dragHovering = false
+            hoverChanged()
         }
     }
 

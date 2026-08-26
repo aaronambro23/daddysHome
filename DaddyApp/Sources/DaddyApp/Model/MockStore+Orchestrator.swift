@@ -333,6 +333,101 @@ extension MockStore {
         orchestratorMarkdownStore.save(item)
     }
 
+    /// The one way a work item enters the app. The Ollama `create_work_item`
+    /// tool and the board's "+" button both come through here, so there is a
+    /// single place where "new item" means insert, select and write to disk.
+    func addWorkItem(_ item: OrchestratorWorkItem) {
+        orchestratorWorkItems.insert(item, at: 0)
+        selectedOrchestratorWorkItemID = item.id
+        orchestratorMarkdownStore.save(item)
+    }
+
+    func deleteWorkItem(_ id: UUID) {
+        guard let index = orchestratorWorkItems.firstIndex(where: { $0.id == id }) else { return }
+        let item = orchestratorWorkItems.remove(at: index)
+        if selectedOrchestratorWorkItemID == id { selectedOrchestratorWorkItemID = nil }
+        orchestratorMarkdownStore.delete(item)
+    }
+
+    /// Moving a card between columns. Returns false when nothing changed, so a
+    /// drop onto the column a card already sits in does not churn `updatedAt`
+    /// and reshuffle the column under the cursor.
+    /// `category` is supplied when the drop landed on a category group rather
+    /// than on bare column space, which is how a card gets refiled and moved
+    /// in one gesture.
+    @discardableResult
+    func moveWorkItem(
+        _ id: UUID,
+        to status: OrchestratorWorkStatus,
+        category: OrchestratorWorkCategory? = nil
+    ) -> Bool {
+        guard var item = workItem(id) else { return false }
+        let newCategory = category ?? item.category
+        guard item.status != status || item.category != newCategory else { return false }
+
+        // Recategorising moves the file between category folders, which
+        // `OrchestratorMarkdownStore.save` already handles: it deletes any
+        // same-named copy sitting in another folder before writing.
+        item.status = status
+        item.category = newCategory
+        item.updatedAt = Date()
+        replaceWorkItem(item)
+        return true
+    }
+
+    /// Work items are Markdown on disk, and the Orchestrator's tools are not
+    /// the only writer — a dispatched agent can be told to edit one, and so
+    /// can you, in any editor. `loadWorkItems()` otherwise runs once at launch.
+    func reloadWorkItems() {
+        let onDisk = orchestratorMarkdownStore.loadWorkItems()
+        guard onDisk != orchestratorWorkItems else { return }
+        orchestratorWorkItems = onDisk
+        if let selected = selectedOrchestratorWorkItemID,
+           !onDisk.contains(where: { $0.id == selected }) {
+            selectedOrchestratorWorkItemID = nil
+        }
+    }
+
+    /// The board's query. `scope` is three-way, not a filter: `.all` ignores
+    /// the project entirely, `.unassigned` is the bucket a capture with no
+    /// project lands in, `.project(id)` is one project.
+    func boardWorkItems(
+        scope: BoardProjectScope,
+        category: OrchestratorWorkCategory?,
+        includeArchived: Bool
+    ) -> [OrchestratorWorkItem] {
+        orchestratorWorkItems.filter { item in
+            switch scope {
+            case .all: break
+            case .unassigned: if item.projectID != nil { return false }
+            case .project(let id): if item.projectID != id { return false }
+            }
+            if let category, item.category != category { return false }
+            if !includeArchived, item.status == .archived { return false }
+            return true
+        }
+        .sorted(by: Self.boardOrder)
+    }
+
+    /// Urgent first, then most recently touched. There is no manual ordering
+    /// within a column — that would need a persisted index in the front
+    /// matter, and the board is deliberately minimal for now.
+    private static func boardOrder(_ a: OrchestratorWorkItem, _ b: OrchestratorWorkItem) -> Bool {
+        let ra = priorityRank(a.priority)
+        let rb = priorityRank(b.priority)
+        if ra != rb { return ra < rb }
+        return a.updatedAt > b.updatedAt
+    }
+
+    private static func priorityRank(_ priority: OrchestratorPriority) -> Int {
+        switch priority {
+        case .urgent: return 0
+        case .high: return 1
+        case .medium: return 2
+        case .low: return 3
+        }
+    }
+
     func prepareOrchestratorDispatch(
         for item: OrchestratorWorkItem,
         agent: AgentKind,
@@ -491,13 +586,11 @@ extension MockStore {
                 rawCapture: args["raw_capture"]?.stringValue ?? summary,
                 category: category,
                 priority: normalizePriority(args["priority"]?.stringValue),
-                projectID: args["project_id"]?.stringValue,
+                projectID: args["project_id"]?.stringValue ?? selectedProjectID,
                 attachmentIDs: attachmentIDs(from: args["attachment_ids"])
                     ?? latestAttachmentIDs(in: key)
             )
-            orchestratorWorkItems.insert(item, at: 0)
-            selectedOrchestratorWorkItemID = item.id
-            orchestratorMarkdownStore.save(item)
+            addWorkItem(item)
             return ToolResult(content: "Created work item \(item.id.uuidString): \(item.title)", needsApproval: false)
 
         case "update_work_item":

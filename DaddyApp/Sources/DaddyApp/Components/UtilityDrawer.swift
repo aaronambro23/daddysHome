@@ -174,6 +174,7 @@ private struct SettingsUtilityPanel: View {
         ("⌃⇥", "Switch between active chat sessions"),
         ("⌘B", "Toggle sidebar directory menu"),
         ("⌃O", "Open or close the Orchestrator"),
+        ("⌘K", "Open or close the Board"),
         ("⎋", "Goes to the agent, not to Daddy"),
     ]
 
