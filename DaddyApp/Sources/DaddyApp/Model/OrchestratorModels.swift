@@ -129,8 +129,8 @@ enum OrchestratorWorkStatus: String, CaseIterable, Codable, Hashable {
 
     var title: String {
         switch self {
-        case .inbox: return "INBOX"
-        case .refined: return "REFINED"
+        case .inbox: return "BACKLOG"
+        case .refined: return "VERIFY"
         case .dispatched: return "DISPATCHED"
         case .inProgress: return "IN PROGRESS"
         case .blocked: return "BLOCKED"
@@ -143,27 +143,37 @@ enum OrchestratorWorkStatus: String, CaseIterable, Codable, Hashable {
 extension OrchestratorWorkStatus {
     /// The columns the board actually shows.
     ///
-    /// `inProgress` is deliberately absent. An agent is the thing doing the
-    /// work, so a card would never be dragged into a "doing" column and then
-    /// out of it again — dispatching *is* the transition. Items that already
-    /// carry `inProgress` (the Orchestrator's own tools can still set it) are
-    /// folded into DISPATCHED by `boardColumn` rather than disappearing.
-    /// `archived` is a column only when the board is asked to show it.
+    /// Capture → agent → did it work → done. There is no "refined" gate and
+    /// no blocked graveyard: an agent is the thing doing the work, so
+    /// dispatching *is* the start, and a card that cannot move still belongs
+    /// in the pile, not in a column of its own.
+    ///
+    /// `inProgress` and `blocked` still exist on disk (tools and old files
+    /// can set them). They are folded into a visible column by `boardColumn`
+    /// rather than dropping the card. `archived` is a column only when the
+    /// board is asked to show it.
     static let boardColumns: [OrchestratorWorkStatus] = [
-        .inbox, .refined, .dispatched, .blocked, .done
+        .inbox, .dispatched, .refined, .done
     ]
+
+    /// Statuses the inspector will let you pick. Hidden cases stay decodable
+    /// so old files do not vanish; they just sit in the column they fold into.
+    static let editableStatuses: [OrchestratorWorkStatus] = boardColumns + [.archived]
 
     /// Which visible column this status belongs in.
     var boardColumn: OrchestratorWorkStatus {
-        self == .inProgress ? .dispatched : self
+        switch self {
+        case .inProgress: return .dispatched
+        case .blocked: return .inbox
+        default: return self
+        }
     }
 
     var boardTint: Color {
         switch self {
-        case .inbox: return DaddyTheme.idle
+        case .inbox, .blocked: return DaddyTheme.idle
         case .refined: return DaddyTheme.accent
         case .dispatched, .inProgress: return DaddyTheme.working
-        case .blocked: return DaddyTheme.failure
         case .done: return DaddyTheme.ready
         case .archived: return DaddyTheme.textVeryDim
         }

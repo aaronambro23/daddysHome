@@ -541,7 +541,7 @@ struct BoardView: View {
         editorTitle = item.title
         editorSummary = item.summary
         editorCategory = item.category
-        editorStatus = item.status
+        editorStatus = item.status.boardColumn
         editorPriority = item.priority
         editorProjectID = item.projectID ?? ""
     }

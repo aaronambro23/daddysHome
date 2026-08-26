@@ -122,6 +122,17 @@ final class MockStore {
     /// Posts a notification when a background session wants input.
     var notifyOnReady: Bool = true
 
+    /// Agents already handled for the current `.ready` episode — either we
+    /// bounced for them, or you were looking at the app when they went idle.
+    /// Cleared when they leave `.ready`, so the next wait can notify again.
+    @ObservationIgnored private var signaledReadyIDs: Set<String> = []
+
+    /// Ready agents that bounced while we were in the background and have not
+    /// been seen yet. Drives the Dock badge.
+    @ObservationIgnored private var unreadReadyIDs: Set<String> = []
+
+    @ObservationIgnored private var attentionRequestID: Int?
+
     /// Point size for both terminals. A change is a real font reset and a
     /// TIOCSWINSZ at the far end, so surfaces apply it only when it moves.
     var terminalFontSize: Double = 11.5 {
@@ -816,6 +827,7 @@ final class MockStore {
     private func discard(_ agentID: String, sessionID: String?) {
         agents.removeAll { $0.id == agentID }
         detailHistory.removeAll { $0 == agentID }
+        forgetReadyAttention(agentID)
         persistSessions()
 
         if selectedAgentID == agentID {
@@ -980,18 +992,15 @@ final class MockStore {
                     $0.lastOutputAt = live.lastOutputAt
                 }
 
-                let becameReady: Bool
-                if case .ready = newState, case .ready = oldState {
-                    becameReady = false
-                } else if case .ready = newState {
-                    becameReady = true
-                } else {
-                    becameReady = false
-                }
-
-                if becameReady, notifyOnReady, !NSApplication.shared.isActive {
-                    updateDockBadge()
-                    NSApplication.shared.requestUserAttention(.criticalRequest)
+                switch (oldState, newState) {
+                case (.ready, .ready):
+                    break
+                case (_, .ready):
+                    signalReadyIfNeeded(agent.id)
+                case (.ready, _):
+                    forgetReadyAttention(agent.id)
+                default:
+                    break
                 }
             }
 
@@ -1018,6 +1027,7 @@ final class MockStore {
                     }
 
                     mutate(agent.id) { $0.state = .exited(exitCode: pty.exitCode ?? 0) }
+                    forgetReadyAttention(agent.id)
                     repairSelectionAfterExit(agent.id)
                 }
             }
@@ -1047,10 +1057,45 @@ final class MockStore {
         body(&agents[idx])
     }
 
-    /// Updates the Dock icon badge to show the count of ready agents.
+    /// Bounce once per ready episode while we are in the background.
+    ///
+    /// `.criticalRequest` keeps bouncing until the Dock icon is clicked, which
+    /// is why the same wait used to re-animate after ⌘Tab or a window click.
+    /// State detection also flickers through `.ready`; without the signaled
+    /// set that re-issues the request every time.
+    private func signalReadyIfNeeded(_ agentID: String) {
+        guard signaledReadyIDs.insert(agentID).inserted else { return }
+        guard notifyOnReady, !NSApplication.shared.isActive else { return }
+
+        unreadReadyIDs.insert(agentID)
+        updateDockBadge()
+        attentionRequestID = NSApplication.shared.requestUserAttention(.informationalRequest)
+    }
+
+    /// You have seen the app — whatever is waiting is no longer news.
+    func acknowledgeReadyAttention() {
+        if let id = attentionRequestID {
+            NSApplication.shared.cancelUserAttentionRequest(id)
+            attentionRequestID = nil
+        }
+        unreadReadyIDs.removeAll()
+        for agent in agents {
+            if case .ready = agent.state {
+                signaledReadyIDs.insert(agent.id)
+            }
+        }
+        updateDockBadge()
+    }
+
+    private func forgetReadyAttention(_ agentID: String) {
+        signaledReadyIDs.remove(agentID)
+        if unreadReadyIDs.remove(agentID) != nil {
+            updateDockBadge()
+        }
+    }
+
     private func updateDockBadge() {
-        let readyCount = agents.filter { if case .ready = $0.state { return true } else { return false } }.count
-        NSApplication.shared.dockTile.badgeLabel = readyCount > 0 ? "\(readyCount)" : ""
+        NSApplication.shared.dockTile.badgeLabel = unreadReadyIDs.isEmpty ? "" : "\(unreadReadyIDs.count)"
     }
 
 }

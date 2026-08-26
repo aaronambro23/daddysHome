@@ -41,6 +41,13 @@ struct DaddyAppEntry: App {
                     // it spawned — keeps running after the window closes.
                     store.shutdownAllRealSessions()
                 }
+                .onReceive(
+                    NotificationCenter.default.publisher(
+                        for: NSApplication.didBecomeActiveNotification
+                    )
+                ) { _ in
+                    store.acknowledgeReadyAttention()
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)

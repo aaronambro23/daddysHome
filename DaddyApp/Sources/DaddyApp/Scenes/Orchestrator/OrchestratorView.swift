@@ -610,7 +610,7 @@ struct OrchestratorView: View {
         inspectorTitle = item.title
         inspectorSummary = item.summary
         inspectorCategory = item.category
-        inspectorStatus = item.status
+        inspectorStatus = item.status.boardColumn
         inspectorPriority = item.priority
         inspectorProjectID = item.projectID ?? store.selectedProjectID ?? ""
         if let agent = AgentKind(rawValue: item.linkedSessionIDs.first.flatMap { id in store.agents.first { $0.id == id }?.agent.rawValue } ?? "") {

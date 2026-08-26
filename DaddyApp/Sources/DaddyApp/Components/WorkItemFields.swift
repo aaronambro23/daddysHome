@@ -78,7 +78,7 @@ struct WorkItemFields: View {
                 }
             }
             Picker("Status", selection: $status) {
-                ForEach(OrchestratorWorkStatus.allCases, id: \.self) { status in
+                ForEach(OrchestratorWorkStatus.editableStatuses, id: \.self) { status in
                     Text(status.title).tag(status)
                 }
             }
