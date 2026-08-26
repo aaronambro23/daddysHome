@@ -85,6 +85,7 @@ struct ShellPane: View {
             }
 
             newTabButton
+            collapseButton
                 .padding(.trailing, 8)
         }
         .frame(height: 38)
@@ -156,6 +157,22 @@ struct ShellPane: View {
         .onHover { plusHovering = $0 }
         .animation(.easeOut(duration: 0.14), value: plusHovering)
         .help("New shell in this project")
+    }
+
+    private var collapseButton: some View {
+        Button {
+            withAnimation(.smooth(duration: 0.3)) {
+                store.userShellCollapsed = true
+            }
+        } label: {
+            Image(systemName: "arrow.right.to.line")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(DaddyTheme.textMuted)
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Hide shell — session takes full width")
     }
 
     /// `daddy`, `daddy 2`, `daddy 3` — the project name, then the shell's own

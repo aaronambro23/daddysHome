@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// The editable face of an `OrchestratorWorkItem`.
 ///
@@ -28,6 +29,8 @@ struct WorkItemFields: View {
     /// freshly created card commits with one keystroke.
     let onSave: () -> Void
 
+    @State private var copied = false
+
     init(
         title: Binding<String>,
         summary: Binding<String>,
@@ -52,8 +55,12 @@ struct WorkItemFields: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("TITLE")
-                .workItemFieldLabel()
+            HStack {
+                Text("TITLE")
+                    .workItemFieldLabel()
+                Spacer(minLength: 0)
+                copyButton
+            }
             titleField
 
             Text("SUMMARY")
@@ -113,6 +120,35 @@ struct WorkItemFields: View {
             .onSubmit(onSave)
             .padding(9)
             .insetSurface(cornerRadius: 10)
+    }
+
+    private var copyButton: some View {
+        Button(action: copyTitleAndSummary) {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(copied ? DaddyTheme.ready : DaddyTheme.textMuted)
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Copy title: summary")
+    }
+
+    /// What you paste into an agent session: `Title: summary`. Empty summary
+    /// drops the colon so you are not left with a trailing separator.
+    private func copyTitleAndSummary() {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = trimmedSummary.isEmpty
+            ? trimmedTitle
+            : "\(trimmedTitle): \(trimmedSummary)"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copied = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.2))
+            copied = false
+        }
     }
 }
 

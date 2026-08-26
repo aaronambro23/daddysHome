@@ -128,6 +128,12 @@ final class MockStore {
         didSet { Defaults.set(terminalFontSize, for: .terminalFontSize) }
     }
 
+    /// Hide the right-hand shell in focus so the agent takes the full width.
+    /// One choice for every project, until you change it.
+    var userShellCollapsed: Bool = false {
+        didSet { Defaults.set(userShellCollapsed, for: .userShellCollapsed) }
+    }
+
     static let terminalFontRange: ClosedRange<Double> = 9...20
 
     func nudgeTerminalFont(by delta: Double) {
@@ -1059,6 +1065,9 @@ extension MockStore {
         if let size = Defaults.double(.terminalFontSize),
            Self.terminalFontRange.contains(size) {
             terminalFontSize = size
+        }
+        if let collapsed = Defaults.bool(.userShellCollapsed) {
+            userShellCollapsed = collapsed
         }
     }
 

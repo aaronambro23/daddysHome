@@ -53,11 +53,13 @@ struct BoardView: View {
             // Cheap, and the alternative is a board that quietly lies about
             // what is on disk after an agent edited a work item.
             store.reloadWorkItems()
+            syncScopeFromProject()
             syncEditor()
             installKeyboardMonitor()
         }
         .onDisappear { removeKeyboardMonitor() }
         .onChange(of: store.selectedOrchestratorWorkItemID) { _, _ in syncEditor() }
+        .onChange(of: store.selectedProjectID) { _, _ in syncScopeFromProject() }
     }
 
     // MARK: - Board
@@ -227,11 +229,11 @@ struct BoardView: View {
     private var scopePicker: some View {
         GlassDropdown(
             items: [
-                GlassDropdownItem(id: "all", title: "All projects") { scope = .all },
-                GlassDropdownItem(id: "unassigned", title: "Unassigned") { scope = .unassigned }
+                GlassDropdownItem(id: "all", title: "All projects") { applyScope(.all) },
+                GlassDropdownItem(id: "unassigned", title: "Unassigned") { applyScope(.unassigned) }
             ] + store.projects.map { project in
                 GlassDropdownItem(id: project.id, title: project.name) {
-                    scope = .project(project.id)
+                    applyScope(.project(project.id))
                     // The rail and the board share one idea of "the project
                     // you are in", so picking here follows you back to Fleet.
                     store.select(project: project.id)
@@ -443,6 +445,29 @@ struct BoardView: View {
 
     private func closeDetail() {
         store.selectedOrchestratorWorkItemID = nil
+    }
+
+    /// The board follows Fleet's current project so cards from one repo do not
+    /// keep sitting on another. "All" and "Unassigned" are explicit overrides.
+    private func syncScopeFromProject() {
+        if let id = store.selectedProjectID {
+            applyScope(.project(id))
+        } else {
+            applyScope(.all)
+        }
+    }
+
+    private func applyScope(_ new: BoardProjectScope) {
+        scope = new
+        guard let item = selectedItem else { return }
+        switch new {
+        case .all:
+            break
+        case .unassigned:
+            if item.projectID != nil { closeDetail() }
+        case .project(let id):
+            if item.projectID != id { closeDetail() }
+        }
     }
 
     private func projectName(for item: OrchestratorWorkItem) -> String? {

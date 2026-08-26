@@ -98,13 +98,22 @@ struct FleetView: View {
             // pane keeps its width to the pixel — no reflow, ever — and the
             // room it moves into is made by parking your own shell offscreen
             // for as long as the rail is open.
-            let layoutX = (isDetail ? sidebarNarrow : sidebarWidth) + gap
+            //
+            // Collapsing the shell is the exception: there is no parked pane
+            // to steal space from, so the session lays out against the rail
+            // that is actually showing and takes whatever is left.
+            let usePushLayout = isDetail && !store.userShellCollapsed
+            let layoutX = (usePushLayout ? sidebarNarrow : sidebarWidth) + gap
             let contentWidth = max(0, geo.size.width - layoutX)
-            let railPush = isDetail && sidebarExpanded ? sidebarWide - sidebarNarrow : 0
+            let railPush = usePushLayout && sidebarExpanded ? sidebarWide - sidebarNarrow : 0
             let contentX = layoutX + railPush
             let terminal = terminalFrame(in: geo.size, contentX: contentX, contentWidth: contentWidth)
-            // Focus keeps its own shell only while the rail is out of the way.
-            let shellVisible = isDetail && !sidebarExpanded
+            // Focus keeps its own shell only while the rail is out of the way
+            // and the shell has not been collapsed for a full-width session.
+            let shellVisible = isDetail && !sidebarExpanded && !store.userShellCollapsed
+            // Always the focus-with-narrow-rail size, even while collapsed —
+            // parking at a different width would TIOCSWINSZ a hidden shell.
+            let parkedShellWidth = shellWidth(for: max(0, geo.size.width - sidebarNarrow - gap))
 
             ZStack(alignment: .topLeading) {
                 middleColumn(
@@ -138,7 +147,7 @@ struct FleetView: View {
                 // would hand the child a 0-column TIOCSWINSZ, which is not a
                 // terminal size any shell should be asked to lay out for.
                 ShellPane(project: store.selectedProject)
-                    .frame(width: shellWidth(for: contentWidth), height: terminal.height)
+                    .frame(width: parkedShellWidth, height: terminal.height)
                     // Offscreen on the fleet, and offscreen again while an open
                     // rail is borrowing its space. Its width never changes, so
                     // it comes back to the same shell it left.
@@ -152,6 +161,11 @@ struct FleetView: View {
                     .opacity(shellVisible ? 1 : 0)
                     .allowsHitTesting(shellVisible)
                     .accessibilityHidden(!shellVisible)
+
+                if isDetail, store.userShellCollapsed {
+                    restoreShellHandle
+                        .offset(x: terminal.maxX - 40, y: terminal.minY + 8)
+                }
 
                 // Last, so the rail owns its edge outright: nothing can draw
                 // over it mid-animation, while the column it displaces slides
@@ -189,6 +203,7 @@ struct FleetView: View {
             // transactions on one property.
             .animation(.smooth(duration: 0.3), value: progressPanelOpen)
             .animation(.smooth(duration: 0.3), value: isDetail)
+            .animation(.smooth(duration: 0.3), value: store.userShellCollapsed)
         }
         .onAppear { installKeyboardMonitor() }
         .onDisappear { removeKeyboardMonitor() }
@@ -214,12 +229,15 @@ struct FleetView: View {
     ) -> CGRect {
         if isDetail {
             // Below the toolbar, with the same gap under it that separates the
-            // two terminals from each other.
+            // two terminals from each other. A collapsed shell donates its
+            // width to the session — that reflow is the point of collapsing.
             let top = detailToolbarHeight + gap
+            let shellTaken = store.userShellCollapsed
+                ? 0 : shellWidth(for: contentWidth) + gap
             return CGRect(
                 x: contentX,
                 y: top,
-                width: max(0, contentWidth - shellWidth(for: contentWidth) - gap),
+                width: max(0, contentWidth - shellTaken),
                 height: max(0, size.height - top)
             )
         }
@@ -268,6 +286,27 @@ struct FleetView: View {
         }
         .frame(width: width, height: height, alignment: .top)
         .clipped()
+    }
+
+    /// Reopens the parked shell from the session's right edge. The collapse
+    /// control lives on the shell itself, so once it is gone this is the way
+    /// back without digging through the overflow menu.
+    private var restoreShellHandle: some View {
+        Button {
+            withAnimation(.smooth(duration: 0.3)) {
+                store.userShellCollapsed = false
+            }
+        } label: {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(DaddyTheme.textSecondary)
+                .frame(width: 26, height: 26)
+                .background { Circle().fill(Color.white.opacity(0.10)) }
+                .overlay { Circle().strokeBorder(DaddyTheme.insetStroke, lineWidth: 1) }
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help("Show your shell")
     }
 
     /// Where the plus launches: the focused agent's project, same as the header.
