@@ -46,12 +46,17 @@ final class ProjectScannerTests: XCTestCase {
         XCTAssertEqual(names, ["swift-thing", "node-thing"])
     }
 
-    func testOrdinaryFoldersAreNotProjects() throws {
-        _ = try makeDirectory("Screenshots", containing: ["shot.png"])
-        _ = try makeDirectory("tax-2026", containing: ["return.pdf"])
+    /// The opposite of what this file used to assert.
+    ///
+    /// Requiring a `.git` or a manifest dropped local-only projects on the
+    /// floor, and once the rail became a file browser it also meant a folder
+    /// you created inside the app never appeared in it. Everything counts now.
+    func testOrdinaryFoldersAreProjectsToo() throws {
+        _ = try makeDirectory("local-only-code")
+        _ = try makeDirectory("scratch", containing: ["notes.md"])
 
-        XCTAssertTrue(ProjectScanner.scan(root: root).isEmpty,
-                      "every subdirectory used to count as a project")
+        let names = Set(ProjectScanner.scan(root: root).map(\.name))
+        XCTAssertEqual(names, ["local-only-code", "scratch"])
     }
 
     func testFindsProjectsNestedOneLevelDeeper() throws {

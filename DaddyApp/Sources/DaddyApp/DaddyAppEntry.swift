@@ -44,5 +44,15 @@ struct DaddyAppEntry: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
+        // ⌘N belongs to the file tree.
+        //
+        // A `WindowGroup` puts "New Window" in the File menu for free, and a
+        // menu key equivalent is matched before the event ever reaches the
+        // focused view — so the rail's "new file" shortcut was unreachable by
+        // construction, not by conflict. Daddy is one window with one fleet in
+        // it; a second copy of it was never a thing this app could usefully do.
+        .commands {
+            CommandGroup(replacing: .newItem) {}
+        }
     }
 }

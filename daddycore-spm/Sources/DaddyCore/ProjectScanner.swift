@@ -1,14 +1,22 @@
 import Foundation
 
-/// Finds real projects on disk.
+/// Finds the projects on disk.
 ///
-/// `WorkflowStateManager.discoverProjects()` calls every subdirectory of
-/// `~/Documents` a project — screenshots folders, tax paperwork, anything. That
-/// list is not something you would ever launch an agent into, which is part of
-/// why the app kept its own hardcoded list instead.
+/// This used to insist on evidence: a `.git`, or a build manifest a toolchain
+/// would recognise. The reasoning was that `~/Documents` is full of screenshots
+/// folders and tax paperwork, and none of that is something you would launch an
+/// agent into.
 ///
-/// A project here is a directory that looks like code: it has a `.git`, or a
-/// build manifest a toolchain would recognise.
+/// That reasoning does not survive contact with this particular Documents
+/// folder, which contains nothing but code. Plenty of it is local-only work
+/// that was never a repo and has no manifest, and the rule quietly deleted
+/// those from the app — permanently, since no amount of restarting makes a
+/// filter let something through.
+///
+/// It got worse once the rail became a file browser you can create folders in:
+/// a browser that cannot show you the folder you just made is not a browser.
+/// So every directory counts now, and the only things dropped are the ones
+/// nobody means — `ignoredNames` and dotfolders.
 public enum ProjectScanner {
 
     /// Files that mean "someone builds something here".
@@ -31,33 +39,26 @@ public enum ProjectScanner {
         public var path: String { url.path }
     }
 
-    /// Scans `root` for code projects and folders whose immediate children
-    /// contain code projects. Every included root carries all of its immediate
-    /// selectable directories, not just repositories, so an agent can work
-    /// either at a client/project root or inside one focused subdirectory.
+    /// Every directory in `root`, each carrying its own immediate
+    /// subdirectories — so an agent can work either at a project root or inside
+    /// one focused subdirectory, and the file tree has something to open.
     ///
     /// Results are sorted by most recently modified, so what you were last
     /// working on is at the top. Children are alphabetical, like Finder.
+    /// `WorkspaceRail` folds the list to its first few; the ordering here is
+    /// what decides which few those are.
     public static func scan(
         root: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Documents"),
         limit: Int = 60
     ) -> [Found] {
-        var found: [Found] = []
-
-        for directory in childDirectories(of: root) {
-            let children = childDirectories(of: directory)
-            let rootIsProject = classify(directory) != nil
-            let containsProjects = children.contains { classify($0) != nil }
-
-            guard rootIsProject || containsProjects else { continue }
-
-            found.append(describe(
+        let found = childDirectories(of: root).map { directory in
+            describe(
                 directory,
-                children: children
+                children: childDirectories(of: directory)
                     .map { describe($0) }
                     .sorted(by: alphabetical)
-            ))
+            )
         }
 
         return Array(
@@ -73,6 +74,10 @@ public enum ProjectScanner {
     }
 
     /// A project, or nil if the directory does not look like one.
+    ///
+    /// No longer what `scan` filters on — it takes everything now — but still
+    /// the answer to "is there actually code in here", which is a different
+    /// question and one worth being able to ask.
     public static func classify(_ url: URL) -> Found? {
         let fileManager = FileManager.default
         let name = url.lastPathComponent
