@@ -204,6 +204,19 @@ final class MockStore {
     var pendingComposerPaste: PendingComposerPaste?
 
     /// kqueue on `.git/refs/remotes` for projects with dispatched cards.
+    /// Sessions the local model has already named. A title is written once —
+    /// see `SessionTitler`.
+    @ObservationIgnored var titledSessionIDs: Set<String> = []
+    @ObservationIgnored var titleAttemptedAt: [String: Date] = [:]
+
+    /// Where each session is in the context-handoff dance, keyed by agent id.
+    /// Absent means "still watching". See `ContextHandoff.swift`.
+    @ObservationIgnored var contextHandoffPhases: [String: ContextHandoffPhase] = [:]
+
+    /// A written handoff waiting for you to say yes and pick who continues.
+    /// One at a time: two of these panels at once would be a fight.
+    var pendingContextHandoff: PendingContextHandoff?
+
     @ObservationIgnored var gitPushWatchers: [String: DirectoryWatcher] = [:]
     @ObservationIgnored var gitPushWatchPaths: [String: String] = [:]
     @ObservationIgnored var gitAheadByProject: [String: Int] = [:]
@@ -504,28 +517,60 @@ final class MockStore {
             // The read happens off the main actor and hands back nothing but
             // strings; `self` is never sent across the boundary. Same shape as
             // `refreshProjects`.
-            let found = await Task.detached(priority: .utility) { () -> [String: String] in
-                var found: [String: String] = [:]
+            let found = await Task.detached(priority: .utility) {
+                () -> [String: TranscriptReading] in
+                var found: [String: TranscriptReading] = [:]
                 for entry in live {
-                    // One read, two answers: the model comes back, and whose
-                    // turn it is gets applied to the session's state on the way
-                    // through. The screen is what makes badges quick; this is
-                    // what makes them right when the screen was guessing.
-                    if let model = manager.refreshFromTranscript(entry.sessionID),
-                       !model.isEmpty {
-                        found[entry.agentID] = model
+                    // One read, three answers: the model and how full the
+                    // context is come back, and whose turn it is gets applied
+                    // to the session's state on the way through. The screen is
+                    // what makes badges quick; this is what makes them right
+                    // when the screen was guessing.
+                    guard let reading = manager.refreshFromTranscript(entry.sessionID) else {
+                        continue
                     }
+                    found[entry.agentID] = reading
                 }
                 return found
             }.value
 
             guard let self, !found.isEmpty else { return }
-            for (agentID, model) in found {
+            for (agentID, reading) in found {
                 self.mutate(agentID) { card in
-                    if card.model != model { card.model = model }
+                    if let model = reading.model, !model.isEmpty, card.model != model {
+                        card.model = model
+                    }
+                    // Never clear a title we have: Claude rewrites `ai-title`
+                    // as a conversation develops, and a tail that has moved
+                    // past the last one is silence, not a rename to nothing.
+                    if let title = reading.title, !title.isEmpty, card.title != title {
+                        card.title = title
+                    }
+                    card.context = Self.merged(card.context, reading.context)
                 }
             }
+
+            // The number just moved, so this is the moment to ask whether any
+            // session has crossed the line and gone quiet.
+            self.stepContextHandoffs()
+
+            // And whether anything is still going by its filing reference.
+            self.titleUntitledSessions()
         }
+    }
+
+    /// A tail that happens to hold no usage record is silence, not news.
+    ///
+    /// `.noTurnYet` is the only reading that can arrive *after* a real one and
+    /// mean nothing — the 128KB tail moved past the last assistant record. It
+    /// never overwrites a number. A missing transcript does, because that one
+    /// is the truth and it is the whole reason this type exists.
+    private static func merged(
+        _ current: ContextAvailability,
+        _ incoming: ContextAvailability
+    ) -> ContextAvailability {
+        if case .noTurnYet = incoming, case .reported = current { return current }
+        return incoming
     }
 
     func refreshProviderUsage() {
@@ -831,22 +876,59 @@ final class MockStore {
         mutate(agentID) { $0.lastOutputAt = Date() }
     }
 
-    /// Hop first, then park the prompt until the agent is idle and the
-    /// terminal view exists. Writing into the pty while BoardView still owns
-    /// the window (Fleet unmounted) is what froze the session: the TUI ate a
-    /// burst of raw keystrokes, then the remount replayed a desynced tail.
+    /// Hop first, then park the prompt until the composer can take it.
+    ///
+    /// Writing into the pty while BoardView still owns the window (Fleet
+    /// unmounted) is what froze the session: the TUI ate a burst of raw
+    /// keystrokes, then the remount replayed a desynced tail. That is guarded
+    /// where the write actually happens — `TerminalSurface` only consumes a
+    /// pending paste when its view is attached, active and in a window — so
+    /// what this has to wait for is the *CLI*, not the UI.
+    ///
+    /// It waits for two things, in order:
+    ///
+    /// 1. The session leaves `.launching`, i.e. the CLI has printed something.
+    ///    A composer that does not exist yet cannot be pasted into.
+    /// 2. The output goes quiet for `settle`, so the paste does not land in
+    ///    the middle of a boot repaint.
+    ///
+    /// It deliberately does **not** wait for `.ready`. State detection reads a
+    /// rendered screen with heuristics, and a CLI that never trips the idle
+    /// pattern — Claude Code sitting on WORKING at an empty prompt is the
+    /// reported case — used to hold the prompt for the full thirty seconds and
+    /// look like the dispatch had simply not pasted. A quiet terminal is the
+    /// honest signal; `.ready` is an opinion about one.
     func enqueueComposerPaste(_ text: String, onto agentID: String) {
         pendingPasteTasks[agentID]?.cancel()
         pendingPasteTasks[agentID] = Task { @MainActor in
+            let settle: TimeInterval = 0.6
             try? await Task.sleep(for: .milliseconds(280))
-            let deadline = Date().addingTimeInterval(30)
-            while Date() < deadline {
-                guard !Task.isCancelled else { return }
-                guard let agent = agents.first(where: { $0.id == agentID }) else { return }
-                if case .exited = agent.state { return }
-                if case .ready = agent.state { break }
-                try? await Task.sleep(for: .milliseconds(200))
+
+            @MainActor func agent() -> MockAgent? { agents.first { $0.id == agentID } }
+
+            // 1. Wait for the CLI to speak.
+            let bootDeadline = Date().addingTimeInterval(30)
+            while Date() < bootDeadline {
+                guard !Task.isCancelled, let current = agent() else { return }
+                if case .exited = current.state { return }
+                if case .launching = current.state {
+                    try? await Task.sleep(for: .milliseconds(150))
+                    continue
+                }
+                break
             }
+
+            // 2. Wait for it to stop talking — or for `.ready`, whichever the
+            //    session gets to first.
+            let quietDeadline = Date().addingTimeInterval(8)
+            while Date() < quietDeadline {
+                guard !Task.isCancelled, let current = agent() else { return }
+                if case .exited = current.state { return }
+                if case .ready = current.state { break }
+                if Date().timeIntervalSince(current.lastOutputAt) >= settle { break }
+                try? await Task.sleep(for: .milliseconds(150))
+            }
+
             guard !Task.isCancelled else { return }
             guard agents.contains(where: { $0.id == agentID }) else { return }
             pendingComposerPaste = PendingComposerPaste(agentID: agentID, text: text)
@@ -893,6 +975,8 @@ final class MockStore {
         agents.removeAll { $0.id == agentID }
         detailHistory.removeAll { $0 == agentID }
         forgetReadyAttention(agentID)
+        contextHandoffPhases[agentID] = nil
+        if pendingContextHandoff?.agentID == agentID { pendingContextHandoff = nil }
         persistSessions()
 
         if selectedAgentID == agentID {
@@ -1122,6 +1206,11 @@ final class MockStore {
         body(&agents[idx])
     }
 
+    /// The same thing, reachable from the store's other files.
+    func mutateAgent(_ agentID: String, _ body: (inout MockAgent) -> Void) {
+        mutate(agentID, body)
+    }
+
     /// Bounce once per ready episode while we are in the background.
     ///
     /// `.criticalRequest` keeps bouncing until the Dock icon is clicked, which
@@ -1134,6 +1223,13 @@ final class MockStore {
 
         unreadReadyIDs.insert(agentID)
         updateDockBadge()
+        attentionRequestID = NSApplication.shared.requestUserAttention(.informationalRequest)
+    }
+
+    /// Bounce for something that is not a ready agent — a written handoff
+    /// waiting on your yes. Same dock plumbing, same cancel path.
+    func signalAttention() {
+        guard !NSApplication.shared.isActive else { return }
         attentionRequestID = NSApplication.shared.requestUserAttention(.informationalRequest)
     }
 
@@ -1368,6 +1464,23 @@ extension MockStore {
             let found = ChatHistory.claudeChats(inDirectory: path)
             await MainActor.run { self.pastChats[projectID] = found }
         }
+    }
+
+    /// Point an existing card at one of them.
+    ///
+    /// For the sessions Daddy could not name at launch: the transcript exists,
+    /// Daddy just did not know which one it was, so the context meter had
+    /// nothing to read. Saying which conversation it is fixes the model name
+    /// and the handoff watch along with the meter — they all read the same file.
+    func linkTranscript(_ chat: PastChat, to agentID: String) {
+        guard let agent = agents.first(where: { $0.id == agentID }),
+              let sessionID = agent.sessionID else { return }
+
+        sessionManager.linkConversation(chat.id, to: sessionID)
+        persistSessions()
+
+        // Do not wait for the ten-second refresh to prove it worked.
+        refreshAgentModels()
     }
 
     /// Open one of them as a new card.

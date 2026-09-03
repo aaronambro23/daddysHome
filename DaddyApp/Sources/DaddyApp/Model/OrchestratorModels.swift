@@ -124,6 +124,7 @@ enum OrchestratorWorkStatus: String, CaseIterable, Codable, Hashable {
     case dispatched
     case inProgress = "in-progress"
     case blocked
+    case rework
     case done
     case archived
 
@@ -134,6 +135,7 @@ enum OrchestratorWorkStatus: String, CaseIterable, Codable, Hashable {
         case .dispatched: return "DISPATCHED"
         case .inProgress: return "IN PROGRESS"
         case .blocked: return "BLOCKED"
+        case .rework: return "REWORK"
         case .done: return "DONE"
         case .archived: return "ARCHIVED"
         }
@@ -143,17 +145,19 @@ enum OrchestratorWorkStatus: String, CaseIterable, Codable, Hashable {
 extension OrchestratorWorkStatus {
     /// The columns the board actually shows.
     ///
-    /// Capture → agent → did it work → done. There is no "refined" gate and
-    /// no blocked graveyard: an agent is the thing doing the work, so
-    /// dispatching *is* the start, and a card that cannot move still belongs
-    /// in the pile, not in a column of its own.
+    /// Capture → agent → did it work → send it back → done. There is no
+    /// "refined" gate and no blocked graveyard: an agent is the thing doing
+    /// the work, so dispatching *is* the start, and a card that cannot move
+    /// still belongs in the pile, not in a column of its own. `rework` is the
+    /// one exception — a card that passed verification but needs another
+    /// crack is neither done nor back at the start, so it gets its own column.
     ///
     /// `inProgress` and `blocked` still exist on disk (tools and old files
     /// can set them). They are folded into a visible column by `boardColumn`
     /// rather than dropping the card. `archived` is a column only when the
     /// board is asked to show it.
     static let boardColumns: [OrchestratorWorkStatus] = [
-        .inbox, .dispatched, .refined, .done
+        .inbox, .dispatched, .refined, .rework, .done
     ]
 
     /// Statuses the inspector will let you pick. Hidden cases stay decodable
@@ -173,6 +177,7 @@ extension OrchestratorWorkStatus {
         switch self {
         case .inbox, .blocked: return DaddyTheme.idle
         case .refined: return DaddyTheme.accent
+        case .rework: return DaddyTheme.failure
         case .dispatched, .inProgress: return DaddyTheme.working
         case .done: return DaddyTheme.ready
         case .archived: return DaddyTheme.textVeryDim

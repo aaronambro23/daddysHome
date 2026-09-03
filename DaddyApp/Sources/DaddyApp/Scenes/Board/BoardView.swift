@@ -16,6 +16,9 @@ struct BoardView: View {
     @State private var showArchived = false
 
     @State private var composingColumn: OrchestratorWorkStatus?
+    /// The card dropped into DISPATCHED, waiting on an agent. The move is not
+    /// committed until one is picked — see `BoardDispatchPicker`.
+    @State private var pendingDispatch: OrchestratorWorkItem?
     @State private var composeText = ""
     @State private var collapsedGroups: Set<BoardGroupKey> = []
     @State private var dragState: BoardDragState?
@@ -48,6 +51,7 @@ struct BoardView: View {
         boardPane
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .trailing) { detailOverlay }
+            .overlay { dispatchOverlay }
             .padding(18)
         .onAppear {
             // Cheap, and the alternative is a board that quietly lies about
@@ -182,6 +186,14 @@ struct BoardView: View {
             dragState = nil
             guard let target = columnFrames.first(where: { $0.value.contains(point) })?.key,
                   target != item.status.boardColumn else { return }
+
+            // DISPATCHED means an agent has it. Rather than move the card and
+            // leave you to go find one, the drop asks which agent — and only
+            // commits once you have said. Dismissing leaves the card put.
+            if target == .dispatched {
+                pendingDispatch = item
+                return
+            }
             _ = store.moveWorkItem(item.id, to: target)
         }
     }
@@ -315,6 +327,17 @@ struct BoardView: View {
         }
     }
 
+    // MARK: - Dispatch
+
+    @ViewBuilder
+    private var dispatchOverlay: some View {
+        if let pendingDispatch {
+            BoardDispatchPicker(item: pendingDispatch) {
+                self.pendingDispatch = nil
+            }
+        }
+    }
+
     // MARK: - Detail
 
     /// Overlay, not a sibling in the board `HStack`. The pane sits on top of
@@ -414,6 +437,13 @@ struct BoardView: View {
 
             let chords = event.modifierFlags.intersection([.command, .option, .control, .shift])
             guard event.keyCode == 53, chords.isEmpty else { return event }
+
+            // The dispatch picker is modal over the whole board, so it owns
+            // Escape ahead of everything under it.
+            if pendingDispatch != nil {
+                pendingDispatch = nil
+                return nil
+            }
 
             // Typing a new card's title owns Escape first — it cancels the
             // compose rather than closing the whole board out from under you.

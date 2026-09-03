@@ -94,7 +94,7 @@ struct AgentBubbleRow: View {
             items: overflow.map { agent in
                 GlassDropdownItem(
                     id: agent.id,
-                    title: "\(agent.displayName) · \(agent.workUnitID)",
+                    title: "\(agent.displayName) · \(agent.label)",
                     note: StateColors.name(for: agent.state).lowercased()
                 ) {
                     onSelect(agent.id)

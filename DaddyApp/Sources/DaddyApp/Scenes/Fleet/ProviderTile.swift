@@ -160,11 +160,11 @@ struct ProviderTile: View {
             secondLine(for: agent)
 
             HStack(spacing: 6) {
-                Text(agent.workUnitID)
-                    .font(.system(size: 9.5, design: .monospaced))
+                Text(agent.label)
+                    .font(.system(size: 9.5, design: agent.title == nil ? .monospaced : .default))
                     .foregroundStyle(DaddyTheme.textMuted)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
 
                 Spacer(minLength: 4)
 

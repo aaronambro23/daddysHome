@@ -641,7 +641,7 @@ struct WorkspaceRail: View {
         guard let agent = store.selectedAgent, agent.projectID == project.id else {
             return project.name
         }
-        return "\(project.name) › \(agent.workUnitID)"
+        return "\(project.name) › \(agent.label)"
     }
 }
 

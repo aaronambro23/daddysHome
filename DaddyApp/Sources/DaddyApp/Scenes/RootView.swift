@@ -73,6 +73,14 @@ struct RootView: View {
                     }
                 }
             }
+            // Over every workspace, because a session filling up is not a
+            // Fleet event — it happens while you are on the board, and it is
+            // the one thing worth interrupting whatever you are looking at.
+            if let pending = store.pendingContextHandoff {
+                HandoffApprovalOverlay(pending: pending)
+                    .zIndex(2)
+            }
+
             // In the titlebar, not over the content.
             //
             // As a `.topTrailing` overlay it landed on the top-right corner of

@@ -51,6 +51,25 @@ struct MockAgent: Identifiable {
     /// agent per frame. `tick()` computes it once a second.
     var lastLine: String = ""
 
+    /// What this conversation is about, from the CLI's own title for it.
+    /// Nil for the providers that do not name their conversations, and for the
+    /// first moments of any session.
+    var title: String?
+
+    /// What to call this session on screen.
+    ///
+    /// The work-unit id is a filing reference — `live-0827-1041-3` — and it was
+    /// what every card, tooltip and switcher row showed. It says when the
+    /// session started and nothing about what it is for, which is the only
+    /// question you are asking when you are looking at four of them.
+    var label: String { title ?? workUnitID }
+
+    /// How full this session's context window is, or why Daddy cannot say.
+    /// `ContextHandoff` watches it; `ContextMeter` shows it.
+    var context: ContextAvailability = .notReported
+
+    var contextPercent: Double? { context.percent }
+
     /// Non-nil when this card is backed by a real `SessionManager` session and
     /// a live pty. Nil means it is seeded demo data with a scripted transcript.
     var sessionID: String?

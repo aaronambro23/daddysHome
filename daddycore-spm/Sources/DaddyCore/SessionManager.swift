@@ -607,23 +607,57 @@ public final class SessionManager: @unchecked Sendable {
         }
         let agent = session.agent
         let cwd = session.cwd
-        let providerSessionID = session.providerSessionID
+        var providerSessionID = session.providerSessionID
+        let pid = ptyProcesses[sessionID]?.pid ?? 0
         lock.unlock()
 
         let source = AgentTranscripts.source(for: agent)
-        if let reading = source.read(cwd: cwd, providerSessionID: providerSessionID) {
-            return reading
+
+        // Re-derive the link before reading it, rather than trusting the id
+        // handed over at launch forever. A conversation is not a process:
+        // `/clear` starts a new one inside the same CLI, and the id from launch
+        // then names a file that will never be written to again — which shows
+        // up as a percentage frozen at whatever it was, not as an error.
+        let live = pid > 0 ? source.liveConversation(pid: pid, cwd: cwd) : nil
+        if let live, live.id != providerSessionID {
+            providerSessionID = live.id
+            lock.lock()
+            sessions[sessionID]?.providerSessionID = live.id
+            lock.unlock()
         }
 
-        // No transcript yet — a session that has not taken a turn. The config
-        // default is what it will use when it does.
-        guard let model = source.defaultModel() else { return nil }
-        return TranscriptReading(model: model, activity: nil, observedAt: Date())
+        // A stated activity beats an inferred one. The transcript's answer is
+        // read off the shape of the last record written — a `stop_reason`, a
+        // `tool_result` — which is a good guess and still a guess; this is the
+        // CLI saying so. It also fills the gap the transcript cannot cover: a
+        // turn that has started but written nothing yet still says `busy`.
+        if let reading = source.read(cwd: cwd, providerSessionID: providerSessionID) {
+            return reading.stating(live?.activity).titled(live?.name)
+        }
+
+        // Nothing readable for this session. For a CLI that keeps transcripts
+        // that means the link is broken — the id Daddy is holding does not
+        // name a file on disk — and saying so is the difference between a
+        // fixable problem and a blank meter nobody can explain.
+        let context: ContextAvailability = source.reportsContextUsage
+            ? .transcriptMissing
+            : .notReported
+
+        // No transcript to read, but the status file may still know what the
+        // process is doing — an unlinked card should not also go stateless.
+        let model = source.defaultModel()
+        return TranscriptReading(
+            model: model,
+            activity: live?.activity,
+            observedAt: Date(),
+            context: context,
+            title: live?.name
+        )
     }
 
-    /// Reads the transcript once and uses it for both things it can tell us:
-    /// the model, which is returned, and whose turn it is, which is applied to
-    /// the session's state.
+    /// Reads the transcript once and uses everything it can tell us: whose
+    /// turn it is, which is applied to the session's state, and the model and
+    /// context consumption, which come back for the caller to show.
     ///
     /// The screen is the fast path — it updates within a quarter second and is
     /// the only signal Cursor has at all — but it is inferential: it reads
@@ -635,21 +669,21 @@ public final class SessionManager: @unchecked Sendable {
     /// overridden: a transcript has nothing to say about either, and losing them
     /// would hide the two states you most need to see.
     @discardableResult
-    public func refreshFromTranscript(_ sessionID: String) -> String? {
+    public func refreshFromTranscript(_ sessionID: String) -> TranscriptReading? {
         guard let reading = transcriptReading(for: sessionID) else { return nil }
 
         guard let activity = reading.activity,
               Date().timeIntervalSince(reading.observedAt) <= Self.transcriptFreshness else {
-            return reading.model
+            return reading
         }
 
         lock.lock()
         defer { lock.unlock() }
-        guard let session = sessions[sessionID] else { return reading.model }
+        guard let session = sessions[sessionID] else { return reading }
 
         switch session.state {
         case .exited, .rateLimited, .error, .launching:
-            return reading.model
+            return reading
         case .ready, .working, .unknown:
             break
         }
@@ -662,7 +696,41 @@ public final class SessionManager: @unchecked Sendable {
         }
         sessions[sessionID] = session
 
-        return reading.model
+        return reading
+    }
+
+    /// The opening of a conversation, for titling it. Real file I/O — never
+    /// call it on the main thread.
+    public func openingExcerpt(for sessionID: String) -> String? {
+        lock.lock()
+        guard let session = sessions[sessionID] else {
+            lock.unlock()
+            return nil
+        }
+        let agent = session.agent
+        let cwd = session.cwd
+        let providerSessionID = session.providerSessionID
+        lock.unlock()
+
+        return AgentTranscripts.source(for: agent)
+            .openingExcerpt(cwd: cwd, providerSessionID: providerSessionID)
+    }
+
+    /// Whether this CLI names its own conversations, and so needs no help.
+    public func titlesOwnConversations(_ kind: AgentKind) -> Bool {
+        AgentTranscripts.source(for: kind).titlesConversations
+    }
+
+    /// Tell a session which conversation on disk is its own.
+    ///
+    /// The id is normally learned at launch — minted by Daddy, or carried in
+    /// from the chat you reopened. It is missing whenever the CLI chose the id
+    /// itself (`--continue`, or a conversation started in a plain terminal),
+    /// and a session with no id can never be read. This is the repair.
+    public func linkConversation(_ providerSessionID: String, to sessionID: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        sessions[sessionID]?.providerSessionID = providerSessionID
     }
 
     public func getPTYProcess(for sessionID: String) -> PTYProcess? {

@@ -65,6 +65,7 @@ struct FocusAgentSwitcher: View {
         return alternatives.filter { agent in
             let project = store.project(agent.projectID)?.name ?? ""
             return agent.displayName.lowercased().contains(needle)
+                || agent.label.lowercased().contains(needle)
                 || agent.workUnitID.lowercased().contains(needle)
                 || project.lowercased().contains(needle)
         }
@@ -241,8 +242,8 @@ struct FocusAgentSwitcher: View {
                         .foregroundStyle(DaddyTheme.textPrimary)
                         .lineLimit(1)
 
-                    Text(agent.workUnitID)
-                        .font(.system(size: 9.5, design: .monospaced))
+                    Text(agent.label)
+                        .font(.system(size: 9.5, design: agent.title == nil ? .monospaced : .default))
                         .foregroundStyle(DaddyTheme.textMuted)
                         .lineLimit(1)
                 }

@@ -48,7 +48,7 @@ struct TerminalPane: View {
                                 .insetCapsule(opacity: 0.08)
                         }
 
-                        HeaderCaption(text: "\(agent.agent.rawValue) · \(agent.workUnitID)")
+                        HeaderCaption(text: "\(agent.agent.rawValue) · \(agent.label)")
                     }
                 }
             }

@@ -11,88 +11,14 @@ Follow it exactly.
 - If the request is large, ask how it should be divided into batches.
   **You do not decide the batching — the human does.**
 
-## 2. Every batch of work gets one document
+## 2. Documentation
 
-A "batch" is a unit of work the human has named. It is not one task, and
-it is not one bug fix. A single large area of work may be split into
-several batches; that is the human's call, not yours.
+Say what you changed in your reply. That is the record.
 
-At the **start** of a batch, create:
+Handoff documents in `docs/handoffs/` are not the default. When the human asks
+for them — or the task plainly depends on what a previous batch did — use the
+`detailed-documentation` skill, which holds the numbering, format and rules.
 
-```
-docs/handoffs/NNN-short-slug.md
-```
-
-- `NNN` is the next unused three-digit number, zero-padded (`001`, `002`,
-  `014`). Numbers give the reading order — never reuse or renumber.
-- `short-slug` is two to four lowercase words joined by hyphens.
-- Look at the existing files in `docs/handoffs/` to find the next
-  number before creating yours.
-
-## 3. Document format
-
-Create it with the plan filled in and every task unchecked:
-
-```md
-# NNN — Human readable title
-
-- **Status:** in-progress
-- **Agent:** claude | codex | cursor | opencode
-- **Started:** YYYY-MM-DD
-
-## Goal
-
-What this batch is meant to achieve, in a few sentences.
-
-## Tasks
-
-- [ ] First task
-- [ ] Second task
-- [ ] Third task
-
-## Summary
-
-_Filled in when the batch is complete._
-
-## Changes
-
-_Files added, changed or deleted, and why. Filled in as you go._
-
-## Next possible steps
-
-_Filled in when the batch is complete._
-```
-
-## 4. While you work
-
-- Tick a box (`- [x]`) the moment that task is genuinely done. Do not
-  batch up the ticking at the end.
-- Add to `## Changes` as you go, especially **deletions** — anything
-  removed must be recorded, or the next agent will not know it is gone.
-- If you discover a task the plan missed, add it to `## Tasks` unchecked.
-
-This matters because an unfinished document with unticked boxes is how
-the next agent knows exactly where you stopped. A half-finished file is
-useful. A missing file is not.
-
-## 5. When the batch is complete
-
-- Set `**Status:** done`.
-- Write `## Summary` — what was actually built, in plain language.
-- Write `## Next possible steps` — what you would do next and why. This
-  is your judgement, and it is the most valuable part of the document
-  for whoever picks this up next. Be specific and opinionated.
-
-## 6. Rules
-
-- **Do not** create a `DONE.md`, an index, or any file that aggregates
-  across batches. Daddy owns the overview and derives it from these
-  documents. Maintaining a shared index across several agents only
-  produces stale and conflicting files.
-- **Do not** create a document per small task. One document per batch.
-- **Do not** renumber or delete existing documents. They are the history.
-- **Do** read the most recent documents in `docs/handoffs/` before
-  starting, so you know what came before and what was left undone.
 
 ---
 

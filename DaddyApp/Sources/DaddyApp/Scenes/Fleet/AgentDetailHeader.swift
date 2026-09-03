@@ -101,6 +101,13 @@ struct AgentDetailHeader: View {
 
             Spacer(minLength: 10)
 
+            // This conversation's window, then the account's quota. Both are
+            // "how much is left", at two scales, so they read as a pair.
+            ContextMeter(agent: agent)
+
+            GlassHairline(axis: .vertical, length: 22)
+                .padding(.horizontal, 1)
+
             ProviderUsageBattery(snapshot: store.providerUsage[agent.agent])
                 .frame(width: 190, alignment: .leading)
 
@@ -249,6 +256,12 @@ struct AgentDetailHeader: View {
     private var menuItems: [GlassDropdownItem] {
         var items = [
             GlassDropdownItem(id: "model", title: "Model", note: agent.modelLabel, isEnabled: false) {},
+            GlassDropdownItem(
+                id: "conversation",
+                title: "Conversation",
+                note: agent.title ?? "untitled",
+                isEnabled: false
+            ) {},
             GlassDropdownItem(id: "work", title: "Work unit", note: agent.workUnitID, isEnabled: false) {},
             processItem,
             GlassDropdownItem(id: "docs", title: "View project docs") {

@@ -35,6 +35,8 @@ struct ClaudeTranscript: AgentTranscriptSource {
         var model: String?
         var activity: TranscriptReading.Activity?
         var observedAt: Date?
+        var contextPercent: Double?
+        var title: String?
 
         // Newest first. A transcript carries a lot of bookkeeping records
         // (`attachment`, `mode`, `ai-title`, `queue-operation`…); only `user`
@@ -47,6 +49,21 @@ struct ClaudeTranscript: AgentTranscriptSource {
             case "assistant":
                 let message = record["message"] as? [String: Any]
                 if model == nil { model = message?["model"] as? String }
+                // A sidechain record is a subagent's turn, written into the
+                // same file. Its usage is the subagent's own small context, so
+                // reading it would report a nearly-full session as empty.
+                if contextPercent == nil, (record["isSidechain"] as? Bool) != true {
+                    // Every assistant record carries the usage of the request
+                    // that produced it, and that request *is* the conversation:
+                    // whatever was replayed from cache plus whatever was sent
+                    // fresh. Summing the four is the size of the context at
+                    // that moment, which is the number the CLI's own footer
+                    // shows you.
+                    contextPercent = Self.contextPercent(
+                        usage: message?["usage"] as? [String: Any],
+                        model: message?["model"] as? String
+                    )
+                }
                 if activity == nil {
                     // A finished turn stops with `end_turn`. `tool_use` means
                     // a tool call follows, so the turn is still running. Nil
@@ -68,25 +85,131 @@ struct ClaudeTranscript: AgentTranscriptSource {
                     observedAt = TranscriptFile.date(record["timestamp"])
                 }
 
+            case "ai-title":
+                // Claude names its own conversations and rewrites the name as
+                // they develop, so the newest of these is the current answer.
+                if title == nil { title = TranscriptFile.humanTitle(record["aiTitle"] as? String) }
+
             default:
                 continue
             }
 
-            if model != nil, activity != nil { break }
+            if model != nil, activity != nil, title != nil { break }
         }
 
         guard model != nil || activity != nil else { return nil }
         return TranscriptReading(
             model: model,
             activity: activity,
-            observedAt: observedAt ?? TranscriptFile.modifiedAt(url)
+            observedAt: observedAt ?? TranscriptFile.modifiedAt(url),
+            // The file was found, so a missing percentage here means this
+            // conversation has not taken a turn yet — not that the link is
+            // broken. `transcriptReading` owns that second case.
+            context: contextPercent.map { .reported($0) } ?? .noTurnYet,
+            title: title
         )
+    }
+
+    var reportsContextUsage: Bool { true }
+    var titlesConversations: Bool { true }
+
+    /// Claude keeps a status file per running process — `sessions/<pid>.json`
+    /// — whose `sessionId` is the conversation it is on *now* and whose
+    /// `status` is what it is doing. That file is the one thing on disk that
+    /// survives `/clear`: the transcript forks to a new file with a new id, and
+    /// this one is rewritten to name it.
+    ///
+    /// Checked against `cwd` before it is believed. A pid is reused by the
+    /// operating system eventually, and adopting a stale file's id would point
+    /// the card at some unrelated conversation.
+    func liveConversation(pid: Int32, cwd: URL) -> LiveConversation? {
+        let status = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/sessions/\(pid).json")
+
+        guard let record = TranscriptFile.json(contentsOf: status),
+              let id = record["sessionId"] as? String, !id.isEmpty else { return nil }
+
+        if let recorded = record["cwd"] as? String,
+           !TranscriptFile.samePath(recorded, cwd.path) { return nil }
+
+        return LiveConversation(
+            id: id,
+            activity: Self.activity(record["status"]),
+            // A slug — `kanban-board-per-project`. Second-best to the
+            // transcript's own `ai-title`, and available a good deal earlier
+            // in a conversation's life.
+            name: TranscriptFile.humanTitle(record["name"] as? String)
+        )
+    }
+
+    /// `busy` and `idle` are the two words this file has been observed to use.
+    ///
+    /// Anything else returns nil rather than a guess — an unknown word from a
+    /// newer Claude must not be flattened into "idle", because a wrong idle is
+    /// what invites you to interrupt an agent mid-thought, and it is also what
+    /// would fire a context handoff in the middle of a turn.
+    private static func activity(_ status: Any?) -> TranscriptReading.Activity? {
+        switch status as? String {
+        case "idle": return .idle
+        case "busy": return .responding
+        default: return nil
+        }
     }
 
     func defaultModel() -> String? {
         let settings = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/settings.json")
         return TranscriptFile.json(contentsOf: settings)?["model"] as? String
+    }
+
+    /// Model ids whose context window is 1M rather than 200K.
+    ///
+    /// A hardcoded table, which this file otherwise refuses to keep — but the
+    /// transcript genuinely does not record the window. Every record was read
+    /// looking for it; the only thing that knows is the CLI's own `/context`,
+    /// and that is rendered, never written down.
+    ///
+    /// Matched on a fragment of the id, so dated snapshots
+    /// (`claude-sonnet-5-20260101`) resolve the same as the bare id.
+    private static let longContextModels = [
+        "opus-5", "sonnet-5", "fable-5", "mythos-5",
+        "opus-4-8", "opus-4-7", "opus-4-6", "sonnet-4-6",
+    ]
+
+    /// Share of the window one request's usage represents.
+    ///
+    /// The unknown-model fallback is 200K on purpose. Guessing small means a
+    /// wide session reads as fuller than it is and Daddy offers the handoff
+    /// early; guessing large means a narrow one is reported as half empty right
+    /// up to the moment it compacts. Early is the survivable mistake.
+    private static func contextPercent(
+        usage: [String: Any]?,
+        model: String?
+    ) -> Double? {
+        guard let usage else { return nil }
+
+        let fields = [
+            "input_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "output_tokens",
+        ]
+        let used = fields.reduce(0.0) { total, key in
+            total + ((usage[key] as? NSNumber)?.doubleValue ?? 0)
+        }
+        guard used > 0 else { return nil }
+
+        return used / contextWindow(for: model) * 100
+    }
+
+    static func contextWindow(for model: String?) -> Double {
+        guard let model = model?.lowercased() else { return 200_000 }
+        // An explicit marker beats the table — it is the model saying so.
+        if model.contains("[1m]") { return 1_000_000 }
+        // Haiku is 200K in every generation, including the ones whose Opus and
+        // Sonnet siblings are 1M, so it is checked before the family match.
+        if model.contains("haiku") { return 200_000 }
+        return longContextModels.contains(where: model.contains) ? 1_000_000 : 200_000
     }
 
     private static func isToolResult(_ record: [String: Any]) -> Bool {
@@ -158,6 +281,12 @@ struct CodexTranscript: AgentTranscriptSource {
         var model: String?
         var activity: TranscriptReading.Activity?
         var observedAt: Date?
+        var contextPercent: Double?
+
+        // Codex does not title its conversations, so the opening request is
+        // the best available. It is at the head of the file, which is read
+        // anyway to work out that this rollout belongs to this directory.
+        let title = Self.openingRequest(in: url)
 
         for line in TranscriptFile.tailLines(of: url).reversed() {
             guard let record = TranscriptFile.json(line),
@@ -169,6 +298,20 @@ struct CodexTranscript: AgentTranscriptSource {
                 if model == nil { model = payload["model"] as? String }
 
             case "event_msg":
+                if contextPercent == nil, payload["type"] as? String == "token_count" {
+                    // `total_token_usage` is cumulative over the session and
+                    // routinely exceeds the window — it is a bill, not a
+                    // measurement. `last_token_usage` is the size of the most
+                    // recent request, which is what the context actually holds.
+                    let info = payload["info"] as? [String: Any]
+                    let last = info?["last_token_usage"] as? [String: Any]
+                    let used = (last?["total_tokens"] as? NSNumber)?.doubleValue
+                    let window = (info?["model_context_window"] as? NSNumber)?.doubleValue
+                    if let used, let window, used > 0, window > 0 {
+                        contextPercent = used / window * 100
+                    }
+                }
+
                 if activity == nil {
                     switch payload["type"] as? String {
                     case "task_started":
@@ -186,16 +329,84 @@ struct CodexTranscript: AgentTranscriptSource {
                 continue
             }
 
-            if model != nil, activity != nil { break }
+            if model != nil, activity != nil, contextPercent != nil { break }
         }
 
         guard model != nil || activity != nil else { return nil }
         return TranscriptReading(
             model: model,
             activity: activity,
-            observedAt: observedAt ?? TranscriptFile.modifiedAt(url)
+            observedAt: observedAt ?? TranscriptFile.modifiedAt(url),
+            context: contextPercent.map { .reported($0) } ?? .noTurnYet,
+            title: title
         )
     }
+
+    /// The first message you typed, as opposed to the several the harness
+    /// types on your behalf — skills instructions, `AGENTS.md`, the world
+    /// state. Codex marks the real one: an `item_completed` event carrying a
+    /// `UserMessage`.
+    private static func openingRequest(in url: URL) -> String? {
+        guard let first = messages(in: url, limit: 1).first else { return nil }
+        return TranscriptFile.title(fromPrompt: first.text)
+    }
+
+    func openingExcerpt(cwd: URL, providerSessionID: String?) -> String? {
+        guard let url = transcriptURL(cwd: cwd, providerSessionID: providerSessionID) else {
+            return nil
+        }
+
+        let opening = Self.messages(in: url, limit: 5)
+        guard !opening.isEmpty else { return nil }
+
+        return opening
+            .map { "\($0.role): \($0.text.prefix(600))" }
+            .joined(separator: "\n\n")
+    }
+
+    /// The first `limit` things actually said, in order.
+    ///
+    /// Codex types several messages on your behalf before you get a word in —
+    /// the skills instructions, `AGENTS.md`, the world state — and those are
+    /// plain `response_item` records. The `item_completed` events are the real
+    /// conversation, which is why they are what this reads.
+    private static func messages(
+        in url: URL,
+        limit: Int
+    ) -> [(role: String, text: String)] {
+        var found: [(role: String, text: String)] = []
+
+        for line in TranscriptFile.headLines(of: url, bytes: headerBytes) {
+            guard let record = TranscriptFile.json(line),
+                  record["type"] as? String == "event_msg",
+                  let payload = record["payload"] as? [String: Any],
+                  payload["type"] as? String == "item_completed",
+                  let item = payload["item"] as? [String: Any],
+                  let kind = item["type"] as? String,
+                  kind == "UserMessage" || kind == "AgentMessage" else { continue }
+
+            guard let text = Self.text(of: item["content"]), !text.isEmpty else { continue }
+
+            found.append((kind == "UserMessage" ? "user" : "assistant", text))
+            if found.count >= limit { break }
+        }
+        return found
+    }
+
+    /// `content` is usually a list of typed blocks and occasionally a bare
+    /// string. Taking only the text blocks keeps images and the like from
+    /// contributing nothing but a separator.
+    private static func text(of content: Any?) -> String? {
+        if let string = content as? String { return string }
+        if let blocks = content as? [[String: Any]] {
+            return blocks
+                .compactMap { $0["text"] as? String }
+                .joined(separator: " ")
+        }
+        return nil
+    }
+
+    var reportsContextUsage: Bool { true }
 
     func defaultModel() -> String? {
         let config = FileManager.default.homeDirectoryForCurrentUser
@@ -278,6 +489,9 @@ struct OpenCodeTranscript: AgentTranscriptSource {
         return TranscriptReading(model: model, activity: nil, observedAt: observedAt)
     }
 
+    /// The session row carries the model and a timestamp, and no token column.
+    var reportsContextUsage: Bool { false }
+
     func defaultModel() -> String? { nil }
 
     private func shell(_ executable: String, _ arguments: [String]) -> String? {
@@ -323,6 +537,10 @@ struct CursorTranscript: AgentTranscriptSource {
             observedAt: TranscriptFile.modifiedAt(Self.config)
         )
     }
+
+    /// Conversations live in an opaque `blobs(id, data BLOB)` table — there is
+    /// no per-session anything, let alone token counts.
+    var reportsContextUsage: Bool { false }
 
     func defaultModel() -> String? {
         guard let root = TranscriptFile.json(contentsOf: Self.config) else { return nil }

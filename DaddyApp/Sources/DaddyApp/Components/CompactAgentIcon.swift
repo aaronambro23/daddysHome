@@ -78,7 +78,7 @@ struct CompactAgentIcon: View {
         }
         .opacity(isDimmed && !hovering ? 0.55 : 1)
         .onHover { hovering = $0 }
-        .help("\(agent.displayName) · \(agent.workUnitID) · \(StateColors.name(for: agent.state))")
+        .help("\(agent.displayName) · \(agent.label) · \(StateColors.name(for: agent.state))")
         .overlay {
             if isSelected {
                 Circle()

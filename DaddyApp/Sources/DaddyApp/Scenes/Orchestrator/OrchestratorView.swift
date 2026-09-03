@@ -347,7 +347,7 @@ struct OrchestratorView: View {
             Picker("Session", selection: $dispatchSessionID) {
                 Text("New session").tag("")
                 ForEach(store.agents.filter(\.isLive)) { agent in
-                    Text("\(agent.agent.rawValue) · \(agent.workUnitID)").tag(agent.id)
+                    Text("\(agent.agent.rawValue) · \(agent.label)").tag(agent.id)
                 }
             }
             Button("prepare dispatch") {
