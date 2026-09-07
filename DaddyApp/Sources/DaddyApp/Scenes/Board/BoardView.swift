@@ -26,8 +26,11 @@ struct BoardView: View {
     @State private var dropTarget: OrchestratorWorkStatus?
     @State private var columnFrames: [OrchestratorWorkStatus: CGRect] = [:]
     @State private var keyboardMonitor: Any?
+    /// The column Cmd+T adds into. Set by clicking a column or a card in it.
+    @State private var selectedColumn: OrchestratorWorkStatus?
 
     @FocusState private var editorTitleFocused: Bool
+    @FocusState private var editorSummaryFocused: Bool
     /// The item the last plus-button press created. Closed with an empty title
     /// means the add was abandoned, so it is deleted rather than left behind.
     @State private var justCreatedID: UUID?
@@ -96,7 +99,10 @@ struct BoardView: View {
                         onDragChanged: dragChanged,
                         onDragEnded: dragEnded,
                         onToggleGroup: toggleGroup,
-                        onAdd: { addItem(in: status) }
+                        onAdd: { addItem(in: status) },
+                        onAddInCategory: { addItem(in: status, category: $0) },
+                        isSelected: selectedColumn == status,
+                        onSelectColumn: { selectedColumn = status }
                     )
                 }
         }
@@ -318,7 +324,9 @@ struct BoardView: View {
                 BoardDetailPane(
                     item: item,
                     titleFocus: $editorTitleFocused,
-                    onClose: closeDetail
+                    summaryFocus: $editorSummaryFocused,
+                    onClose: closeDetail,
+                    onSendToAgent: { pendingDispatch = item }
                 )
                 .frame(width: 340)
                 .frame(maxHeight: .infinity)
@@ -344,6 +352,14 @@ struct BoardView: View {
             guard store.workspace == .board else { return event }
 
             let chords = event.modifierFlags.intersection([.command, .option, .control, .shift])
+
+            // Cmd+T creates a new card in the selected column, or BACKLOG if
+            // no column is selected.
+            if event.keyCode == 17, chords == .command {
+                addItem(in: selectedColumn ?? .inbox)
+                return nil
+            }
+
             guard event.keyCode == 53, chords.isEmpty else { return event }
 
             // The dispatch picker is modal over the whole board, so it owns
@@ -371,7 +387,12 @@ struct BoardView: View {
 
     private func select(_ item: OrchestratorWorkItem) {
         justCreatedID = nil
+        selectedColumn = item.status.boardColumn
         store.selectedOrchestratorWorkItemID = item.id
+        // The pane animates in; focusing on the next runloop lands once it
+        // exists rather than racing its appearance — same reasoning as
+        // `addItem`'s title focus below.
+        DispatchQueue.main.async { editorSummaryFocused = true }
     }
 
     private func closeDetail() {
@@ -383,6 +404,7 @@ struct BoardView: View {
         }
         justCreatedID = nil
         editorTitleFocused = false
+        editorSummaryFocused = false
         store.selectedOrchestratorWorkItemID = nil
     }
 
@@ -429,17 +451,18 @@ struct BoardView: View {
     /// The plus button creates the item straight away and opens it in the
     /// detail pane with the title focused, so naming it is one keystroke. The
     /// title starts empty — closing before typing anything deletes the item.
-    private func addItem(in status: OrchestratorWorkStatus) {
+    private func addItem(in status: OrchestratorWorkStatus, category: OrchestratorWorkCategory? = nil) {
         let item = OrchestratorWorkItem(
             title: "",
             summary: "",
             rawCapture: "",
-            category: categoryFilter ?? .other,
+            category: category ?? categoryFilter ?? .other,
             status: status,
             projectID: addProjectID
         )
         AppActionDispatcher(store: store).perform(.createWorkItem(item))
         justCreatedID = item.id
+        selectedColumn = status
         store.selectedOrchestratorWorkItemID = item.id
         // The pane animates in; focusing on the next runloop lands once it
         // exists rather than racing its appearance.
@@ -478,7 +501,11 @@ private struct BoardDetailPane: View {
 
     let item: OrchestratorWorkItem
     let titleFocus: FocusState<Bool>.Binding?
+    let summaryFocus: FocusState<Bool>.Binding?
     let onClose: () -> Void
+    /// Cmd+Return, from anywhere in the popup — see `installDeleteMonitor`,
+    /// which now carries both chords despite the name.
+    let onSendToAgent: () -> Void
 
     @State private var title: String
     @State private var summary: String
@@ -486,15 +513,20 @@ private struct BoardDetailPane: View {
     @State private var status: OrchestratorWorkStatus
     @State private var priority: OrchestratorPriority
     @State private var projectID: String
+    @State private var deleteKeyMonitor: Any?
 
     init(
         item: OrchestratorWorkItem,
         titleFocus: FocusState<Bool>.Binding? = nil,
-        onClose: @escaping () -> Void
+        summaryFocus: FocusState<Bool>.Binding? = nil,
+        onClose: @escaping () -> Void,
+        onSendToAgent: @escaping () -> Void
     ) {
         self.item = item
         self.titleFocus = titleFocus
+        self.summaryFocus = summaryFocus
         self.onClose = onClose
+        self.onSendToAgent = onSendToAgent
         _title = State(initialValue: item.title)
         _summary = State(initialValue: item.summary)
         _category = State(initialValue: item.category)
@@ -535,18 +567,21 @@ private struct BoardDetailPane: View {
                         projectID: $projectID,
                         projects: store.rootProjects,
                         titleFocus: titleFocus,
-                        onSave: save
+                        summaryFocus: summaryFocus,
+                        onSave: save,
+                        onSaveAndClose: { save(); onClose() }
                     )
 
                     GlassHairline()
 
-                    HStack(spacing: 7) {
+                    HStack(spacing: 10) {
                         WorkItemDispatchMenu(item: item, onWillDispatch: save)
+                            .frame(maxWidth: .infinity)
 
-                        Button("delete") {
+                        Button("Delete") {
                             AppActionDispatcher(store: store).perform(.deleteWorkItem(id: item.id))
                         }
-                        .buttonStyle(.inset(DaddyTheme.failure))
+                        .buttonStyle(.insetLarge(DaddyTheme.failure))
                     }
 
                     if !item.rawCapture.isEmpty, item.rawCapture != item.summary {
@@ -563,6 +598,54 @@ private struct BoardDetailPane: View {
         }
         .glassPanel()
         .onChange(of: item.id) { _, _ in seed(from: item) }
+        .onAppear { installDeleteMonitor() }
+        .onDisappear { removeDeleteMonitor() }
+    }
+
+    /// Cmd+Backspace (delete) and Cmd+Return (send to agent), alongside the
+    /// existing buttons. A local monitor rather than `.onKeyPress` for the
+    /// same reason the board's Escape handling is one — the pane never holds
+    /// keyboard focus itself while a text field inside it does. Escape's own
+    /// handling lives entirely in `BoardView` and is untouched by this.
+    private func installDeleteMonitor() {
+        guard deleteKeyMonitor == nil else { return }
+        deleteKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let chords = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            guard chords == .command else { return event }
+            // 51 is Delete — the backspace key, which is what ⌘⌫ means on a Mac.
+            if event.keyCode == 51 {
+                deleteWithUndo()
+                return nil
+            }
+            // 36 is Return.
+            if event.keyCode == 36 {
+                save()
+                onSendToAgent()
+                return nil
+            }
+            return event
+        }
+    }
+
+    private func removeDeleteMonitor() {
+        if let deleteKeyMonitor {
+            NSEvent.removeMonitor(deleteKeyMonitor)
+            self.deleteKeyMonitor = nil
+        }
+    }
+
+    /// Deletes the item and closes the pane, leaving a 5s toast with an Undo
+    /// that recreates it — the same toast/undo mechanism voice actions use.
+    private func deleteWithUndo() {
+        guard let current = store.workItem(item.id) else { return }
+        AppActionDispatcher(store: store).perform(.deleteWorkItem(id: item.id))
+        onClose()
+        let label = current.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        store.showVoiceToast(VoiceToast(
+            label: "Deleted \"\(label.isEmpty ? "Untitled" : label)\"",
+            undoAction: .createWorkItem(current),
+            icon: nil
+        ))
     }
 
     private func seed(from item: OrchestratorWorkItem) {

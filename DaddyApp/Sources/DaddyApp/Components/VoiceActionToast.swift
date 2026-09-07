@@ -15,9 +15,11 @@ struct VoiceActionToast: View {
 
     var body: some View {
         HStack(spacing: 13) {
-            Image(systemName: "waveform")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(DaddyTheme.accent)
+            if let icon = toast.icon {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(DaddyTheme.accent)
+            }
 
             Text(toast.label)
                 .font(.system(size: 15.5, weight: .semibold))

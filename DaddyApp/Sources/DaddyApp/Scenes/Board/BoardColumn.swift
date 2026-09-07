@@ -27,6 +27,10 @@ struct BoardColumn: View {
     let onDragEnded: (OrchestratorWorkItem, CGPoint) -> Void
     let onToggleGroup: (BoardGroupKey) -> Void
     let onAdd: () -> Void
+    let onAddInCategory: (OrchestratorWorkCategory) -> Void
+    /// Whether this column is the one Cmd+T will add into.
+    let isSelected: Bool
+    let onSelectColumn: () -> Void
 
     static let width: CGFloat = 244
 
@@ -46,6 +50,8 @@ struct BoardColumn: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelectColumn)
         .background {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(status.boardTint.opacity(isDropTarget ? 0.10 : 0.035))
@@ -53,8 +59,8 @@ struct BoardColumn: View {
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(
-                    status.boardTint.opacity(isDropTarget ? 0.75 : 0.16),
-                    lineWidth: 1
+                    status.boardTint.opacity(isDropTarget ? 0.75 : (isSelected ? 0.6 : 0.16)),
+                    lineWidth: isSelected && !isDropTarget ? 1.5 : 1
                 )
         }
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -75,7 +81,7 @@ struct BoardColumn: View {
     private var header: some View {
         HStack(spacing: 6) {
             Text(status.title)
-                .font(.system(size: 9.5, weight: .bold))
+                .font(.system(size: 11, weight: .bold))
                 .tracking(0.9)
                 .foregroundStyle(status.boardTint)
 
@@ -144,7 +150,8 @@ struct BoardColumn: View {
             category: category,
             count: count,
             isCollapsed: collapsed.contains(key),
-            onToggle: { onToggleGroup(key) }
+            onToggle: { onToggleGroup(key) },
+            onAdd: { onAddInCategory(category) }
         )
     }
 
@@ -173,6 +180,7 @@ private struct GroupHeader: View {
     let count: Int
     let isCollapsed: Bool
     let onToggle: () -> Void
+    let onAdd: () -> Void
     @State private var hovering = false
 
     var body: some View {
@@ -184,7 +192,7 @@ private struct GroupHeader: View {
                 .animation(.easeOut(duration: 0.12), value: isCollapsed)
 
             Text(category.boardTitle)
-                .font(.system(size: 8.5, weight: .bold))
+                .font(.system(size: 9.5, weight: .bold))
                 .tracking(0.6)
                 .foregroundStyle(category.tint)
 
@@ -195,6 +203,16 @@ private struct GroupHeader: View {
             Text("\(count)")
                 .font(.system(size: 8.5, design: .monospaced))
                 .foregroundStyle(category.tint.opacity(0.7))
+
+            Button(action: onAdd) {
+                Image(systemName: "plus")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(category.tint.opacity(0.9))
+                    .frame(width: 15, height: 15)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("New \(category.boardTitle.capitalized) item")
         }
         .padding(.horizontal, 5)
         .padding(.vertical, 4)

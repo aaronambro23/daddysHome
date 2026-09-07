@@ -86,7 +86,7 @@ struct BoardCard: View {
                     HStack(spacing: 5) {
                         if showsCategory {
                             Text(item.category.boardTitle)
-                                .font(.system(size: 8.5, weight: .bold))
+                                .font(.system(size: 9.5, weight: .bold))
                                 .tracking(0.5)
                                 .foregroundStyle(item.category.tint)
                                 .lineLimit(1)
@@ -106,7 +106,7 @@ struct BoardCard: View {
                 }
 
                 Text(item.title)
-                    .font(.system(size: 11.5, weight: isSelected ? .semibold : .regular))
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
                     .foregroundStyle(DaddyTheme.textPrimary)
                     .multilineTextAlignment(.leading)
                     .lineLimit(3)

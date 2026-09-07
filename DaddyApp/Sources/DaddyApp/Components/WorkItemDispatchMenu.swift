@@ -26,13 +26,14 @@ struct WorkItemDispatchMenu: View {
     }
 
     private var trigger: some View {
-        Text("send to agent")
-            .font(.system(size: 10, weight: .medium))
+        Text("Send to Agent")
+            .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(DaddyTheme.textPrimary)
-            .padding(.horizontal, 11)
-            .padding(.vertical, 6)
-            .background { Capsule().fill(Color.white.opacity(0.07)) }
-            .overlay { Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 1) }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background { Capsule().fill(Color.white.opacity(0.09)) }
+            .overlay { Capsule().strokeBorder(Color.white.opacity(0.16), lineWidth: 1) }
             .contentShape(Capsule())
     }
 

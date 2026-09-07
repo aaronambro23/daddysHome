@@ -110,6 +110,39 @@ extension ButtonStyle where Self == InsetButtonStyle {
     static func inset(_ accent: Color) -> InsetButtonStyle { InsetButtonStyle(accent: accent) }
 }
 
+/// `InsetButtonStyle`'s bigger sibling — for a form's primary/destructive
+/// actions (the work item popup's save/delete), where the 10pt pill reads as
+/// a label rather than a button worth pressing.
+struct LargeInsetButtonStyle: ButtonStyle {
+    var accent: Color = DaddyTheme.textPrimary
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(accent.opacity(configuration.isPressed ? 0.7 : 1))
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .background {
+                Capsule().fill(
+                    Color.white.opacity(configuration.isPressed ? 0.24 : (hovering ? 0.16 : 0.09))
+                )
+            }
+            .overlay { Capsule().strokeBorder(Color.white.opacity(0.16), lineWidth: 1) }
+            .contentShape(Capsule())
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
+            .animation(.easeOut(duration: 0.14), value: hovering)
+            .onHover { hovering = $0 }
+    }
+}
+
+extension ButtonStyle where Self == LargeInsetButtonStyle {
+    static var insetLarge: LargeInsetButtonStyle { LargeInsetButtonStyle() }
+    static func insetLarge(_ accent: Color) -> LargeInsetButtonStyle { LargeInsetButtonStyle(accent: accent) }
+}
+
 // MARK: - Hairline
 
 struct GlassHairline: View {

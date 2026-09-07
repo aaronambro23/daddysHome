@@ -237,10 +237,15 @@ public final class SessionManager: @unchecked Sendable {
     ///
     /// A launched process cannot have its system prompt rewritten, so this is a
     /// message rather than a flag — which is also why it works on all four CLIs
-    /// while the launch-time injection only works on Claude.
+    /// while the launch-time injection only works on Claude. Pasted, not sent:
+    /// picking a mode used to submit immediately, which fought with also
+    /// picking a build policy right after — one or the other would land as its
+    /// own message instead of both riding into the same prompt. Left in the
+    /// composer, the two combine and whatever else you type goes out together
+    /// on one Enter.
     public func switchWorkMode(_ mode: WorkMode, for sessionID: String) throws {
         let (pty, adapter) = try liveSession(sessionID)
-        try adapter.sendPrompt(mode.switchInstruction, to: pty)
+        try adapter.pastePrompt(mode.switchInstruction + " ", to: pty)
 
         lock.lock()
         defer { lock.unlock() }
@@ -248,11 +253,11 @@ public final class SessionManager: @unchecked Sendable {
         sessions[sessionID]?.lastOutputAt = Date()
     }
 
-    /// Change a running session's build policy. A message, for the same reason
-    /// `switchWorkMode` is one.
+    /// Change a running session's build policy. Pasted, for the same reason
+    /// `switchWorkMode` is.
     public func switchBuildPolicy(_ policy: BuildPolicy, for sessionID: String) throws {
         let (pty, adapter) = try liveSession(sessionID)
-        try adapter.sendPrompt(policy.switchInstruction, to: pty)
+        try adapter.pastePrompt(policy.switchInstruction + " ", to: pty)
 
         lock.lock()
         defer { lock.unlock() }

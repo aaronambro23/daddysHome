@@ -24,10 +24,23 @@ struct WorkItemFields: View {
     /// without reaching for the mouse. The inspector passes nothing.
     var titleFocus: FocusState<Bool>.Binding?
 
-    /// Called on Enter in the title field as well as by the save button, so a
-    /// freshly created card commits with one keystroke. Dropdowns call it on
-    /// pick too — a status change should not wait on a separate save.
+    /// Focused by the board when it opens an existing card, so the summary is
+    /// ready to edit without reaching for the mouse. The inspector passes
+    /// nothing.
+    var summaryFocus: FocusState<Bool>.Binding?
+
+    /// Called on Enter in the title field, and on every dropdown pick, so a
+    /// status change or a freshly created card's title commits without a
+    /// separate save — those are in-place edits, not a "done with this card"
+    /// moment.
     let onSave: () -> Void
+
+    /// The explicit "I'm done" action — the save button and Cmd+S. Defaults
+    /// to `onSave` (the Orchestrator inspector has no popup to close), but the
+    /// board's popup passes save-and-close so the explicit save actually
+    /// leaves the form rather than saving in place and sitting there.
+    var onSaveAndClose: (() -> Void)?
+    private var commit: () -> Void { onSaveAndClose ?? onSave }
 
     @State private var copied = false
 
@@ -35,7 +48,6 @@ struct WorkItemFields: View {
     /// priority → project → save → back to title. Each field hands Tab to the
     /// next explicitly (`.handled`) rather than trusting the key loop, because
     /// the loop's order through popover triggers is not the visual order.
-    @FocusState private var summaryFocused: Bool
     @FocusState private var categoryFocused: Bool
     @FocusState private var statusFocused: Bool
     @FocusState private var priorityFocused: Bool
@@ -51,7 +63,9 @@ struct WorkItemFields: View {
         projectID: Binding<String>,
         projects: [MockProject],
         titleFocus: FocusState<Bool>.Binding? = nil,
-        onSave: @escaping () -> Void
+        summaryFocus: FocusState<Bool>.Binding? = nil,
+        onSave: @escaping () -> Void,
+        onSaveAndClose: (() -> Void)? = nil
     ) {
         _title = title
         _summary = summary
@@ -61,7 +75,9 @@ struct WorkItemFields: View {
         _projectID = projectID
         self.projects = projects
         self.titleFocus = titleFocus
+        self.summaryFocus = summaryFocus
         self.onSave = onSave
+        self.onSaveAndClose = onSaveAndClose
     }
 
     var body: some View {
@@ -76,144 +92,135 @@ struct WorkItemFields: View {
 
             Text("SUMMARY")
                 .workItemFieldLabel()
-            TextEditor(text: $summary)
-                .font(.system(size: 11))
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: 100)
-                .padding(7)
-                .insetSurface(cornerRadius: 10)
-                .focused($summaryFocused)
-                .onKeyPress { press in
-                    guard press.key == .tab else { return .ignored }
-                    if press.modifiers.contains(.shift) {
-                        titleFocus?.wrappedValue = true
-                    } else {
-                        categoryFocused = true
-                    }
-                    return .handled
+            summaryField
+
+            // Two dropdowns per row — four stacked full-width rows read as a
+            // long form; paired, they read as a form.
+            HStack(alignment: .top, spacing: 12) {
+                FieldRow(
+                    label: "CATEGORY",
+                    items: OrchestratorWorkCategory.allCases.map { option in
+                        GlassDropdownItem(
+                            id: option.rawValue,
+                            title: option.title,
+                            isSelected: option == category,
+                            leading: AnyView(
+                                Circle().fill(option.tint).frame(width: 7, height: 7)
+                            )
+                        ) {
+                            guard category != option else { return }
+                            pick { category = option }
+                        }
+                    },
+                    selectedIndex: OrchestratorWorkCategory.allCases.firstIndex(of: category),
+                    focus: $categoryFocused,
+                    onTabForward: { statusFocused = true },
+                    onTabBackward: { summaryFocus?.wrappedValue = true }
+                ) {
+                    fieldTrigger(
+                        title: category.title,
+                        tint: category.tint,
+                        leading: AnyView(
+                            Circle().fill(category.tint).frame(width: 7, height: 7)
+                        )
+                    )
                 }
 
-            FieldRow(
-                label: "CATEGORY",
-                items: OrchestratorWorkCategory.allCases.map { option in
-                    GlassDropdownItem(
-                        id: option.rawValue,
-                        title: option.title,
-                        isSelected: option == category,
-                        leading: AnyView(
-                            Circle().fill(option.tint).frame(width: 7, height: 7)
-                        )
-                    ) {
-                        guard category != option else { return }
-                        pick { category = option }
-                    }
-                },
-                selectedIndex: OrchestratorWorkCategory.allCases.firstIndex(of: category),
-                focus: $categoryFocused,
-                onTabForward: { statusFocused = true },
-                onTabBackward: { summaryFocused = true }
-            ) {
-                fieldTrigger(
-                    title: category.title,
-                    tint: category.tint,
-                    leading: AnyView(
-                        Circle().fill(category.tint).frame(width: 7, height: 7)
-                    )
-                )
-            }
-
-            FieldRow(
-                label: "STATUS",
-                items: OrchestratorWorkStatus.editableStatuses.map { option in
-                    GlassDropdownItem(
-                        id: option.rawValue,
-                        title: option.title,
-                        isSelected: option == status,
-                        leading: AnyView(
-                            Circle().fill(option.boardTint).frame(width: 7, height: 7)
-                        )
-                    ) {
-                        guard status != option else { return }
-                        pick { status = option }
-                    }
-                },
-                selectedIndex: OrchestratorWorkStatus.editableStatuses.firstIndex(of: status),
-                focus: $statusFocused,
-                onTabForward: { priorityFocused = true },
-                onTabBackward: { categoryFocused = true }
-            ) {
-                fieldTrigger(
-                    title: status.title,
-                    tint: status.boardTint,
-                    leading: AnyView(
-                        Circle().fill(status.boardTint).frame(width: 7, height: 7)
-                    )
-                )
-            }
-
-            FieldRow(
-                label: "PRIORITY",
-                items: OrchestratorPriority.allCases.map { option in
-                    GlassDropdownItem(
-                        id: option.rawValue,
-                        title: option.title,
-                        isSelected: option == priority,
-                        leading: AnyView(
-                            Circle().fill(option.tint).frame(width: 7, height: 7)
-                        )
-                    ) {
-                        guard priority != option else { return }
-                        pick { priority = option }
-                    }
-                },
-                selectedIndex: OrchestratorPriority.allCases.firstIndex(of: priority),
-                focus: $priorityFocused,
-                onTabForward: { projectFocused = true },
-                onTabBackward: { statusFocused = true }
-            ) {
-                fieldTrigger(
-                    title: priority.title,
-                    tint: priority.tint,
-                    leading: AnyView(
-                        Circle().fill(priority.tint).frame(width: 7, height: 7)
-                    )
-                )
-            }
-
-            FieldRow(
-                label: "PROJECT",
-                items: [GlassDropdownItem(
-                    id: "",
-                    title: "No project",
-                    isSelected: projectID.isEmpty
+                FieldRow(
+                    label: "STATUS",
+                    items: OrchestratorWorkStatus.editableStatuses.map { option in
+                        GlassDropdownItem(
+                            id: option.rawValue,
+                            title: option.title,
+                            isSelected: option == status,
+                            leading: AnyView(
+                                Circle().fill(option.boardTint).frame(width: 7, height: 7)
+                            )
+                        ) {
+                            guard status != option else { return }
+                            pick { status = option }
+                        }
+                    },
+                    selectedIndex: OrchestratorWorkStatus.editableStatuses.firstIndex(of: status),
+                    focus: $statusFocused,
+                    onTabForward: { priorityFocused = true },
+                    onTabBackward: { categoryFocused = true }
                 ) {
-                    guard !projectID.isEmpty else { return }
-                    pick { projectID = "" }
-                }] + projects.map { project in
-                    GlassDropdownItem(
-                        id: project.id,
-                        title: project.name,
-                        isSelected: project.id == projectID
-                    ) {
-                        guard projectID != project.id else { return }
-                        pick { projectID = project.id }
-                    }
-                },
-                selectedIndex: projectID.isEmpty
-                    ? 0
-                    : projects.firstIndex(where: { $0.id == projectID }).map { $0 + 1 },
-                focus: $projectFocused,
-                onTabForward: { saveFocused = true },
-                onTabBackward: { priorityFocused = true }
-            ) {
-                fieldTrigger(
-                    title: projects.first { $0.id == projectID }?.name ?? "No project",
-                    tint: DaddyTheme.textPrimary
-                )
+                    fieldTrigger(
+                        title: status.title,
+                        tint: status.boardTint,
+                        leading: AnyView(
+                            Circle().fill(status.boardTint).frame(width: 7, height: 7)
+                        )
+                    )
+                }
             }
 
-            Button("save work item", action: onSave)
-                .buttonStyle(.inset)
+            HStack(alignment: .top, spacing: 12) {
+                FieldRow(
+                    label: "PRIORITY",
+                    items: OrchestratorPriority.allCases.map { option in
+                        GlassDropdownItem(
+                            id: option.rawValue,
+                            title: option.title,
+                            isSelected: option == priority,
+                            leading: AnyView(
+                                Circle().fill(option.tint).frame(width: 7, height: 7)
+                            )
+                        ) {
+                            guard priority != option else { return }
+                            pick { priority = option }
+                        }
+                    },
+                    selectedIndex: OrchestratorPriority.allCases.firstIndex(of: priority),
+                    focus: $priorityFocused,
+                    onTabForward: { projectFocused = true },
+                    onTabBackward: { statusFocused = true }
+                ) {
+                    fieldTrigger(
+                        title: priority.title,
+                        tint: priority.tint,
+                        leading: AnyView(
+                            Circle().fill(priority.tint).frame(width: 7, height: 7)
+                        )
+                    )
+                }
+
+                FieldRow(
+                    label: "PROJECT",
+                    items: [GlassDropdownItem(
+                        id: "",
+                        title: "No project",
+                        isSelected: projectID.isEmpty
+                    ) {
+                        guard !projectID.isEmpty else { return }
+                        pick { projectID = "" }
+                    }] + projects.map { project in
+                        GlassDropdownItem(
+                            id: project.id,
+                            title: project.name,
+                            isSelected: project.id == projectID
+                        ) {
+                            guard projectID != project.id else { return }
+                            pick { projectID = project.id }
+                        }
+                    },
+                    selectedIndex: projectID.isEmpty
+                        ? 0
+                        : projects.firstIndex(where: { $0.id == projectID }).map { $0 + 1 },
+                    focus: $projectFocused,
+                    onTabForward: { saveFocused = true },
+                    onTabBackward: { priorityFocused = true }
+                ) {
+                    fieldTrigger(
+                        title: projects.first { $0.id == projectID }?.name ?? "No project",
+                        tint: DaddyTheme.textPrimary
+                    )
+                }
+            }
+
+            Button("Save Work Item", action: commit)
+                .buttonStyle(.insetLarge(DaddyTheme.accent))
                 .focused($saveFocused)
                 .onKeyPress { press in
                     guard press.key == .tab else { return .ignored }
@@ -224,7 +231,12 @@ struct WorkItemFields: View {
                     }
                     return .handled
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // Cmd+S does what the save button does, from any field in the form.
+        .onKeyPress { press in
+            guard press.key == "s", press.modifiers == .command else { return .ignored }
+            commit()
+            return .handled
         }
     }
 
@@ -265,16 +277,16 @@ struct WorkItemFields: View {
         HStack(spacing: 8) {
             if let leading { leading }
             Text(title)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(tint)
                 .lineLimit(1)
             Spacer(minLength: 0)
             Image(systemName: "chevron.down")
-                .font(.system(size: 8, weight: .bold))
+                .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(DaddyTheme.textMuted)
         }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 9)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .insetSurface(cornerRadius: 10)
@@ -297,6 +309,7 @@ struct WorkItemFields: View {
     private var baseTitleField: some View {
         TextField("Title", text: $title)
             .textFieldStyle(.plain)
+            .font(.system(size: 15, weight: .semibold))
             .onSubmit(onSave)
             .onKeyPress { press in
                 guard press.key == .tab else { return .ignored }
@@ -307,12 +320,40 @@ struct WorkItemFields: View {
                 if press.modifiers.contains(.shift) {
                     saveFocused = true
                 } else {
-                    summaryFocused = true
+                    summaryFocus?.wrappedValue = true
                 }
                 return .handled
             }
-            .padding(9)
+            .padding(11)
             .insetSurface(cornerRadius: 10)
+    }
+
+    @ViewBuilder
+    private var summaryField: some View {
+        if let summaryFocus {
+            baseSummaryField
+                .focused(summaryFocus)
+        } else {
+            baseSummaryField
+        }
+    }
+
+    private var baseSummaryField: some View {
+        TextEditor(text: $summary)
+            .font(.system(size: 13))
+            .scrollContentBackground(.hidden)
+            .frame(minHeight: 100)
+            .padding(7)
+            .insetSurface(cornerRadius: 10)
+            .onKeyPress { press in
+                guard press.key == .tab else { return .ignored }
+                if press.modifiers.contains(.shift) {
+                    titleFocus?.wrappedValue = true
+                } else {
+                    categoryFocused = true
+                }
+                return .handled
+            }
     }
 
     private var copyButton: some View {
@@ -347,7 +388,7 @@ struct WorkItemFields: View {
 
 extension View {
     func workItemFieldLabel(tint: Color = DaddyTheme.textMuted) -> some View {
-        font(.system(size: 9, weight: .bold))
+        font(.system(size: 10.5, weight: .bold))
             .tracking(0.7)
             .foregroundStyle(tint)
     }

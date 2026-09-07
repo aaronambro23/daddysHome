@@ -22,6 +22,14 @@ struct BoardDispatchPicker: View {
     /// four-bubble row.
     @State private var expanded: AgentKind?
 
+    /// Index into whichever row is on screen — the provider row while
+    /// `expanded` is nil, the session row (sessions then "New session") once
+    /// it isn't. Arrow keys move it, Enter activates it, so the bubbles are
+    /// reachable without the mouse the drop that opened this popup left you
+    /// without.
+    @State private var selectedIndex = 0
+    @State private var keyMonitor: Any?
+
     private static let providers: [AgentKind] = [.claude, .codex, .cursor, .opencode]
 
     var body: some View {
@@ -50,6 +58,94 @@ struct BoardDispatchPicker: View {
             .shadow(color: .black.opacity(0.5), radius: 30, y: 12)
         }
         .transition(.opacity)
+        .onAppear {
+            installKeyMonitor()
+            selectedIndex = firstEnabledIndex
+        }
+        .onDisappear { removeKeyMonitor() }
+        .onChange(of: expanded) { _, _ in selectedIndex = firstEnabledIndex }
+    }
+
+    private var firstEnabledIndex: Int {
+        currentTargets.firstIndex { $0.isEnabled } ?? 0
+    }
+
+    // MARK: - Keyboard
+
+    /// A local monitor, not `.onKeyPress` — this popup is an overlay over the
+    /// board, which never takes keyboard focus itself, so nothing here would
+    /// receive key events through the normal responder chain.
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+            else { return event }
+
+            switch event.keyCode {
+            case 123: // Left
+                moveSelection(by: -1)
+                return nil
+            case 124: // Right
+                moveSelection(by: 1)
+                return nil
+            case 36, 76: // Return, keypad Enter
+                activateSelection()
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+
+    private func removeKeyMonitor() {
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
+        }
+    }
+
+    private func moveSelection(by delta: Int) {
+        let targets = currentTargets
+        guard !targets.isEmpty else { return }
+        var next = selectedIndex
+        repeat {
+            next += delta
+        } while targets.indices.contains(next) && !targets[next].isEnabled
+        guard targets.indices.contains(next) else { return }
+        selectedIndex = next
+    }
+
+    private func activateSelection() {
+        let targets = currentTargets
+        guard targets.indices.contains(selectedIndex), targets[selectedIndex].isEnabled else { return }
+        targets[selectedIndex].action()
+    }
+
+    /// The bubbles on screen right now, left to right, paired with whether
+    /// they can be activated and what pressing Enter on each one does — the
+    /// same action its tap gesture runs. Disabled (not-installed) providers
+    /// stay in the list so the index lines up with what is drawn, but arrow
+    /// navigation steps over them and Enter on one is a no-op.
+    private var currentTargets: [(id: String, isEnabled: Bool, action: () -> Void)] {
+        guard resolvedProject != nil else { return [] }
+        if let kind = expanded {
+            let sessions = liveSessions(of: kind).map { agent in
+                (id: agent.id, isEnabled: true, action: { dispatch(onto: agent) })
+            }
+            return sessions + [
+                (id: "new-\(kind.rawValue)", isEnabled: true, action: { dispatch(launching: kind) })
+            ]
+        }
+        return Self.providers.map { kind in
+            (id: kind.rawValue, isEnabled: store.isInstalled(kind), action: {
+                let live = liveSessions(of: kind)
+                if live.isEmpty {
+                    dispatch(launching: kind)
+                } else {
+                    expanded = kind
+                }
+            })
+        }
     }
 
     // MARK: - Heading
@@ -88,13 +184,13 @@ struct BoardDispatchPicker: View {
 
     private var providerRow: some View {
         HStack(spacing: 16) {
-            ForEach(Self.providers, id: \.self) { kind in
-                providerBubble(kind)
+            ForEach(Array(Self.providers.enumerated()), id: \.element) { index, kind in
+                providerBubble(kind, isSelected: index == selectedIndex)
             }
         }
     }
 
-    private func providerBubble(_ kind: AgentKind) -> some View {
+    private func providerBubble(_ kind: AgentKind, isSelected: Bool) -> some View {
         let installed = store.isInstalled(kind)
         let live = liveSessions(of: kind)
 
@@ -102,6 +198,7 @@ struct BoardDispatchPicker: View {
             diameter: 96,
             tint: CompactAgentIcon.tint(for: kind),
             isEnabled: installed,
+            isSelected: isSelected,
             title: kind.rawValue.capitalized,
             note: installed
                 ? (live.isEmpty ? "new session" : "\(live.count) live")
@@ -121,13 +218,15 @@ struct BoardDispatchPicker: View {
     // MARK: - Sessions
 
     private func sessionRow(for kind: AgentKind) -> some View {
-        VStack(spacing: 16) {
+        let sessions = liveSessions(of: kind)
+        return VStack(spacing: 16) {
             HStack(spacing: 14) {
-                ForEach(liveSessions(of: kind), id: \.id) { agent in
+                ForEach(Array(sessions.enumerated()), id: \.element.id) { index, agent in
                     DispatchBubble(
                         diameter: 78,
                         tint: CompactAgentIcon.tint(for: kind),
                         isEnabled: true,
+                        isSelected: index == selectedIndex,
                         title: sessionTitle(agent),
                         note: agent.id == currentSessionID ? "this session" : nil,
                         bubble: AnyView(ProviderLogo.badge(for: kind, diameter: 78))
@@ -140,6 +239,7 @@ struct BoardDispatchPicker: View {
                     diameter: 78,
                     tint: DaddyTheme.textMuted,
                     isEnabled: true,
+                    isSelected: sessions.count == selectedIndex,
                     title: "New session",
                     note: nil,
                     bubble: AnyView(
@@ -223,6 +323,9 @@ private struct DispatchBubble: View {
     let diameter: CGFloat
     let tint: Color
     let isEnabled: Bool
+    /// Driven by the popup's keyboard selection, not by this view's own
+    /// state — arrow keys move it, so it has to be visible without hovering.
+    var isSelected: Bool = false
     let title: String
     let note: String?
     let bubble: AnyView
@@ -230,17 +333,19 @@ private struct DispatchBubble: View {
 
     @State private var hovering = false
 
+    private var highlighted: Bool { hovering || isSelected }
+
     var body: some View {
         Button(action: action) {
             VStack(spacing: 9) {
                 bubble
                     .overlay {
                         Circle()
-                            .strokeBorder(tint.opacity(hovering ? 0.9 : 0), lineWidth: 2)
+                            .strokeBorder(tint.opacity(highlighted ? 0.9 : 0), lineWidth: 2)
                             .frame(width: diameter, height: diameter)
                     }
-                    .scaleEffect(hovering ? 1.06 : 1)
-                    .shadow(color: tint.opacity(hovering ? 0.35 : 0), radius: 16)
+                    .scaleEffect(highlighted ? 1.06 : 1)
+                    .shadow(color: tint.opacity(highlighted ? 0.35 : 0), radius: 16)
 
                 VStack(spacing: 2) {
                     Text(title)
@@ -261,7 +366,7 @@ private struct DispatchBubble: View {
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.35)
-        .animation(.easeOut(duration: 0.14), value: hovering)
+        .animation(.easeOut(duration: 0.14), value: highlighted)
         .onHover { hovering = isEnabled && $0 }
     }
 }

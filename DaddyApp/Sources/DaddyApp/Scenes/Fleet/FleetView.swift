@@ -39,6 +39,15 @@ struct FleetView: View {
     @State private var sidebarHoverEnabled = true
     @State private var hoverRestoreTask: Task<Void, Never>?
     @State private var providerLaunchOpen = false
+    /// `store.userShellCollapsed`, but lagged by the shell's own exit
+    /// animation when it is going away. Reopening still shrinks the terminal
+    /// instantly — the shell then slides into space already vacated, which
+    /// reads fine. Collapsing used to expand the terminal instantly too, so
+    /// it snapped to fill the shell's spot while the shell was still visible
+    /// there sliding out, and the exit read as a jump-cut instead of a slide.
+    /// Deferring the terminal's claim on that space until the shell has
+    /// actually finished leaving makes the two directions match.
+    @State private var shellCollapsedForLayout = false
     @State private var plusLaunchFrame: CGRect = .zero
     /// Frozen left-to-right agent ids for a Ctrl+Tab burst. Empty when idle.
     @State private var focusCycleIDs: [String] = []
@@ -122,7 +131,13 @@ struct FleetView: View {
                     width: isDetail
                         ? max(0, contentWidth - railPush)
                         : max(0, contentWidth - terminalDockedWidth - gap),
-                    height: isDetail ? detailToolbarHeight : geo.size.height
+                    // Always the full height — the container itself never
+                    // resizes, only what it holds. Sizing this to
+                    // `detailToolbarHeight` in detail mode used to animate the
+                    // container's height alongside the dashboard's leading-edge
+                    // transition, which read as a diagonal slide out of the top
+                    // left instead of a straight slide from the left.
+                    height: geo.size.height
                 )
                 // Same top edge as the rail and the docked OUTPUT column —
                 // RootView already insets the fleet 18pt, and that inset is the
@@ -207,8 +222,26 @@ struct FleetView: View {
             .animation(.smooth(duration: 0.3), value: progressPanelOpen)
             .animation(.smooth(duration: 0.3), value: isDetail)
         }
-        .onAppear { installKeyboardMonitor() }
+        .onAppear {
+            installKeyboardMonitor()
+            shellCollapsedForLayout = store.userShellCollapsed
+        }
         .onDisappear { removeKeyboardMonitor() }
+        .onChange(of: store.userShellCollapsed) { _, collapsed in
+            guard collapsed else {
+                // Reopening: shrink the terminal right away so the shell
+                // slides into space that is already free.
+                shellCollapsedForLayout = false
+                return
+            }
+            // Collapsing: give the shell's own exit transition (0.3s, see
+            // `shellVisible`'s `.animation` below) time to finish before the
+            // terminal claims the space it is leaving.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                guard store.userShellCollapsed else { return }
+                shellCollapsedForLayout = true
+            }
+        }
         .onChange(of: store.detailAgentID) { _, detailID in
             if let detailID {
                 syncFocusStrip(current: detailID)
@@ -234,7 +267,7 @@ struct FleetView: View {
             // session — that reflow is the point of collapsing. The frame
             // itself is not animated, so it is one SIGWINCH, not a dozen.
             let top = detailToolbarHeight + gap
-            let shellTaken = store.userShellCollapsed
+            let shellTaken = shellCollapsedForLayout
                 ? 0 : shellWidth(for: contentWidth) + gap
             return CGRect(
                 x: contentX,
@@ -268,6 +301,7 @@ struct FleetView: View {
                     highlightID: focusHighlightID,
                     stripIDs: focusStripIDs
                 )
+                .frame(height: detailToolbarHeight)
                 .transition(.move(edge: .top).combined(with: .opacity))
             } else {
                 AgentDashboard(

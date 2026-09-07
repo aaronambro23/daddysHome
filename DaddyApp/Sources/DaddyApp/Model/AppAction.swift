@@ -21,6 +21,9 @@ struct VoiceToast: Identifiable {
     let id = UUID()
     let label: String
     let undoAction: AppAction?
+    /// SF Symbol shown beside the label. Voice-triggered toasts default to the
+    /// waveform; non-voice ones (e.g. a keyboard delete) pass `nil` to omit it.
+    var icon: String? = "waveform"
 }
 
 enum AppActionOutcome {
