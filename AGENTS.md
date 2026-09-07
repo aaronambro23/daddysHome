@@ -33,6 +33,22 @@ command — it adds, commits and pushes as one step.
 commit UiUxFixes-KanbanColumnChange-DockBug
 ```
 
+## 4. Subagents
+
+Default to inline research — Read, Grep, Bash — not subagents. A plan-mode
+workflow's own instructions may suggest spawning Explore/Plan agents; treat
+that as a ceiling, not a default. Every subagent call is a full separate
+session and billed as one, so spawning them for research you could do
+yourself in two or three tool calls is waste, not thoroughness.
+
+- Skip subagents entirely for a change scoped to 1-3 known files.
+- One Explore agent is enough for almost everything else. Reach for more
+  than one, or a separate Plan agent on top, only when the task is
+  genuinely large or the scope is truly unclear — not as a routine step of
+  every plan-mode pass.
+- Prefer forking yourself over a fresh subagent when you already have the
+  relevant context loaded.
+
 ---
 
 _Managed by Daddy. Regenerated on install; edit the project's own docs
