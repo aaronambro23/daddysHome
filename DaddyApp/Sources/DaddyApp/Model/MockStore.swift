@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import DaddyCore
 
 // MARK: - Store
@@ -62,6 +63,18 @@ final class MockStore {
     var orchestratorConversationCreatedAtByCategory: [String: Date] = [:]
     var orchestratorConversationLongTermByCategory: [String: Bool] = [:]
     var orchestratorWorkItems: [OrchestratorWorkItem] = []
+    /// Mirrors `syncCoordinator.pendingBuckets` so SwiftUI actually redraws
+    /// when it changes — the coordinator itself is `@ObservationIgnored`.
+    var pendingSyncBuckets: Set<CategoryBucket> = []
+    /// Which items to actually flag as "not backed up." Drive syncs a whole
+    /// bucket file at once, but showing the badge on every card sharing that
+    /// file (most of them untouched) is noise — this narrows it to the items
+    /// that were actually just written while their bucket was pending.
+    var recentlyDirtyItemIDs: Set<UUID> = []
+    /// A voice-triggered action's confirmation, shown as a toast. One at a
+    /// time — a second voice command replaces whatever's showing.
+    var voiceToast: VoiceToast?
+    @ObservationIgnored var voiceToastDismissTask: Task<Void, Never>?
     var selectedOrchestratorWorkItemID: UUID?
     var orchestratorStreamingText = ""
     var orchestratorBusy = false
@@ -110,8 +123,14 @@ final class MockStore {
 
     /// The mode new sessions start in. A single card can be switched away from
     /// it afterwards without disturbing this — see `setWorkMode`.
-    var workMode: WorkMode = .detailed {
+    var workMode: WorkMode = .default {
         didSet { Defaults.set(workMode.rawValue, for: .workMode) }
+    }
+
+    /// What new sessions are allowed to build. Per-card overrides go through
+    /// `setBuildPolicy`, same as the work mode.
+    var buildPolicy: BuildPolicy = .default {
+        didSet { Defaults.set(buildPolicy.rawValue, for: .buildPolicy) }
     }
 
     /// The local model used by the Orchestrator workspace.
@@ -188,9 +207,17 @@ final class MockStore {
     @ObservationIgnored let orchestratorMarkdownStore = OrchestratorMarkdownStore()
     @ObservationIgnored let ollamaClient = OllamaClient()
 
+    /// The only thing that talks to both `orchestratorMarkdownStore` and
+    /// Google Drive. See `WorkItemSyncCoordinator.swift`.
+    @ObservationIgnored lazy var syncCoordinator = WorkItemSyncCoordinator(localStore: orchestratorMarkdownStore)
+
     /// Reads HEX's own recording history, so voice commands do not depend on
     /// whichever SwiftUI control or embedded terminal currently owns focus.
     @ObservationIgnored private var hexWatcher: HEXWatcher?
+
+    /// Daddy's own mic capture — double-tap Option, system-wide. See
+    /// `VoiceCaptureController.swift`.
+    @ObservationIgnored let voiceCaptureController = VoiceCaptureController()
 
     /// Surfaced in the UI when a launch fails (missing binary, bad cwd).
     var launchError: String?
@@ -228,7 +255,11 @@ final class MockStore {
         loadDefaults()
 
         seed()
+        // Local first, so the board has something to show instantly; if
+        // Drive is connected, `reloadWorkItems()` reconciles against it a
+        // moment later.
         orchestratorWorkItems = orchestratorMarkdownStore.loadWorkItems()
+        reloadWorkItems()
         restoreOrchestratorConversations()
         restoreSessions()
         selectedProjectID = Self.defaultProjectID(in: projects)
@@ -240,6 +271,14 @@ final class MockStore {
         hexWatcher?.start { [weak self] transcript in
             self?.submitVoice(transcript)
         }
+
+        voiceCaptureController.onTranscript = { [weak self] transcript in
+            self?.submitVoice(transcript)
+        }
+        // Note: the controller starts from RootView.onAppear, not here —
+        // registering global NSEvent monitors pre-activation wedges all
+        // app input (frozen window, live runloop).
+
         syncGitPushWatchers()
     }
 
@@ -611,7 +650,8 @@ final class MockStore {
             try sessionManager.launchSession(
                 session,
                 approvalPolicy: approvalPolicy,
-                workMode: workMode
+                workMode: workMode,
+                buildPolicy: buildPolicy
             )
 
             let card = MockAgent(
@@ -1063,6 +1103,17 @@ final class MockStore {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
+        // Dictation: a focused editable input means the words were meant for
+        // it — type them at the cursor and stop. Anything else is a command.
+        if dictateIntoFocusedInput(trimmed) {
+            voiceLog.insert(
+                VoiceEntry(at: Date(), transcript: trimmed,
+                           resolution: "dictated into input", didSucceed: true),
+                at: 0
+            )
+            return
+        }
+
         let outcome = VoiceRouter(store: self).route(trimmed)
 
         voiceLog.insert(
@@ -1070,6 +1121,18 @@ final class MockStore {
                        resolution: outcome.summary, didSucceed: outcome.didSucceed),
             at: 0
         )
+    }
+
+    /// Types `text` at the cursor of the focused input, if there is one. Only
+    /// a real editable `NSTextView` (SwiftUI fields, `NSTextField`) qualifies
+    /// — SwiftTerm panes are a different view class, so dictation can never
+    /// spray keystrokes into a live shell.
+    private func dictateIntoFocusedInput(_ text: String) -> Bool {
+        guard let window = NSApp.keyWindow,
+              let textView = window.firstResponder as? NSTextView,
+              textView.isEditable else { return false }
+        textView.insertText(text, replacementRange: textView.selectedRange())
+        return true
     }
 
     /// Switch the model on a live session. Returns false if the agent has no
@@ -1107,6 +1170,8 @@ final class MockStore {
 
     func tick() {
         tickCount += 1
+        syncCoordinator.tick()
+        refreshPendingSyncState()
 
         if let projectID = selectedProjectID {
             refreshPastChats(for: projectID)
@@ -1329,8 +1394,11 @@ extension MockStore {
            let policy = ApprovalPolicy(rawValue: raw) {
             approvalPolicy = policy
         }
-        if let raw = Defaults.string(.workMode), let mode = WorkMode(rawValue: raw) {
+        if let raw = Defaults.string(.workMode), let mode = WorkMode.fromStored(raw) {
             workMode = mode
+        }
+        if let raw = Defaults.string(.buildPolicy), let policy = BuildPolicy(rawValue: raw) {
+            buildPolicy = policy
         }
         if let model = Defaults.string(.orchestratorModel), !model.isEmpty {
             orchestratorModel = model
@@ -1367,6 +1435,28 @@ extension MockStore {
             mutate(agentID) { $0.lastOutputAt = Date() }
         } catch {
             launchError = "mode: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Build policy
+
+    /// What a specific card may build, which is not necessarily the global
+    /// default — same reasoning as `workMode(of:)`.
+    func buildPolicy(of agent: MockAgent) -> BuildPolicy {
+        guard let sessionID = agent.sessionID,
+              let session = sessionManager.session(sessionID) else { return buildPolicy }
+        return session.buildPolicy
+    }
+
+    /// Switch one running session's build policy without touching the default.
+    /// Arrives as a message, for the same reason `setWorkMode` does.
+    func setBuildPolicy(_ policy: BuildPolicy, for agentID: String) {
+        guard let sessionID = agents.first(where: { $0.id == agentID })?.sessionID else { return }
+        do {
+            try sessionManager.switchBuildPolicy(policy, for: sessionID)
+            mutate(agentID) { $0.lastOutputAt = Date() }
+        } catch {
+            launchError = "build policy: \(error.localizedDescription)"
         }
     }
 
@@ -1506,7 +1596,8 @@ extension MockStore {
                 session,
                 approvalPolicy: approvalPolicy,
                 continuingConversation: true,
-                workMode: workMode
+                workMode: workMode,
+                buildPolicy: buildPolicy
             )
 
             let card = MockAgent(

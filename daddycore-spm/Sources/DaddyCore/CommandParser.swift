@@ -12,6 +12,18 @@ public enum CommandIntent: Equatable {
     case switchModel   // switch model
     case launch        // launch a new agent
     case unknown(String)  // unknown intent
+
+    // Kanban intents. `CommandParser` lives in DaddyCore, which has no
+    // knowledge of `OrchestratorWorkItem`/`OrchestratorWorkStatus`/
+    // `OrchestratorWorkCategory` (DaddyApp-only types), so these carry raw
+    // string hints rather than app types — resolving a hint against live
+    // project/column/category names happens in DaddyApp's
+    // `VoiceKanbanResolver`, not here.
+    case createWorkItem(title: String, projectHint: String?, statusHint: String?, categoryHint: String?)
+    case moveWorkItem(targetHint: String, statusHint: String?, categoryHint: String?)
+    // `AgentKind` lives in DaddyCore too, so unlike the project/status/
+    // category hints above, this one can just be the resolved type.
+    case dispatchWorkItem(targetHint: String, agentHint: AgentKind?)
 }
 
 public struct ParsedCommand {
@@ -62,6 +74,13 @@ public final class CommandParser {
     public func parse(_ transcript: String) -> ParsedCommand {
         let normalized = transcript.lowercased().trimmingCharacters(in: .whitespaces)
 
+        // Kanban commands are recognized before anything else and return
+        // early — they don't go through model/agent stripping or the
+        // keyword-ranking table, which know nothing about work items.
+        if let kanbanIntent = extractKanbanIntent(from: normalized) {
+            return ParsedCommand(intent: kanbanIntent)
+        }
+
         // Model first: "claude-opus" is one model name, and stripping the agent
         // out of it would leave "-opus" and report the wrong thing.
         var model: String?
@@ -96,6 +115,76 @@ public final class CommandParser {
             prompt: promptText,
             targetAgent: targetAgent
         )
+    }
+
+    // MARK: - Kanban
+
+    private static let createTriggers = ["add a task", "add task", "create a task", "create task", "new task"]
+    private static let moveTriggers = ["move", "recategorize", "refile"]
+    private static let dispatchTriggers = ["dispatch", "send this to", "assign this to"]
+
+    /// Good-enough phrase matching, not a general NLU system — same spirit
+    /// as the keyword table above. Recognizes a leading verb phrase, then
+    /// pulls "to `<project>` project" / "category `<category>`" / a status
+    /// word out of whatever follows, leaving the remainder as the title (for
+    /// create) or the target description (for move/dispatch).
+    private func extractKanbanIntent(from text: String) -> CommandIntent? {
+        if let trigger = Self.createTriggers.first(where: { text.hasPrefix($0) }) {
+            var remainder = String(text.dropFirst(trigger.count)).trimmingCharacters(in: .whitespaces)
+            let projectHint = extractClause(&remainder, pattern: "\\b([a-z0-9][a-z0-9 \\-]*?)\\s+project\\b")
+            let categoryHint = extractClause(&remainder, pattern: "\\bcategory\\s+([a-z0-9][a-z0-9 /\\-]*?)(?=,|$)")
+            let statusHint = extractClause(&remainder, pattern: "\\b(backlog|verify|dispatched|in\\s*progress|rework|done)\\b")
+            let title = cleaned(remainder)
+            guard !title.isEmpty else { return nil }
+            return .createWorkItem(title: title, projectHint: projectHint, statusHint: statusHint, categoryHint: categoryHint)
+        }
+
+        if let trigger = Self.moveTriggers.first(where: { text.hasPrefix($0 + " ") }) {
+            var remainder = String(text.dropFirst(trigger.count)).trimmingCharacters(in: .whitespaces)
+            let categoryHint = extractClause(&remainder, pattern: "\\bcategory\\s+([a-z0-9][a-z0-9 /\\-]*?)(?=,|$)")
+            let statusHint = extractClause(&remainder, pattern: "\\b(?:to|into)\\s+(backlog|verify|dispatched|in\\s*progress|rework|done)\\b")
+                ?? extractClause(&remainder, pattern: "\\b(backlog|verify|dispatched|in\\s*progress|rework|done)\\b")
+            let target = cleaned(remainder)
+            guard !target.isEmpty, statusHint != nil || categoryHint != nil else { return nil }
+            return .moveWorkItem(targetHint: target, statusHint: statusHint, categoryHint: categoryHint)
+        }
+
+        if let trigger = Self.dispatchTriggers.first(where: { text.hasPrefix($0 + " ") || text.hasPrefix($0) }) {
+            var remainder = String(text.dropFirst(trigger.count)).trimmingCharacters(in: .whitespaces)
+            let agentHint = agentMentions(in: remainder).first
+            remainder = removingAgentNames(from: remainder)
+            let target = cleaned(remainder)
+            guard !target.isEmpty else { return nil }
+            return .dispatchWorkItem(targetHint: target, agentHint: agentHint)
+        }
+
+        return nil
+    }
+
+    /// Finds `pattern`'s first capture group in `text`, removes the whole
+    /// match from `text` in place, and returns the captured (trimmed) value.
+    private func extractClause(_ text: inout String, pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return nil }
+        let ns = text as NSString
+        guard let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)),
+              match.numberOfRanges >= 2 else { return nil }
+
+        let groupRange = match.range(at: 1)
+        guard groupRange.location != NSNotFound else { return nil }
+        let value = ns.substring(with: groupRange).trimmingCharacters(in: .whitespaces)
+
+        let mutable = NSMutableString(string: text)
+        mutable.replaceCharacters(in: match.range(at: 0), with: " ")
+        text = String(mutable)
+
+        return value.isEmpty ? nil : value
+    }
+
+    private func cleaned(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\\s*,\\s*", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: " ,.;:!?-—"))
     }
 
     private static let agentPatterns: [(pattern: String, agent: AgentKind)] = [

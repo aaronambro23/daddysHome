@@ -8,6 +8,8 @@ import SwiftUI
 /// and the drag has a `minimumDistance` so a click that does not move still
 /// reads as a click.
 struct BoardCard: View {
+    @Environment(MockStore.self) private var store
+
     let item: OrchestratorWorkItem
     let isSelected: Bool
     /// Dimmed while it is the card in hand, because the thing following the
@@ -30,6 +32,11 @@ struct BoardCard: View {
 
     var body: some View {
         visual
+            .overlay(alignment: .topTrailing) {
+                if store.isItemNotBackedUp(item) {
+                    notBackedUpBadge
+                }
+            }
             .opacity(isDragging ? 0.3 : 1)
             .contentShape(Rectangle())
             // One gesture, not two.
@@ -124,6 +131,18 @@ struct BoardCard: View {
         .insetSurface(cornerRadius: 10, selected: isSelected || hovering)
     }
 
+    /// Not yet pushed to Drive — this item's write is sitting in the offline
+    /// queue. Amber rather than grey so it actually reads as "needs
+    /// attention" at a glance.
+    private var notBackedUpBadge: some View {
+        Image(systemName: "icloud.slash")
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(DaddyTheme.working)
+            .frame(width: 16, height: 16)
+            .background(Circle().fill(DaddyTheme.working.opacity(0.22)))
+            .padding(5)
+    }
+
     /// Far enough to mean it. Below this the pointer only wobbled and the
     /// gesture was a click.
     private static func isDrag(_ translation: CGSize) -> Bool {
@@ -131,6 +150,7 @@ struct BoardCard: View {
     }
 
     private var urgencyTint: Color? {
+        guard item.status != .done else { return nil }
         switch item.priority {
         case .urgent: return DaddyTheme.failure
         case .high: return DaddyTheme.working

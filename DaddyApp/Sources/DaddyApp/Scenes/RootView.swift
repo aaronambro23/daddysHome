@@ -81,6 +81,33 @@ struct RootView: View {
                     .zIndex(2)
             }
 
+            // Voice capture feedback — bottom-center floating pill with a
+            // decorative waveform. Reads through the (unobserved)
+            // controller reference, which still tracks `state` itself.
+            if store.voiceCaptureController.state != .idle {
+                VoiceCapturePill(state: store.voiceCaptureController.state)
+                    .padding(.bottom, 26)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .zIndex(3)
+                    .transition(.move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.92)))
+            }
+
+            // Clear of the titlebar, not under it.
+            //
+            // The window is `.hiddenTitleBar`, so this ZStack starts at the top
+            // of the window and the titlebar — traffic lights on one side,
+            // `TitlebarAccessory` on the other — draws over it as AppKit chrome.
+            // At 14pt down the toast was behind that strip, which no `zIndex`
+            // can fix: it orders SwiftUI siblings, not NSViews above them.
+            // 54pt puts it below the chrome, on the content it is talking about.
+            if let toast = store.voiceToast {
+                VoiceActionToast(toast: toast)
+                    .padding(.top, 54)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .zIndex(4)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
             // In the titlebar, not over the content.
             //
             // As a `.topTrailing` overlay it landed on the top-right corner of
@@ -98,8 +125,15 @@ struct RootView: View {
             }
             .frame(width: 0, height: 0)
         }
+        .animation(.smooth(duration: 0.22), value: store.voiceToast?.id)
+        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: store.voiceCaptureController.state)
         .preferredColorScheme(.dark)
-        .onAppear { installKeyboardMonitor() }
+        .onAppear {
+            installKeyboardMonitor()
+            // Global monitors must register after first render: doing it in
+            // MockStore.init (pre-activation) wedges all app input.
+            store.voiceCaptureController.start()
+        }
         .onDisappear { removeKeyboardMonitor() }
         .task {
             while !Task.isCancelled {
@@ -188,6 +222,13 @@ struct RootView: View {
     private func installKeyboardMonitor() {
         guard keyboardMonitor == nil else { return }
         keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Esc cancels a live voice capture first. The global Esc monitor
+            // only delivers with Input Monitoring approval; this one always
+            // works while the app is frontmost.
+            if event.keyCode == 53, store.voiceCaptureController.state != .idle {
+                store.voiceCaptureController.cancelRecording()
+                return nil
+            }
             let chords = event.modifierFlags.intersection([.command, .option, .control, .shift])
             guard chords == [.command],
                   event.charactersIgnoringModifiers?.lowercased() == "k" else {

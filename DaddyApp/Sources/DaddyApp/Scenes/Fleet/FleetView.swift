@@ -515,7 +515,7 @@ struct FleetView: View {
         clearFocusCycle()
         providerLaunchOpen = false
         compassArmedKind = nil
-        store.launchReal(kind, in: project)
+        AppActionDispatcher(store: store).perform(.launchSession(kind: kind, projectID: project.id))
     }
 
     private func beginFocusCycleIfNeeded() {

@@ -627,7 +627,7 @@ struct OrchestratorView: View {
         item.priority = inspectorPriority
         item.projectID = inspectorProjectID.isEmpty ? nil : inspectorProjectID
         item.updatedAt = Date()
-        store.replaceWorkItem(item)
+        AppActionDispatcher(store: store).perform(.replaceWorkItem(item))
     }
 
     private func sendQuickInstruction(_ text: String) {

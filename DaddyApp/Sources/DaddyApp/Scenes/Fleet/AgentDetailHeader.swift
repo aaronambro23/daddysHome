@@ -7,6 +7,8 @@ struct AgentDetailHeader: View {
     @Environment(MockStore.self) private var store
     @State private var backHovering = false
     @State private var killHovering = false
+    @State private var modeHovering = false
+    @State private var buildHovering = false
 
     let agent: MockAgent
     let onOpenProgress: (String) -> Void
@@ -17,7 +19,6 @@ struct AgentDetailHeader: View {
     var stripIDs: [String] = []
 
     @Namespace private var deckNamespace
-    @Namespace private var modeNamespace
 
     var body: some View {
         HStack(spacing: 10) {
@@ -101,23 +102,30 @@ struct AgentDetailHeader: View {
 
             Spacer(minLength: 10)
 
-            // This conversation's window, then the account's quota. Both are
-            // "how much is left", at two scales, so they read as a pair.
-            ContextMeter(agent: agent)
+            // One resource cluster: this conversation's window, then the
+            // account's quota. Both are "how much is left" at two scales, so
+            // they share a single inset rather than sitting as two competing
+            // widgets with a seam between them.
+            HStack(spacing: 10) {
+                ContextMeter(agent: agent)
 
-            GlassHairline(axis: .vertical, length: 22)
-                .padding(.horizontal, 1)
+                ProviderUsageBattery(snapshot: store.providerUsage[agent.agent])
+                    .frame(width: 224, alignment: .leading)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .insetSurface(cornerRadius: 12)
 
-            ProviderUsageBattery(snapshot: store.providerUsage[agent.agent])
-                .frame(width: 190, alignment: .leading)
+            modeIconButton
 
-            workModeControl
+            policyIconButton
 
-            StatusBadge(state: agent.state)
-
-            Text(agent.uptime)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(DaddyTheme.textMuted)
+            // The state as a fixed dot, not a word: READY vs WORKING had
+            // different widths and shoved the whole right edge around. The
+            // name and uptime live in the tooltip.
+            StatusBadge(state: agent.state, compact: true)
+                .frame(width: 30)
+                .help("\(StateColors.name(for: agent.state)) · up \(agent.uptime)")
 
             GlassDropdown(items: menuItems, width: 250) {
                 Image(systemName: "ellipsis")
@@ -193,64 +201,92 @@ struct AgentDetailHeader: View {
         store.project(agent.projectID) ?? store.selectedProject
     }
 
-    /// The work-mode control.
-    ///
-    /// This was four alternatives side by side for a while, so the interaction
-    /// could be judged in the real header rather than in isolation. The
-    /// segmented pair won; the icon pair, the MODE Q/D switch and the text-led
-    /// dropdown are gone.
+    /// Work mode + build policy as rail icons: fixed 34pt circles showing the
+    /// current value's SF Symbol, name in the tooltip, same menus as before.
+    /// Glyphs may swap with the value, but the circle never changes size, so
+    /// nothing on either side moves.
     @ViewBuilder
-    private var workModeControl: some View {
+    private var modeIconButton: some View {
         let current = store.workMode(of: agent)
-
-        HStack(spacing: 2) {
-            modeChoice("QUICK", .quick, current: current)
-            modeChoice("DETAILED", .detailed, current: current)
+        GlassDropdown(items: modeItems(current: current), width: 250, chromelessLabel: true) {
+            Image(systemName: current.iconName)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(DaddyTheme.textSecondary)
+                .frame(width: 34, height: 34)
+                .background {
+                    Circle().fill(Color.white.opacity(modeHovering ? 0.12 : 0.06))
+                }
+                .overlay {
+                    Circle().strokeBorder(Color.white.opacity(modeHovering ? 0.22 : 0.12))
+                }
+                .contentShape(Circle())
         }
-        .padding(3)
-        .insetCapsule(opacity: 0.06)
-        .help("Choose the work mode")
+        .help("Work mode: \(current.displayName) — click to change")
         .disabled(!agent.isLive)
         .opacity(agent.isLive ? 1 : 0.4)
         .fixedSize(horizontal: true, vertical: false)
+        .onHover { modeHovering = $0 }
+        .animation(.easeOut(duration: 0.14), value: modeHovering)
     }
 
-    private func modeChoice(_ title: String, _ mode: WorkMode, current: WorkMode) -> some View {
-        Button { setWorkMode(mode) } label: {
-            HStack(spacing: 5) {
-                Image(systemName: mode == .quick ? "bolt.fill" : "sparkles")
-                    .font(.system(size: 8, weight: .bold))
-                Text(title)
-                    .font(.system(size: 9.5, weight: .semibold))
-            }
-            .foregroundStyle(current == mode ? DaddyTheme.textPrimary : DaddyTheme.textMuted)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background {
-                if current == mode {
-                    Capsule()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.22),
-                                    Color.white.opacity(0.10),
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .overlay {
-                            Capsule().strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
-                        }
-                        .matchedGeometryEffect(id: "mode-selection", in: modeNamespace)
+    @ViewBuilder
+    private var policyIconButton: some View {
+        let current = store.buildPolicy(of: agent)
+        GlassDropdown(items: buildItems(current: current), width: 250, chromelessLabel: true) {
+            Image(systemName: current.iconName)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(DaddyTheme.textSecondary)
+                .frame(width: 34, height: 34)
+                .background {
+                    Circle().fill(Color.white.opacity(buildHovering ? 0.12 : 0.06))
                 }
+                .overlay {
+                    Circle().strokeBorder(Color.white.opacity(buildHovering ? 0.22 : 0.12))
+                }
+                .contentShape(Circle())
+        }
+        .help("Builds: \(current.displayName) — click to change")
+        .disabled(!agent.isLive)
+        .opacity(agent.isLive ? 1 : 0.4)
+        .fixedSize(horizontal: true, vertical: false)
+        .onHover { buildHovering = $0 }
+        .animation(.easeOut(duration: 0.14), value: buildHovering)
+    }
+
+    /// The four modes as dropdown rows.
+    ///
+    /// Each carries its own summary as the note, because "Explore" alone does
+    /// not tell you it is the one that will not touch your code.
+    private func modeItems(current: WorkMode) -> [GlassDropdownItem] {
+        WorkMode.allCases.map { mode in
+            GlassDropdownItem(
+                id: "mode-\(mode.rawValue)",
+                title: mode.displayName,
+                note: mode == current ? "current" : mode.slashCommand,
+                isEnabled: mode != current,
+                isSelected: mode == current
+            ) {
+                setWorkMode(mode)
             }
         }
-        .buttonStyle(.plain)
     }
 
     private func setWorkMode(_ mode: WorkMode) {
         store.setWorkMode(mode, for: agent.id)
+    }
+
+    private func buildItems(current: BuildPolicy) -> [GlassDropdownItem] {
+        BuildPolicy.allCases.map { policy in
+            GlassDropdownItem(
+                id: "build-\(policy.rawValue)",
+                title: policy.displayName,
+                note: policy == current ? "current" : policy.slashCommand,
+                isEnabled: policy != current,
+                isSelected: policy == current
+            ) {
+                store.setBuildPolicy(policy, for: agent.id)
+            }
+        }
     }
 
     private var menuItems: [GlassDropdownItem] {

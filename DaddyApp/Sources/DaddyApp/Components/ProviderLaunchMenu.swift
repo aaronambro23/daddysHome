@@ -60,7 +60,7 @@ struct ProviderLaunchMenu<Label: View>: View {
                 isEnabled: installed,
                 leading: AnyView(ProviderLogo.badge(for: kind, diameter: 24))
             ) {
-                store.launchReal(kind, in: project)
+                AppActionDispatcher(store: store).perform(.launchSession(kind: kind, projectID: project.id))
             }
         }
 

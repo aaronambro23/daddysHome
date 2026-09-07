@@ -94,7 +94,7 @@ struct BoardView: View {
                         isComposing: composingColumn == status,
                         onSelect: { select($0) },
                         onArchive: { archive($0) },
-                        onDelete: { store.deleteWorkItem($0.id) },
+                        onDelete: { AppActionDispatcher(store: store).perform(.deleteWorkItem(id: $0.id)) },
                         onSendToOrchestrator: { sendToOrchestrator($0) },
                         draggingID: dragState?.id,
                         isDropTarget: target == status,
@@ -194,7 +194,7 @@ struct BoardView: View {
                 pendingDispatch = item
                 return
             }
-            _ = store.moveWorkItem(item.id, to: target)
+            AppActionDispatcher(store: store).perform(.moveWorkItem(id: item.id, status: target, category: nil))
         }
     }
 
@@ -216,6 +216,24 @@ struct BoardView: View {
 
             scopePicker
             categoryPicker
+
+            if !store.pendingSyncBuckets.isEmpty {
+                Button {
+                    store.syncPendingNow()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "icloud.slash")
+                        Text("\(store.pendingSyncBuckets.count)")
+                    }
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(DaddyTheme.textPrimary)
+                    .padding(.horizontal, 9)
+                    .frame(height: 24)
+                    .insetSurface(cornerRadius: 8)
+                }
+                .buttonStyle(.plain)
+                .help("Not backed up to Drive — click to sync now")
+            }
 
             Button {
                 showArchived.toggle()
@@ -403,7 +421,7 @@ struct BoardView: View {
 
                         Button("delete") {
                             guard let id = store.selectedOrchestratorWorkItemID else { return }
-                            store.deleteWorkItem(id)
+                            AppActionDispatcher(store: store).perform(.deleteWorkItem(id: id))
                         }
                         .buttonStyle(.inset(DaddyTheme.failure))
                     }
@@ -529,14 +547,16 @@ struct BoardView: View {
         let title = composeText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return cancelCompose() }
 
-        store.addWorkItem(
-            OrchestratorWorkItem(
-                title: title,
-                summary: "",
-                rawCapture: title,
-                category: categoryFilter ?? .other,
-                status: status,
-                projectID: composeProjectID
+        AppActionDispatcher(store: store).perform(
+            .createWorkItem(
+                OrchestratorWorkItem(
+                    title: title,
+                    summary: "",
+                    rawCapture: title,
+                    category: categoryFilter ?? .other,
+                    status: status,
+                    projectID: composeProjectID
+                )
             )
         )
         cancelCompose()
@@ -554,7 +574,7 @@ struct BoardView: View {
     }
 
     private func archive(_ item: OrchestratorWorkItem) {
-        store.moveWorkItem(item.id, to: .archived)
+        AppActionDispatcher(store: store).perform(.moveWorkItem(id: item.id, status: .archived, category: nil))
     }
 
     /// Dispatch lives in the Orchestrator — agent picker, session picker and
@@ -584,6 +604,6 @@ struct BoardView: View {
         item.priority = editorPriority
         item.projectID = editorProjectID.isEmpty ? nil : editorProjectID
         item.updatedAt = Date()
-        store.replaceWorkItem(item)
+        AppActionDispatcher(store: store).perform(.replaceWorkItem(item))
     }
 }

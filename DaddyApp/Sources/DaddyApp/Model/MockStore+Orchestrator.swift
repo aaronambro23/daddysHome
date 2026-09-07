@@ -325,7 +325,10 @@ extension MockStore {
     func replaceWorkItem(_ item: OrchestratorWorkItem) {
         guard let index = orchestratorWorkItems.firstIndex(where: { $0.id == item.id }) else { return }
         orchestratorWorkItems[index] = item
-        orchestratorMarkdownStore.save(item)
+        Task {
+            await syncCoordinator.save(item)
+            noteSyncOutcome(for: item)
+        }
         syncGitPushWatchers()
     }
 
@@ -367,7 +370,10 @@ extension MockStore {
     func addWorkItem(_ item: OrchestratorWorkItem) {
         orchestratorWorkItems.insert(item, at: 0)
         selectedOrchestratorWorkItemID = item.id
-        orchestratorMarkdownStore.save(item)
+        Task {
+            await syncCoordinator.save(item)
+            noteSyncOutcome(for: item)
+        }
         syncGitPushWatchers()
     }
 
@@ -375,8 +381,81 @@ extension MockStore {
         guard let index = orchestratorWorkItems.firstIndex(where: { $0.id == id }) else { return }
         let item = orchestratorWorkItems.remove(at: index)
         if selectedOrchestratorWorkItemID == id { selectedOrchestratorWorkItemID = nil }
-        orchestratorMarkdownStore.delete(item)
+        recentlyDirtyItemIDs.remove(id)
+        Task {
+            await syncCoordinator.delete(item)
+            pendingSyncBuckets = syncCoordinator.pendingBuckets
+        }
         syncGitPushWatchers()
+    }
+
+    /// Records whether `item`'s save actually made it to Drive. Drive syncs
+    /// a whole bucket file at once, but the "not backed up" badge should only
+    /// flag the item that was just touched, not every card sharing its file.
+    private func noteSyncOutcome(for item: OrchestratorWorkItem) {
+        pendingSyncBuckets = syncCoordinator.pendingBuckets
+        let bucket = CategoryBucket(
+            projectFolderName: orchestratorMarkdownStore.projectFolderName(for: item.projectID),
+            categoryFolderName: item.category.folderName
+        )
+        if pendingSyncBuckets.contains(bucket) {
+            recentlyDirtyItemIDs.insert(item.id)
+        } else {
+            recentlyDirtyItemIDs.remove(item.id)
+        }
+    }
+
+    /// This specific item hasn't made it to Drive yet — shown as a small
+    /// "not backed up" badge on its board card.
+    func isItemNotBackedUp(_ item: OrchestratorWorkItem) -> Bool {
+        recentlyDirtyItemIDs.contains(item.id)
+    }
+
+    /// Manual "sync now" — retries every queued bucket immediately instead of
+    /// waiting for the next throttled tick, then clears the badge for any
+    /// item whose bucket made it through.
+    func syncPendingNow() {
+        Task {
+            await syncCoordinator.syncNow()
+            refreshPendingSyncState()
+        }
+    }
+
+    /// Drops any item from the "not backed up" set once its bucket is no
+    /// longer pending — called after a flush (manual or tick-driven), since
+    /// those don't go through `noteSyncOutcome` per item.
+    func refreshPendingSyncState() {
+        pendingSyncBuckets = syncCoordinator.pendingBuckets
+        recentlyDirtyItemIDs = recentlyDirtyItemIDs.filter { id in
+            guard let item = workItem(id) else { return false }
+            let bucket = CategoryBucket(
+                projectFolderName: orchestratorMarkdownStore.projectFolderName(for: item.projectID),
+                categoryFolderName: item.category.folderName
+            )
+            return pendingSyncBuckets.contains(bucket)
+        }
+    }
+
+    /// Shows a voice-action confirmation toast, auto-dismissing after ~5s. A
+    /// second call (another voice command) replaces whatever's showing and
+    /// resets the dismiss timer.
+    func showVoiceToast(_ toast: VoiceToast) {
+        voiceToastDismissTask?.cancel()
+        voiceToast = toast
+        voiceToastDismissTask = Task {
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            voiceToast = nil
+        }
+    }
+
+    /// Undo button on the toast: replays the captured inverse action and
+    /// dismisses immediately.
+    func undoVoiceToast() {
+        guard let action = voiceToast?.undoAction else { return }
+        voiceToastDismissTask?.cancel()
+        voiceToast = nil
+        AppActionDispatcher(store: self).perform(action)
     }
 
     /// Moving a card between columns. Returns false when nothing changed, so a
@@ -409,14 +488,16 @@ extension MockStore {
     /// the only writer — a dispatched agent can be told to edit one, and so
     /// can you, in any editor. `loadWorkItems()` otherwise runs once at launch.
     func reloadWorkItems() {
-        let onDisk = orchestratorMarkdownStore.loadWorkItems()
-        guard onDisk != orchestratorWorkItems else { return }
-        orchestratorWorkItems = onDisk
-        if let selected = selectedOrchestratorWorkItemID,
-           !onDisk.contains(where: { $0.id == selected }) {
-            selectedOrchestratorWorkItemID = nil
+        Task {
+            let onDisk = await syncCoordinator.loadWorkItems()
+            guard onDisk != orchestratorWorkItems else { return }
+            orchestratorWorkItems = onDisk
+            if let selected = selectedOrchestratorWorkItemID,
+               !onDisk.contains(where: { $0.id == selected }) {
+                selectedOrchestratorWorkItemID = nil
+            }
+            syncGitPushWatchers()
         }
-        syncGitPushWatchers()
     }
 
     /// The board's query. `scope` is three-way, not a filter: `.all` ignores
@@ -733,7 +814,7 @@ extension MockStore {
             }
         }
 
-        prompt += "\nWhen you finish, move this card to VERIFY: set `status: refined` in \(orchestratorMarkdownStore.fileURL(for: item).path). Do not leave it dispatched, and do not mark it done.\n"
+        prompt += "\nWhen you finish, move this card to VERIFY: find the block with `id: \(item.id.uuidString)` in \(orchestratorMarkdownStore.fileURL(for: item).path) (that file lists every item in this bucket — edit only this item's block) and set `status: refined` there. Do not leave it dispatched, and do not mark it done.\n"
         return prompt
     }
 

@@ -37,6 +37,15 @@ struct VoiceRouter {
 
         let command = parser.parse(trimmed)
 
+        // Kanban intents don't target a live agent session — resolve and
+        // execute through the same seam manual clicks use.
+        switch command.intent {
+        case .createWorkItem, .moveWorkItem, .dispatchWorkItem:
+            return routeKanban(command.intent)
+        default:
+            break
+        }
+
         // Launch intent doesn't need a running target.
         if case .launch = command.intent {
             return launchAgent(command)
@@ -98,6 +107,10 @@ struct VoiceRouter {
             // Handled before resolving target; never reached.
             fatalError("launch intent should be handled before target resolution")
 
+        case .createWorkItem, .moveWorkItem, .dispatchWorkItem:
+            // Handled before resolving target; never reached.
+            fatalError("kanban intents should be handled before target resolution")
+
         case .unknown:
             // A sentence with no recognised command word is almost always just
             // something to say to the agent. Sending it beats discarding it.
@@ -128,6 +141,28 @@ struct VoiceRouter {
             .trimmingCharacters(in: CharacterSet(charactersIn: " ,.;:!?"))
             .lowercased()
         return !filler.contains(cleaned) && cleaned.split(separator: " ").count > 1
+    }
+
+    /// Resolves a kanban intent against live store state and executes it
+    /// through `AppActionDispatcher` — the same seam manual clicks use.
+    /// Reversible actions get a toast with Undo; dispatch gets a plain
+    /// confirmation.
+    private func routeKanban(_ intent: CommandIntent) -> VoiceOutcome {
+        switch VoiceKanbanResolver(store: store).resolve(intent) {
+        case .reversible(let action, let confirmLabel, let undoAction):
+            AppActionDispatcher(store: store).perform(action)
+            store.showVoiceToast(VoiceToast(label: confirmLabel, undoAction: undoAction))
+            return .ok(confirmLabel)
+
+        case .irreversible(let action, let confirmLabel):
+            AppActionDispatcher(store: store).perform(action)
+            store.showVoiceToast(VoiceToast(label: confirmLabel, undoAction: nil))
+            return .ok(confirmLabel)
+
+        case .failed(let reason):
+            store.showVoiceToast(VoiceToast(label: reason, undoAction: nil))
+            return .refused(reason)
+        }
     }
 
     /// Launch a new agent in the selected project.

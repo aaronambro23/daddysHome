@@ -15,3 +15,7 @@
 /DaddyApp/build/
 /DaddyApp/docs/
 /daddycore-spm/p/documents/
+
+# Real Google OAuth client credentials — never committed. See
+# GoogleDriveConfig.example.swift for the template this is copied from.
+/DaddyApp/Sources/DaddyApp/Model/GoogleDriveConfig.swift

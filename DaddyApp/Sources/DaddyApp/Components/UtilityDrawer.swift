@@ -179,6 +179,8 @@ private struct SettingsUtilityPanel: View {
     ]
 
     @State private var glossaryOpen = false
+    @State private var isConnectingDrive = false
+    @State private var driveConnectError: String?
 
     var body: some View {
         @Bindable var store = store
@@ -199,9 +201,25 @@ private struct SettingsUtilityPanel: View {
                         "Work mode",
                         "\(store.workMode.summary) New sessions only — switch a running one from its card menu."
                     ) {
+                        // Short names, not display names: four segments of
+                        // "plan & build" and "explore" in a drawer this wide
+                        // truncate to ellipses.
                         Picker("", selection: $store.workMode) {
                             ForEach(WorkMode.allCases, id: \.self) { mode in
-                                Text(mode.displayName.lowercased()).tag(mode)
+                                Text(mode.shortName.lowercased()).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+
+                    setting(
+                        "Build policy",
+                        "\(store.buildPolicy.summary) New sessions only — switch a running one from its card menu."
+                    ) {
+                        Picker("", selection: $store.buildPolicy) {
+                            ForEach(BuildPolicy.allCases, id: \.self) { policy in
+                                Text(policy.shortName.lowercased()).tag(policy)
                             }
                         }
                         .pickerStyle(.segmented)
@@ -296,6 +314,26 @@ private struct SettingsUtilityPanel: View {
                     }
                 }
 
+                section("STORAGE") {
+                    if store.syncCoordinator.isConnected {
+                        setting("Google Drive", driveStatusLine) {
+                            Button("Disconnect") {
+                                store.syncCoordinator.disconnect()
+                            }
+                        }
+                    } else {
+                        setting(
+                            "Google Drive",
+                            driveConnectError ?? "Kanban cards sync to Drive and back up locally."
+                        ) {
+                            Button(isConnectingDrive ? "Connecting…" : "Connect Google Drive") {
+                                connectDrive()
+                            }
+                            .disabled(isConnectingDrive)
+                        }
+                    }
+                }
+
                 section("UTILITIES") {
                     Button(action: onOpenHEX) {
                         HStack(spacing: 10) {
@@ -354,6 +392,27 @@ private struct SettingsUtilityPanel: View {
             stepperButton("plus") { store.nudgeTerminalFont(by: 1) }
         }
         .insetSurface(cornerRadius: 11)
+    }
+
+    private var driveStatusLine: String {
+        let count = store.syncCoordinator.pendingSyncCount
+        let email = Defaults.string(.driveAccountEmail) ?? "unknown account"
+        guard count > 0 else { return "Connected as \(email)" }
+        return "Connected as \(email) — \(count) item\(count == 1 ? "" : "s") waiting to sync"
+    }
+
+    private func connectDrive() {
+        isConnectingDrive = true
+        driveConnectError = nil
+        Task {
+            do {
+                _ = try await store.syncCoordinator.connect()
+                store.reloadWorkItems()
+            } catch {
+                driveConnectError = error.localizedDescription
+            }
+            isConnectingDrive = false
+        }
     }
 
     private func stepperButton(_ symbol: String, action: @escaping () -> Void) -> some View {

@@ -65,7 +65,7 @@ struct RadialProviderMenuOverlay: View {
                 kind: kind,
                 isEnabled: installed
             ) {
-                store.launchReal(kind, in: project)
+                AppActionDispatcher(store: store).perform(.launchSession(kind: kind, projectID: project.id))
                 onDismiss()
             }
         }

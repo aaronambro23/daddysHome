@@ -123,7 +123,12 @@ public final class Session: Identifiable {
     /// updated by `SessionManager.switchWorkMode`, so a card can show what its
     /// agent is actually operating under rather than what the global default
     /// happened to be when it started.
-    public var workMode: WorkMode = .detailed
+    public var workMode: WorkMode = .default
+
+    /// What this agent may build. Set at launch and updated by
+    /// `SessionManager.switchBuildPolicy`, for the same reason `workMode` is:
+    /// the card should show what its agent is actually operating under.
+    public var buildPolicy: BuildPolicy = .default
 
     public init(
         id: String = UUID().uuidString,

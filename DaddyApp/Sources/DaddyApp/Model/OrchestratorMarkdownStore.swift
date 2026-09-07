@@ -3,9 +3,18 @@ import Foundation
 /// Stores orchestrator state as readable Markdown rather than introducing a
 /// second private database. Work items are deliberately easy for a coding agent
 /// to inspect during a dispatch.
+///
+/// One Markdown file per project+category bucket, not per item — every item
+/// in `daddy/uiux`, say, lives in one `uiux.md`, each block separated by
+/// `itemDivider`. A dispatched agent (or you, in any editor) finds its item
+/// by the `id:` in its front matter, not by filename.
 final class OrchestratorMarkdownStore: @unchecked Sendable {
     private let rootURL: URL
     private let lock = NSLock()
+
+    /// An HTML comment: invisible in any Markdown viewer, and distinct from
+    /// the `---` front-matter fences so splitting never gets confused by them.
+    static let itemDivider = "\n\n<!-- item -->\n\n"
 
     init(rootURL: URL? = nil) {
         if let rootURL {
@@ -16,6 +25,8 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
             self.rootURL = desktop.appendingPathComponent("DaddyWork/Orchestrator", isDirectory: true)
         }
         try? FileManager.default.createDirectory(at: self.rootURL, withIntermediateDirectories: true)
+        migrateLegacyFlatCategoryFoldersIfNeeded()
+        migrateItemFilesIntoCategoryFilesIfNeeded()
     }
 
     func loadWorkItems() -> [OrchestratorWorkItem] {
@@ -23,7 +34,7 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
         defer { lock.unlock() }
 
         guard let files = try? allMarkdownFiles() else { return [] }
-        return files.compactMap { parseWorkItem(at: $0) }
+        return files.flatMap { readItems(at: $0) }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
@@ -49,40 +60,75 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
         return snapshots
     }
 
-    func save(_ item: OrchestratorWorkItem) {
+    /// Writes the item into its target bucket file, first removing any copy
+    /// of it from wherever it currently lives (it may have been in a
+    /// different project/category before this save). Returns every bucket
+    /// file touched — the vacated one, if different, plus the target — so a
+    /// caller mirroring this to Drive knows exactly what changed.
+    @discardableResult
+    func save(_ item: OrchestratorWorkItem) -> Set<CategoryBucket> {
         lock.lock()
         defer { lock.unlock() }
 
-        let directory = rootURL.appendingPathComponent(item.category.folderName, isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = directory.appendingPathComponent("\(item.id.uuidString).md")
-        if let copies = try? allMarkdownFiles() {
-            for copy in copies where copy.lastPathComponent == url.lastPathComponent && copy != url {
-                try? FileManager.default.removeItem(at: copy)
+        var touched: Set<CategoryBucket> = []
+
+        if let files = try? allMarkdownFiles() {
+            for file in files {
+                var items = readItems(at: file)
+                guard let index = items.firstIndex(where: { $0.id == item.id }) else { continue }
+                items.remove(at: index)
+                writeItems(items, to: file)
+                touched.insert(bucket(for: file))
             }
         }
-        try? format(item).write(to: url, atomically: true, encoding: .utf8)
+
+        let targetBucket = CategoryBucket(
+            projectFolderName: projectFolderName(for: item.projectID),
+            categoryFolderName: item.category.folderName
+        )
+        var targetItems = readItems(at: url(for: targetBucket))
+        targetItems.removeAll { $0.id == item.id }
+        targetItems.append(item)
+        writeItems(targetItems, to: url(for: targetBucket))
+        touched.insert(targetBucket)
+
+        return touched
     }
 
     func fileURL(for item: OrchestratorWorkItem) -> URL {
-        rootURL
-            .appendingPathComponent(item.category.folderName, isDirectory: true)
-            .appendingPathComponent("\(item.id.uuidString).md")
+        url(for: CategoryBucket(
+            projectFolderName: projectFolderName(for: item.projectID),
+            categoryFolderName: item.category.folderName
+        ))
     }
 
-    /// Removes a work item's Markdown file. The board can delete cards, and
-    /// without this the file would survive and reappear on the next load.
-    /// Searches every category folder rather than trusting `item.category`,
-    /// because the file may predate a category change.
-    func delete(_ item: OrchestratorWorkItem) {
+    /// Removes a work item's block from whichever bucket file holds it.
+    /// Returns that bucket (nil if the item wasn't found anywhere), so a
+    /// caller mirroring this to Drive knows what to re-push.
+    @discardableResult
+    func delete(_ item: OrchestratorWorkItem) -> CategoryBucket? {
         lock.lock()
         defer { lock.unlock() }
 
-        let fileName = "\(item.id.uuidString).md"
-        guard let files = try? allMarkdownFiles() else { return }
-        for file in files where file.lastPathComponent == fileName {
-            try? FileManager.default.removeItem(at: file)
+        guard let files = try? allMarkdownFiles() else { return nil }
+        for file in files {
+            var items = readItems(at: file)
+            guard let index = items.firstIndex(where: { $0.id == item.id }) else { continue }
+            items.remove(at: index)
+            writeItems(items, to: file)
+            return bucket(for: file)
         }
+        return nil
+    }
+
+    /// The bucket file's current raw content, for `WorkItemSyncCoordinator`
+    /// to push straight to Drive — nil when the bucket is empty/nonexistent,
+    /// which the caller treats as "delete the Drive file too."
+    func categoryFileContent(for bucket: CategoryBucket) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        return try? String(contentsOf: url(for: bucket), encoding: .utf8)
     }
 
     func saveConversation(_ snapshot: OrchestratorConversationSnapshot) {
@@ -108,6 +154,117 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
         try? FileManager.default.removeItem(at: url)
     }
 
+    /// Exposed for `WorkItemSyncCoordinator`, which mirrors this exact
+    /// folder-naming rule for Drive's project folders.
+    func projectFolderName(for projectID: String?) -> String {
+        guard let projectID, !projectID.isEmpty else { return "Unassigned" }
+        return (projectID as NSString).lastPathComponent
+    }
+
+    private func url(for bucket: CategoryBucket) -> URL {
+        rootURL
+            .appendingPathComponent(bucket.projectFolderName, isDirectory: true)
+            .appendingPathComponent("\(bucket.categoryFolderName).md")
+    }
+
+    /// A bucket file's identity from its own path — the inverse of `url(for:)`.
+    private func bucket(for fileURL: URL) -> CategoryBucket {
+        CategoryBucket(
+            projectFolderName: fileURL.deletingLastPathComponent().lastPathComponent,
+            categoryFolderName: fileURL.deletingPathExtension().lastPathComponent
+        )
+    }
+
+    private func readItems(at url: URL) -> [OrchestratorWorkItem] {
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        return Self.parseItems(content: content)
+    }
+
+    /// Deletes the file when `items` is empty, so an emptied bucket doesn't
+    /// leave a stray file behind.
+    private func writeItems(_ items: [OrchestratorWorkItem], to url: URL) {
+        guard !items.isEmpty else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let content = items.map(format).joined(separator: Self.itemDivider)
+        try? content.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    /// One-time move of items written before Kanban storage was nested by
+    /// project: a `.md` file sitting directly under `<rootURL>/<category>/`
+    /// predates project folders and gets relocated under
+    /// `<rootURL>/<project>/<category>/` based on its own front matter.
+    /// Gated by a marker file so this never runs (or costs anything) again.
+    private func migrateLegacyFlatCategoryFoldersIfNeeded() {
+        let markerURL = rootURL.appendingPathComponent(".project-nesting-migrated")
+        guard !FileManager.default.fileExists(atPath: markerURL.path) else { return }
+
+        let categoryFolderNames = Set(OrchestratorWorkCategory.allCases.map(\.folderName))
+        let fm = FileManager.default
+
+        for categoryName in categoryFolderNames {
+            let legacyDir = rootURL.appendingPathComponent(categoryName, isDirectory: true)
+            guard let files = try? fm.contentsOfDirectory(at: legacyDir, includingPropertiesForKeys: nil) else { continue }
+
+            for file in files where file.pathExtension == "md" {
+                guard fm.fileExists(atPath: file.path), let item = parseWorkItem(at: file) else { continue }
+                let destDir = rootURL
+                    .appendingPathComponent(projectFolderName(for: item.projectID), isDirectory: true)
+                    .appendingPathComponent(categoryName, isDirectory: true)
+                try? fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+                let destURL = destDir.appendingPathComponent(file.lastPathComponent)
+                guard !fm.fileExists(atPath: destURL.path) else { continue }
+                try? fm.moveItem(at: file, to: destURL)
+            }
+        }
+        try? "".write(to: markerURL, atomically: true, encoding: .utf8)
+    }
+
+    /// One-time consolidation of the old one-file-per-item layout
+    /// (`<project>/<category>/<uuid>.md`) into one file per bucket
+    /// (`<project>/<category>.md`). Runs after the migration above, so items
+    /// are already project-nested by the time this looks for them. Gated by
+    /// its own marker so it only ever runs once.
+    private func migrateItemFilesIntoCategoryFilesIfNeeded() {
+        let markerURL = rootURL.appendingPathComponent(".category-files-merged")
+        guard !FileManager.default.fileExists(atPath: markerURL.path) else { return }
+
+        let fm = FileManager.default
+        guard let projectDirs = try? fm.contentsOfDirectory(
+            at: rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        ) else {
+            try? "".write(to: markerURL, atomically: true, encoding: .utf8)
+            return
+        }
+
+        for projectDir in projectDirs {
+            guard projectDir.lastPathComponent != "conversations",
+                  (try? projectDir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { continue }
+
+            for category in OrchestratorWorkCategory.allCases {
+                let categoryDir = projectDir.appendingPathComponent(category.folderName, isDirectory: true)
+                guard let files = try? fm.contentsOfDirectory(at: categoryDir, includingPropertiesForKeys: nil) else { continue }
+
+                let items = files
+                    .filter { $0.pathExtension == "md" }
+                    .compactMap { parseWorkItem(at: $0) }
+                guard !items.isEmpty else { continue }
+
+                let mergedURL = projectDir.appendingPathComponent("\(category.folderName).md")
+                var merged = readItems(at: mergedURL)
+                for item in items where !merged.contains(where: { $0.id == item.id }) {
+                    merged.append(item)
+                }
+                writeItems(merged, to: mergedURL)
+                try? fm.removeItem(at: categoryDir)
+            }
+        }
+        try? "".write(to: markerURL, atomically: true, encoding: .utf8)
+    }
+
     private func allMarkdownFiles() throws -> [URL] {
         let contents = try FileManager.default.subpathsOfDirectory(atPath: rootURL.path)
         return contents
@@ -116,7 +273,10 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
             .filter { !$0.path.contains("/conversations/") }
     }
 
-    private func format(_ item: OrchestratorWorkItem) -> String {
+    /// Exposed for `WorkItemSyncCoordinator`, which uploads/downloads the
+    /// same Markdown representation to/from Drive rather than inventing a
+    /// second format.
+    func format(_ item: OrchestratorWorkItem) -> String {
         var output = "---\n"
         output += "id: \(item.id.uuidString)\n"
         output += "title: \(frontMatter(item.title))\n"
@@ -136,8 +296,21 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
     }
 
     private func parseWorkItem(at url: URL) -> OrchestratorWorkItem? {
-        guard let content = try? String(contentsOf: url, encoding: .utf8),
-              content.hasPrefix("---\n") else { return nil }
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        return Self.parseWorkItem(content: content)
+    }
+
+    /// Exposed for `WorkItemSyncCoordinator`, which parses a whole bucket
+    /// file's content downloaded from Drive rather than read from disk.
+    static func parseItems(content: String) -> [OrchestratorWorkItem] {
+        content.components(separatedBy: itemDivider).compactMap(parseWorkItem(content:))
+    }
+
+    /// Exposed for `WorkItemSyncCoordinator`. Parses one item's block —
+    /// `parseItems(content:)` is `readItems`'s (and Drive's) actual entry
+    /// point; this is the single-block primitive both build on.
+    static func parseWorkItem(content: String) -> OrchestratorWorkItem? {
+        guard content.hasPrefix("---\n") else { return nil }
 
         let sections = content.components(separatedBy: "\n---\n")
         guard sections.count >= 2 else { return nil }
@@ -224,19 +397,19 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
             .replacingOccurrences(of: ":", with: "-")
     }
 
-    private func subsection(_ heading: String, in body: String) -> String? {
+    private static func subsection(_ heading: String, in body: String) -> String? {
         guard let start = body.range(of: "## \(heading)\n") else { return nil }
         let remainder = body[start.upperBound...]
         let end = remainder.range(of: "\n## ")?.lowerBound ?? remainder.endIndex
         return String(remainder[..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func value(after prefix: String, in body: String) -> String? {
+    private static func value(after prefix: String, in body: String) -> String? {
         guard let line = body.split(separator: "\n").first(where: { $0.hasPrefix(prefix) }) else { return nil }
         return String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
     }
 
-    private func csv(_ value: String) -> [String] {
+    private static func csv(_ value: String) -> [String] {
         value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 

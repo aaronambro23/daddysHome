@@ -137,8 +137,8 @@ struct FileTreeView: View {
 
     /// Where the handoff documents actually are.
     ///
-    /// `WorkflowContract` tells every agent to write to `docs/handoffs`, and
-    /// they do — but `SessionManager` creates its own stubs under
+    /// The working agreement tells every agent to write to `docs/handoffs`,
+    /// and they do — but `SessionManager` creates its own stubs under
     /// `documents/handoffs`, and this panel only ever read the latter. So it
     /// showed a list of empty generated files while the real, agent-authored
     /// documents sat unread in the other directory. Prefer the contract's path

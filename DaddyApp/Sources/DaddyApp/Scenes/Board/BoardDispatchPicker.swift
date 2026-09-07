@@ -202,14 +202,14 @@ struct BoardDispatchPicker: View {
     private func dispatch(onto agent: MockAgent) {
         onDismiss()
         withAnimation(.smooth(duration: 0.24)) {
-            store.dispatchWorkItem(item.id, onto: agent)
+            _ = AppActionDispatcher(store: store).perform(.dispatchOntoAgent(workItemID: item.id, agentID: agent.id))
         }
     }
 
     private func dispatch(launching kind: AgentKind) {
         onDismiss()
         withAnimation(.smooth(duration: 0.24)) {
-            store.dispatchWorkItem(item.id, launching: kind)
+            _ = AppActionDispatcher(store: store).perform(.dispatchLaunchingAgent(workItemID: item.id, kind: kind))
         }
     }
 }

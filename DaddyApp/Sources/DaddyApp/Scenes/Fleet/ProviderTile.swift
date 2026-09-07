@@ -251,8 +251,31 @@ struct ProviderTile: View {
                         store.setWorkMode(mode, for: agent.id)
                     }
                 }
-            )
+            ),
+            buildItem(for: agent),
         ]
+    }
+
+    /// What this agent may build, as a second nested row beside the mode.
+    private func buildItem(for agent: MockAgent) -> GlassDropdownItem {
+        let current = store.buildPolicy(of: agent)
+
+        return GlassDropdownItem(
+            id: "build",
+            title: "Build",
+            note: current.displayName.lowercased(),
+            childrenWidth: 260,
+            children: BuildPolicy.allCases.map { policy in
+                GlassDropdownItem(
+                    id: "build-\(policy.rawValue)",
+                    title: policy.displayName,
+                    note: policy == current ? "current" : nil,
+                    isEnabled: policy != current
+                ) {
+                    store.setBuildPolicy(policy, for: agent.id)
+                }
+            }
+        )
     }
 
     /// Conversations this project already has on disk, as one nested row.

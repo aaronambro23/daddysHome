@@ -1,0 +1,16 @@
+import Foundation
+
+/// TEMPLATE — copy this file to `GoogleDriveConfig.swift` (gitignored, see
+/// .gitignore) and fill in your own values from Google Cloud Console →
+/// APIs & Services → Credentials → your "Desktop app" OAuth client.
+///
+/// Google's own installed-app guidance treats a "Desktop app" OAuth client
+/// secret as non-confidential — PKCE (already part of `GoogleOAuthClient`'s
+/// flow) is the real security boundary — but it still never belongs in
+/// version control: keeping it out of git avoids handing your OAuth client
+/// (and its quota) to anyone who finds the repo.
+enum GoogleDriveConfig {
+    static let clientID = "REPLACE_WITH_YOUR_CLIENT_ID.apps.googleusercontent.com"
+    static let clientSecret = "REPLACE_WITH_YOUR_CLIENT_SECRET"
+    static let scope = "https://www.googleapis.com/auth/drive.file openid email"
+}

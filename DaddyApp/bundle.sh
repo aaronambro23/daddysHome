@@ -16,7 +16,9 @@ set -euo pipefail
 CONFIG="${1:-release}"
 cd "$(dirname "$0")"
 
-APP_NAME="Daddy's Home"
+if [ -z "${APP_NAME:-}" ]; then
+    APP_NAME="Daddy's Home"
+fi
 # The menu bar and the app switcher show the *executable's* name, so the binary
 # is copied in as "Daddy" rather than "DaddyApp".
 EXECUTABLE="Daddy"
@@ -76,13 +78,36 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
     <key>LSUIElement</key>               <false/>
     <key>NSSupportsAutomaticTermination</key><false/>
     <key>NSSupportsSuddenTermination</key>   <false/>
+    <key>NSMicrophoneUsageDescription</key>  <string>Daddy listens when you double-tap Option so you can add and manage Kanban cards by voice.</string>
+    <key>NSSpeechRecognitionUsageDescription</key><string>Daddy transcribes your voice on-device to turn it into Kanban actions.</string>
 </dict>
 </plist>
 PLIST
 
-# Ad-hoc signature. Unsigned bundles get inconsistent treatment from the
-# window server and from anything that inspects the frontmost application.
-codesign --force --sign - "$APP" 2>/dev/null || echo "  (ad-hoc signing skipped)"
+# A stable signature, not an ad-hoc one.
+#
+# `--sign -` gave the bundle a fresh identity on every build, and the keychain
+# binds its ACLs to that identity — so the Google Drive token prompted for the
+# login password again after each rebuild, and "Always Allow" never survived.
+# Touch ID has the same problem: a biometric ACL is pinned to the signature
+# that created it. Signing with a real certificate is what makes both stick.
+#
+# Deliberately no `--options runtime`: the hardened runtime gates audio input,
+# and this app records the microphone and runs speech recognition. Enabling it
+# without `com.apple.security.device.audio-input` breaks voice capture, and it
+# is only required for notarization — which a local personal build never does.
+#
+# Override with SIGN_IDENTITY to use a different certificate; falls back to
+# ad-hoc so a machine without the cert still produces a runnable bundle.
+SIGN_IDENTITY="${SIGN_IDENTITY:-Apple Development: Aaron Ambrosi (2Q7MBD643R)}"
+
+if codesign --force --sign "$SIGN_IDENTITY" "$APP" 2>/dev/null; then
+    echo "  signed as ${SIGN_IDENTITY}"
+else
+    echo "  (no '${SIGN_IDENTITY}' certificate — falling back to ad-hoc)"
+    echo "  Keychain and Touch ID will re-prompt after every build."
+    codesign --force --sign - "$APP" 2>/dev/null || echo "  (ad-hoc signing skipped)"
+fi
 
 echo
 echo "Built ${APP}"

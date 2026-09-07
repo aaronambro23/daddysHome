@@ -118,6 +118,15 @@ enum OrchestratorWorkCategory: String, CaseIterable, Codable, Identifiable, Hash
     }
 }
 
+/// One Markdown file: every item in a given project's given category, listed
+/// together rather than split one-file-per-item. Identifies that file
+/// without needing to touch disk — `OrchestratorMarkdownStore` and
+/// `WorkItemSyncCoordinator` both key their bookkeeping off this.
+struct CategoryBucket: Hashable, Codable {
+    let projectFolderName: String
+    let categoryFolderName: String
+}
+
 enum OrchestratorWorkStatus: String, CaseIterable, Codable, Hashable {
     case inbox
     case refined

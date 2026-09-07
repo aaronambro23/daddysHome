@@ -133,7 +133,8 @@ public final class SessionManager: @unchecked Sendable {
         _ session: Session,
         approvalPolicy: ApprovalPolicy = .safeAuto,
         continuingConversation: Bool = false,
-        workMode: WorkMode = .detailed
+        workMode: WorkMode = .default,
+        buildPolicy: BuildPolicy = .default
     ) throws {
         guard let adapter = adapters[session.agent] else {
             throw SessionError.unknownAgent(session.agent)
@@ -148,6 +149,7 @@ public final class SessionManager: @unchecked Sendable {
         }
 
         session.workMode = workMode
+        session.buildPolicy = buildPolicy
 
         let execPath = type(of: adapter).executablePath
         var args = adapter.launchArgs(
@@ -157,11 +159,19 @@ public final class SessionManager: @unchecked Sendable {
             resumption: resumption
         )
 
-        // Detailed mode is the contract's own default, so it injects nothing —
-        // and a CLI with no system-prompt flag gets the mode from AGENTS.md
-        // instead, which is why that file has to define them.
-        if let prompt = workMode.systemPrompt,
-           let modeArgs = adapter.systemPromptArgs(prompt) {
+        // Plan & Build and Compile are the contract's own defaults, so they
+        // inject nothing — and a CLI with no system-prompt flag gets both from
+        // AGENTS.md instead, which is why that file has to define them.
+        //
+        // One combined injection rather than two: an adapter's system-prompt
+        // flag is not guaranteed to be repeatable, and the second one silently
+        // replacing the first is the kind of bug that only shows up as an
+        // agent ignoring a policy you know you set.
+        let launchPrompt = [workMode.systemPrompt, buildPolicy.systemPrompt]
+            .compactMap { $0 }
+            .joined(separator: "\n\n")
+        if !launchPrompt.isEmpty,
+           let modeArgs = adapter.systemPromptArgs(launchPrompt) {
             args += modeArgs
         }
 
@@ -235,6 +245,18 @@ public final class SessionManager: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         sessions[sessionID]?.workMode = mode
+        sessions[sessionID]?.lastOutputAt = Date()
+    }
+
+    /// Change a running session's build policy. A message, for the same reason
+    /// `switchWorkMode` is one.
+    public func switchBuildPolicy(_ policy: BuildPolicy, for sessionID: String) throws {
+        let (pty, adapter) = try liveSession(sessionID)
+        try adapter.sendPrompt(policy.switchInstruction, to: pty)
+
+        lock.lock()
+        defer { lock.unlock() }
+        sessions[sessionID]?.buildPolicy = policy
         sessions[sessionID]?.lastOutputAt = Date()
     }
 
@@ -332,7 +354,8 @@ public final class SessionManager: @unchecked Sendable {
         _ sessionID: String,
         approvalPolicy: ApprovalPolicy = .safeAuto,
         continuingConversation: Bool = false,
-        workMode: WorkMode? = nil
+        workMode: WorkMode? = nil,
+        buildPolicy: BuildPolicy? = nil
     ) throws {
         lock.lock()
         guard let session = sessions[sessionID] else {
@@ -351,7 +374,8 @@ public final class SessionManager: @unchecked Sendable {
             // Nil means "whatever this session was already running under" — a
             // relaunch should not silently drop a card back to the global
             // default just because the default is what a new card would get.
-            workMode: workMode ?? session.workMode
+            workMode: workMode ?? session.workMode,
+            buildPolicy: buildPolicy ?? session.buildPolicy
         )
     }
 
@@ -787,9 +811,6 @@ public final class SessionManager: @unchecked Sendable {
     }
 
     private func createHandoffDocument(projectID: String, workUnitID: String, agent: AgentKind) {
-        // Install workflow contract files first (AGENTS.md and CLAUDE.md)
-        installWorkflowContract(projectPath: projectID)
-
         // Create handoff document in project's /documents/handoffs/ directory.
         // File is named after the work unit with .md extension.
         let fm = FileManager.default
@@ -833,32 +854,6 @@ public final class SessionManager: @unchecked Sendable {
         } catch {
             // Silently fail if we can't create the document — don't crash the session
             print("Failed to create handoff document: \(error)")
-        }
-    }
-
-    private func installWorkflowContract(projectPath: String) {
-        let fm = FileManager.default
-        let projectName = (projectPath as NSString).lastPathComponent
-
-        // Create AGENTS.md with the workflow contract
-        let agentsPath = projectPath + "/AGENTS.md"
-        if !fm.fileExists(atPath: agentsPath) {
-            do {
-                let contract = WorkflowContract.agentsMarkdown(projectName: projectName)
-                try contract.write(toFile: agentsPath, atomically: true, encoding: String.Encoding.utf8)
-            } catch {
-                print("Failed to create AGENTS.md: \(error)")
-            }
-        }
-
-        // Create CLAUDE.md that imports AGENTS.md
-        let claudePath = projectPath + "/CLAUDE.md"
-        if !fm.fileExists(atPath: claudePath) {
-            do {
-                try WorkflowContract.claudeImport.write(toFile: claudePath, atomically: true, encoding: String.Encoding.utf8)
-            } catch {
-                print("Failed to create CLAUDE.md: \(error)")
-            }
         }
     }
 

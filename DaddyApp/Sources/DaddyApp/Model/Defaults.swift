@@ -14,9 +14,12 @@ enum Defaults {
     enum Key: String {
         case approvalPolicy = "daddy.approvalPolicy"
         case workMode = "daddy.workMode"
+        case buildPolicy = "daddy.buildPolicy"
         case terminalFontSize = "daddy.terminalFontSize"
         case orchestratorModel = "daddy.orchestratorModel"
         case userShellCollapsed = "daddy.userShellCollapsed"
+        case driveConnected = "daddy.driveConnected"
+        case driveAccountEmail = "daddy.driveAccountEmail"
     }
 
     static func set(_ value: String, for key: Key) {
