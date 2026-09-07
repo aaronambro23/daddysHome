@@ -354,6 +354,53 @@ extension MockStore {
         enqueueComposerPaste(dispatchPrompt(for: item), onto: target.id)
     }
 
+    /// Board multi-select dispatch: several items sent together as one prompt
+    /// to one session. Each item keeps its own id/status/file — the only new
+    /// thing is a shared `bundleID` so the board can draw them as one card.
+    func dispatchWorkItemBundle(_ ids: [UUID], onto agent: MockAgent) {
+        let items = markBundleDispatched(ids, session: agent.id)
+        guard !items.isEmpty else { return }
+        hopToFleetSession(agent.id)
+        enqueueComposerPaste(dispatchBundlePrompt(for: items), onto: agent.id)
+    }
+
+    /// Board multi-select dispatch: launch, hop immediately, paste once the
+    /// composer exists — the bundle equivalent of `dispatchWorkItem(_:launching:)`.
+    func dispatchWorkItemBundle(_ ids: [UUID], launching kind: AgentKind) {
+        guard let firstID = ids.first, let firstItem = workItem(firstID) else { return }
+        let projectID = firstItem.projectID ?? selectedProjectID
+        guard let projectID, let project = project(projectID) else {
+            launchError = "Choose a project before dispatching this bundle"
+            return
+        }
+        guard let target = launchReal(kind, in: project, workUnitID: firstItem.id.uuidString) else { return }
+        let items = markBundleDispatched(ids, session: target.id)
+        guard !items.isEmpty else { return }
+        hopToFleetSession(target.id)
+        enqueueComposerPaste(dispatchBundlePrompt(for: items), onto: target.id)
+    }
+
+    /// Stamps every item with a shared `bundleID`, moves it to Dispatched and
+    /// links the session — same bookkeeping as `markWorkItemDispatched`, done
+    /// once per item in the set.
+    @discardableResult
+    private func markBundleDispatched(_ ids: [UUID], session agentID: String) -> [OrchestratorWorkItem] {
+        let bundleID = UUID()
+        var items: [OrchestratorWorkItem] = []
+        for id in ids {
+            guard var item = workItem(id) else { continue }
+            item.bundleID = bundleID
+            item.status = .dispatched
+            if !item.linkedSessionIDs.contains(agentID) {
+                item.linkedSessionIDs.append(agentID)
+            }
+            item.updatedAt = Date()
+            replaceWorkItem(item)
+            items.append(item)
+        }
+        return items
+    }
+
     func markWorkItemDispatched(_ id: UUID, session agentID: String) {
         guard var item = workItem(id) else { return }
         item.status = .dispatched
@@ -846,6 +893,20 @@ extension MockStore {
         }
 
         prompt += "\nWhen you finish, move this card to VERIFY: find the block with `id: \(item.id.uuidString)` in \(orchestratorMarkdownStore.fileURL(for: item).path) (that file lists every item in this bucket — edit only this item's block) and set `status: refined` there. Do not leave it dispatched, and do not mark it done.\n"
+        return prompt
+    }
+
+    /// Several `dispatchPrompt` blocks, one per bundled item, under a single
+    /// intro line. Each block is already self-contained — its own id, file
+    /// path and "move to VERIFY" instruction — so the agent finishes them one
+    /// at a time exactly as it would separate work items.
+    private func dispatchBundlePrompt(for items: [OrchestratorWorkItem]) -> String {
+        var prompt = "Here are \(items.count) Daddy work items bundled together for you to do in one pass. Work through each one in turn, in order.\n\n"
+        for (index, item) in items.enumerated() {
+            prompt += "=== Task \(index + 1) of \(items.count) ===\n\n"
+            prompt += dispatchPrompt(for: item)
+            prompt += "\n"
+        }
         return prompt
     }
 

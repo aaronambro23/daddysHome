@@ -21,6 +21,10 @@ struct BoardCard: View {
     /// Only supplied in the all-projects scope, where a card is ambiguous
     /// without it. Within one project it would be the same word on every card.
     let projectName: String?
+    /// Cmd+B multi-select — see `BoardView`. Cursor is where arrow keys are;
+    /// picked is what Cmd+Return will bundle.
+    var isSelectionCursor: Bool = false
+    var isPicked: Bool = false
     let onSelect: () -> Void
     let onDragChanged: (CGPoint) -> Void
     let onDragEnded: (CGPoint) -> Void
@@ -35,6 +39,17 @@ struct BoardCard: View {
             .overlay(alignment: .topTrailing) {
                 if store.isItemNotBackedUp(item) {
                     notBackedUpBadge
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if isSelectionCursor || isPicked {
+                    selectionBadge
+                }
+            }
+            .overlay {
+                if isSelectionCursor || isPicked {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(DaddyTheme.accent.opacity(isPicked ? 0.9 : 0.45), lineWidth: isPicked ? 2 : 1.5)
                 }
             }
             .opacity(isDragging ? 0.3 : 1)
@@ -129,6 +144,16 @@ struct BoardCard: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .insetSurface(cornerRadius: 10, selected: isSelected || hovering)
+    }
+
+    /// A small checkbox in Cmd+B selection mode: filled once picked, an empty
+    /// ring while just under the keyboard cursor.
+    private var selectionBadge: some View {
+        Image(systemName: isPicked ? "checkmark.circle.fill" : "circle")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(isPicked ? DaddyTheme.accent : DaddyTheme.textMuted)
+            .background(Circle().fill(Color.black.opacity(0.55)))
+            .padding(5)
     }
 
     /// Not yet pushed to Drive — this item's write is sitting in the offline

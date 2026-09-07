@@ -15,8 +15,13 @@ import DaddyCore
 struct BoardDispatchPicker: View {
     @Environment(MockStore.self) private var store
 
-    let item: OrchestratorWorkItem
+    /// One item for a normal drag/Cmd+Return dispatch; 2+ for a multi-select
+    /// bundle send — see `isBundle`.
+    let items: [OrchestratorWorkItem]
     let onDismiss: () -> Void
+
+    private var isBundle: Bool { items.count > 1 }
+    private var item: OrchestratorWorkItem { items[0] }
 
     /// Which provider has been opened into its live sessions. Nil is the
     /// four-bubble row.
@@ -152,19 +157,28 @@ struct BoardDispatchPicker: View {
 
     private var heading: some View {
         VStack(spacing: 6) {
-            Text(expanded == nil ? "SEND TO AGENT" : "PICK A SESSION")
+            Text(expanded == nil ? (isBundle ? "SEND \(items.count) TASKS TOGETHER" : "SEND TO AGENT") : "PICK A SESSION")
                 .font(.system(size: 10, weight: .bold))
                 .tracking(1.1)
                 .foregroundStyle(DaddyTheme.textSecondary)
 
-            Text(item.title)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(DaddyTheme.textPrimary)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
+            if isBundle {
+                Text(items.map(\.title).joined(separator: " · "))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(DaddyTheme.textPrimary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            } else {
+                Text(item.title)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(DaddyTheme.textPrimary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            }
 
-            Text("the task is pasted into the composer, not sent")
+            Text(isBundle ? "one prompt, pasted into the composer, not sent" : "the task is pasted into the composer, not sent")
                 .font(.system(size: 9.5))
                 .foregroundStyle(DaddyTheme.textVeryDim)
         }
@@ -302,14 +316,20 @@ struct BoardDispatchPicker: View {
     private func dispatch(onto agent: MockAgent) {
         onDismiss()
         withAnimation(.smooth(duration: 0.24)) {
-            _ = AppActionDispatcher(store: store).perform(.dispatchOntoAgent(workItemID: item.id, agentID: agent.id))
+            let action: AppAction = isBundle
+                ? .dispatchBundleOntoAgent(workItemIDs: items.map(\.id), agentID: agent.id)
+                : .dispatchOntoAgent(workItemID: item.id, agentID: agent.id)
+            _ = AppActionDispatcher(store: store).perform(action)
         }
     }
 
     private func dispatch(launching kind: AgentKind) {
         onDismiss()
         withAnimation(.smooth(duration: 0.24)) {
-            _ = AppActionDispatcher(store: store).perform(.dispatchLaunchingAgent(workItemID: item.id, kind: kind))
+            let action: AppAction = isBundle
+                ? .dispatchBundleLaunchingAgent(workItemIDs: items.map(\.id), kind: kind)
+                : .dispatchLaunchingAgent(workItemID: item.id, kind: kind)
+            _ = AppActionDispatcher(store: store).perform(action)
         }
     }
 }

@@ -15,10 +15,23 @@ struct BoardView: View {
     @State private var categoryFilter: OrchestratorWorkCategory?
     @State private var showArchived = false
 
-    /// The card dropped into DISPATCHED, waiting on an agent. The move is not
-    /// committed until one is picked — see `BoardDispatchPicker`.
-    @State private var pendingDispatch: OrchestratorWorkItem?
+    /// The card(s) dropped into DISPATCHED, or sent via the bundle flow,
+    /// waiting on an agent. The move is not committed until one is picked —
+    /// see `BoardDispatchPicker`. 2+ items means a bundle send.
+    @State private var pendingDispatch: [OrchestratorWorkItem]?
+
+    /// Multi-select for bundling several cards into one dispatch. Off by
+    /// default — Cmd+B turns it on, Escape (or a send/cancel) turns it off.
+    @State private var selectionModeActive = false
+    /// Order matters here, not just membership — Escape unpicks the most
+    /// recent one first, so it stays an array rather than a `Set`.
+    @State private var pickedItemIDs: [UUID] = []
+    /// The card arrow keys move over while selection mode is active.
+    @State private var selectionCursorID: UUID?
     @State private var collapsedGroups: Set<BoardGroupKey> = []
+    /// Bundle cards default open (that's the point of the checklist); this
+    /// tracks the ones you've folded shut.
+    @State private var collapsedBundleIDs: Set<UUID> = []
     @State private var draggingID: UUID?
     /// The column under the pointer, updated only when it actually changes.
     /// The cursor location moves every few pixels and the columns must not
@@ -28,6 +41,13 @@ struct BoardView: View {
     @State private var keyboardMonitor: Any?
     /// The column Cmd+T adds into. Set by clicking a column or a card in it.
     @State private var selectedColumn: OrchestratorWorkStatus?
+    /// Cmd+M's move flow: the items in flight, non-nil only while the target
+    /// column is being picked. `dropTarget` doubles as the highlighted
+    /// candidate — the same visual a real drag lands on.
+    @State private var movingItemIDs: [UUID]?
+    /// The bundle whose summary pane is open — a bundle card has no fields
+    /// of its own to edit, just its members and an unbundle action.
+    @State private var openBundleID: UUID?
 
     @FocusState private var editorTitleFocused: Bool
     @FocusState private var editorSummaryFocused: Bool
@@ -44,6 +64,11 @@ struct BoardView: View {
         store.boardWorkItems(scope: scope, category: categoryFilter, includeArchived: showArchived)
     }
 
+    private var openBundleItems: [OrchestratorWorkItem] {
+        guard let openBundleID else { return [] }
+        return items.filter { $0.bundleID == openBundleID }
+    }
+
     private var columns: [OrchestratorWorkStatus] {
         showArchived
             ? OrchestratorWorkStatus.boardColumns + [.archived]
@@ -54,6 +79,7 @@ struct BoardView: View {
         boardPane
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .trailing) { detailOverlay }
+            .overlay(alignment: .trailing) { bundleDetailOverlay }
             .overlay { dispatchOverlay }
             .padding(18)
         .onAppear {
@@ -89,11 +115,14 @@ struct BoardView: View {
                         selectedID: columnItems.contains { $0.id == selectedID } ? selectedID : nil,
                         groupByCategory: categoryFilter == nil,
                         collapsed: collapsedGroups,
+                        collapsedBundleIDs: collapsedBundleIDs,
                         projectName: projectName(for:),
-                        onSelect: { select($0) },
+                        onSelect: { handleCardSelect($0) },
                         onArchive: { archive($0) },
                         onDelete: { AppActionDispatcher(store: store).perform(.deleteWorkItem(id: $0.id)) },
                         onSendToOrchestrator: { sendToOrchestrator($0) },
+                        onToggleBundleCollapsed: { toggleBundleCollapsed($0) },
+                        onOpenBundle: { openBundleID = $0 },
                         draggingID: draggingID,
                         isDropTarget: target == status,
                         onDragChanged: dragChanged,
@@ -102,8 +131,18 @@ struct BoardView: View {
                         onAdd: { addItem(in: status) },
                         onAddInCategory: { addItem(in: status, category: $0) },
                         isSelected: selectedColumn == status,
-                        onSelectColumn: { selectedColumn = status }
+                        onSelectColumn: { selectedColumn = status },
+                        isMoveTarget: movingItemIDs != nil && target == status,
+                        selectionModeActive: selectionModeActive,
+                        cursorID: selectionCursorID,
+                        pickedIDs: Set(pickedItemIDs)
                     )
+                    // Move flow: blur every column but the one the arrows
+                    // are currently pointed at, so the destination is
+                    // unmissable.
+                    .blur(radius: movingItemIDs != nil && target != status ? 5 : 0)
+                    .animation(.easeOut(duration: 0.16), value: movingItemIDs != nil)
+                    .animation(.easeOut(duration: 0.16), value: target)
                 }
         }
         .padding(14)
@@ -146,7 +185,7 @@ struct BoardView: View {
             // leave you to go find one, the drop asks which agent — and only
             // commits once you have said. Dismissing leaves the card put.
             if target == .dispatched {
-                pendingDispatch = item
+                pendingDispatch = [item]
                 return
             }
             AppActionDispatcher(store: store).perform(.moveWorkItem(id: item.id, status: target, category: nil))
@@ -168,6 +207,12 @@ struct BoardView: View {
             }
 
             Spacer(minLength: 0)
+
+            if movingItemIDs != nil {
+                movePill
+            } else if selectionModeActive {
+                selectionPill
+            }
 
             scopePicker
             categoryPicker
@@ -209,6 +254,74 @@ struct BoardView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
         .overlay(alignment: .bottom) { GlassHairline() }
+    }
+
+    /// Shown only while Cmd+B selection is active — the only sign this mode
+    /// exists at all, since it isn't an everyday feature.
+    private var selectionPill: some View {
+        HStack(spacing: 8) {
+            Text("↑↓ move · ↵ pick · esc cancel")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(DaddyTheme.textMuted)
+
+            Button {
+                sendBundle()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "paperplane.fill")
+                    Text(pickedItemIDs.count >= 2 ? "Send \(pickedItemIDs.count)" : "Send")
+                }
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(pickedItemIDs.count >= 2 ? DaddyTheme.textPrimary : DaddyTheme.textVeryDim)
+                .padding(.horizontal, 9)
+                .frame(height: 24)
+                .background {
+                    Capsule().fill(DaddyTheme.accent.opacity(pickedItemIDs.count >= 2 ? 0.28 : 0.08))
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(pickedItemIDs.count < 2)
+
+            Button {
+                exitSelectionMode()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(DaddyTheme.textMuted)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 28)
+        .insetSurface(cornerRadius: 8)
+        .transition(.opacity)
+    }
+
+    /// Shown only during Cmd+M's move flow — the moment between picking
+    /// items and picking their destination.
+    private var movePill: some View {
+        HStack(spacing: 8) {
+            Text("←→ column · ↵ move · esc cancel")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(DaddyTheme.textMuted)
+
+            Button {
+                cancelMove()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(DaddyTheme.textMuted)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 28)
+        .insetSurface(cornerRadius: 8)
+        .transition(.opacity)
     }
 
     private var scopePicker: some View {
@@ -305,7 +418,7 @@ struct BoardView: View {
     @ViewBuilder
     private var dispatchOverlay: some View {
         if let pendingDispatch {
-            BoardDispatchPicker(item: pendingDispatch) {
+            BoardDispatchPicker(items: pendingDispatch) {
                 self.pendingDispatch = nil
             }
         }
@@ -326,7 +439,7 @@ struct BoardView: View {
                     titleFocus: $editorTitleFocused,
                     summaryFocus: $editorSummaryFocused,
                     onClose: closeDetail,
-                    onSendToAgent: { pendingDispatch = item }
+                    onSendToAgent: { pendingDispatch = [item] }
                 )
                 .frame(width: 340)
                 .frame(maxHeight: .infinity)
@@ -337,6 +450,33 @@ struct BoardView: View {
         }
         .frame(maxHeight: .infinity)
         .animation(.easeOut(duration: 0.2), value: store.selectedOrchestratorWorkItemID != nil)
+    }
+
+    /// The bundle card has nothing of its own to edit — this is a summary of
+    /// its members plus the one thing you can't do from the card itself:
+    /// unbundle it.
+    @ViewBuilder
+    private var bundleDetailOverlay: some View {
+        ZStack(alignment: .trailing) {
+            if openBundleID != nil, !openBundleItems.isEmpty {
+                BoardBundleDetailPane(
+                    items: openBundleItems,
+                    onClose: { openBundleID = nil },
+                    onSelectItem: { item in
+                        openBundleID = nil
+                        select(item)
+                    },
+                    onUnbundle: unbundleOpenBundle
+                )
+                .frame(width: 340)
+                .frame(maxHeight: .infinity)
+                .padding(.vertical, 10)
+                .padding(.trailing, 10)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .frame(maxHeight: .infinity)
+        .animation(.easeOut(duration: 0.2), value: openBundleID)
     }
 
     // MARK: - Actions
@@ -353,10 +493,128 @@ struct BoardView: View {
 
             let chords = event.modifierFlags.intersection([.command, .option, .control, .shift])
 
+            // The move flow is modal over everything else on the board —
+            // once Cmd+M has picked up items, every key until Enter/Escape
+            // steers or resolves that move, not whatever it would otherwise
+            // do (bundling, column selection, and so on).
+            if movingItemIDs != nil {
+                switch event.keyCode {
+                case 123: // Left
+                    moveDropTarget(by: -1)
+                case 124: // Right
+                    moveDropTarget(by: 1)
+                case 36, 76: // Return, keypad Enter
+                    commitMove()
+                case 53: // Escape
+                    cancelMove()
+                default: break
+                }
+                return nil
+            }
+
+            // Cmd+M starts the move flow on whatever's selected: the picked
+            // set in selection mode, or the single item open in the detail
+            // pane — expanded to every member if that item is bundled. Arrow
+            // keys then pick the destination column (highlighted the same
+            // way a real drag's drop target is) and Enter commits it.
+            if event.keyCode == 46, chords == .command {
+                let sourceItems = moveSourceItems
+                guard !sourceItems.isEmpty else { return event }
+                startMoveFlow(for: sourceItems)
+                return nil
+            }
+
+            // Cmd+B toggles multi-select — pick a few cards, Cmd+B again
+            // once 2+ are picked bundles them (a shared `bundleID`, no
+            // dispatch) and drops straight into the move flow so you can
+            // send the freshly-bundled group to DISPATCHED — or wherever —
+            // in the same gesture. With fewer than 2 picked it just exits
+            // selection mode, same as it always did.
+            if event.keyCode == 11, chords == .command {
+                if selectionModeActive, pickedItemIDs.count >= 2 {
+                    let bundled = bundlePickedItems()
+                    exitSelectionMode()
+                    startMoveFlow(for: bundled)
+                } else {
+                    toggleSelectionMode()
+                }
+                return nil
+            }
+
+            // Enter with a column selected but no card cursor yet starts the
+            // same bundling/selection mode Cmd+B does, seeded on that column
+            // — so arrowing onto a column and hitting Enter works without
+            // reaching for the Cmd+B chord first.
+            if !selectionModeActive, chords.isEmpty, !editorTitleFocused, !editorSummaryFocused,
+               store.selectedOrchestratorWorkItemID == nil, pendingDispatch == nil,
+               selectedColumn != nil, event.keyCode == 36 || event.keyCode == 76 {
+                toggleSelectionMode()
+                return nil
+            }
+
+            if selectionModeActive, !editorTitleFocused, !editorSummaryFocused {
+                // Cmd+Return sends the picked set once there are 2+ — with
+                // fewer than 2 picked this falls through to the normal
+                // single-item Cmd+Return handled by the detail pane.
+                if (event.keyCode == 36 || event.keyCode == 76), chords == .command,
+                   pickedItemIDs.count >= 2 {
+                    sendBundle()
+                    return nil
+                }
+                // Arrows and Enter navigate the picker itself; once a detail
+                // pane is open over it, they belong to the pane (or its own
+                // fields) instead.
+                if chords.isEmpty, store.selectedOrchestratorWorkItemID == nil {
+                    switch event.keyCode {
+                    case 125: // Down
+                        moveSelectionCursor(by: 1)
+                        return nil
+                    case 126: // Up
+                        moveSelectionCursor(by: -1)
+                        return nil
+                    case 36, 76: // Return, keypad Enter
+                        selectionEnter()
+                        return nil
+                    case 123: // Left
+                        moveSelectionColumn(by: -1)
+                        return nil
+                    case 124: // Right
+                        moveSelectionColumn(by: 1)
+                        return nil
+                    default: break
+                    }
+                }
+            }
+
+            // Left/right arrows step the selected column. Only outside
+            // selection mode (which claims up/down/enter for its own card
+            // cursor) and only with no task popup open or field focused.
+            if !selectionModeActive, chords.isEmpty, !editorTitleFocused, !editorSummaryFocused,
+               store.selectedOrchestratorWorkItemID == nil, pendingDispatch == nil {
+                switch event.keyCode {
+                case 123: // Left
+                    moveColumnSelection(by: -1)
+                    return nil
+                case 124: // Right
+                    moveColumnSelection(by: 1)
+                    return nil
+                default: break
+                }
+            }
+
             // Cmd+T creates a new card in the selected column, or BACKLOG if
             // no column is selected.
             if event.keyCode == 17, chords == .command {
                 addItem(in: selectedColumn ?? .inbox)
+                return nil
+            }
+
+            // Cmd+S backs up to Drive and local — the same action as the
+            // cloud icon in the header. Only fires with no task popup open;
+            // with one open, Cmd+S belongs to WorkItemFields' own handler,
+            // which saves and closes that item instead.
+            if event.keyCode == 1, chords == .command, store.selectedOrchestratorWorkItemID == nil {
+                store.syncPendingNow()
                 return nil
             }
 
@@ -369,6 +627,26 @@ struct BoardView: View {
                 return nil
             }
 
+            if openBundleID != nil {
+                openBundleID = nil
+                return nil
+            }
+
+            // In selection mode, Escape closes an open detail pane first —
+            // back to picking, not out of selection mode. With no pane open
+            // it unpicks the most recently picked card, one at a time, and
+            // only exits selection mode once nothing is left picked.
+            if selectionModeActive {
+                if store.selectedOrchestratorWorkItemID != nil {
+                    closeDetail()
+                } else if !pickedItemIDs.isEmpty {
+                    pickedItemIDs.removeLast()
+                } else {
+                    exitSelectionMode()
+                }
+                return nil
+            }
+
             if store.selectedOrchestratorWorkItemID != nil {
                 closeDetail()
                 return nil
@@ -376,6 +654,253 @@ struct BoardView: View {
             store.workspace = store.workspaceBeforeBoard
             return nil
         }
+    }
+
+    // MARK: - Selection mode (bundling)
+
+    /// The order arrow keys move through: the same column-then-category
+    /// grouping the board draws, skipping anything hidden behind a collapsed
+    /// category group and anything already part of a bundle — bundling an
+    /// already-bundled item has nothing sensible to do.
+    private var selectionTraversalOrder: [OrchestratorWorkItem] {
+        let visible = items.filter { $0.bundleID == nil }
+        var order: [OrchestratorWorkItem] = []
+        for status in columns {
+            let columnItems = visible.filter { $0.status.boardColumn == status }
+            guard categoryFilter == nil else {
+                order.append(contentsOf: columnItems)
+                continue
+            }
+            for category in OrchestratorWorkCategory.allCases {
+                guard !collapsedGroups.contains(BoardGroupKey(status: status, category: category)) else { continue }
+                order.append(contentsOf: columnItems.filter { $0.category == category })
+            }
+        }
+        return order
+    }
+
+    private func toggleSelectionMode() {
+        if selectionModeActive {
+            exitSelectionMode()
+            return
+        }
+        selectionModeActive = true
+        let seedID = selectedItem?.id
+        // With no card open, prefer seeding on the selected column — Enter
+        // on a column arrowed into should land the cursor there, not on
+        // whatever happens to be traversal-first.
+        let columnSeedID = selectedColumn.flatMap { column in
+            selectionTraversalOrder.first { $0.status.boardColumn == column }?.id
+        }
+        selectionCursorID = seedID ?? columnSeedID ?? selectionTraversalOrder.first?.id
+        pickedItemIDs = seedID.map { [$0] } ?? []
+    }
+
+    private func exitSelectionMode() {
+        selectionModeActive = false
+        pickedItemIDs = []
+        selectionCursorID = nil
+    }
+
+    /// The items Cmd+M would move: the picked set in selection mode, or the
+    /// single item open in the detail pane — either way expanded to every
+    /// member sharing a `bundleID`, so moving one row of a bundle takes the
+    /// whole bundle with it.
+    private var moveSourceItems: [OrchestratorWorkItem] {
+        let baseIDs: Set<UUID>
+        if selectionModeActive, !pickedItemIDs.isEmpty {
+            baseIDs = Set(pickedItemIDs)
+        } else if let selectedItem {
+            baseIDs = [selectedItem.id]
+        } else {
+            baseIDs = []
+        }
+        guard !baseIDs.isEmpty else { return [] }
+        var expandedIDs = baseIDs
+        for id in baseIDs {
+            guard let bundleID = items.first(where: { $0.id == id })?.bundleID else { continue }
+            expandedIDs.formUnion(items.filter { $0.bundleID == bundleID }.map(\.id))
+        }
+        return items.filter { expandedIDs.contains($0.id) }
+    }
+
+    /// Stamps the currently-picked cards with a shared `bundleID` — no
+    /// status change, no dispatch, just the grouping — so Cmd+B's
+    /// bundle-then-move can hand `startMoveFlow` a real bundle to move as
+    /// one unit.
+    private func bundlePickedItems() -> [OrchestratorWorkItem] {
+        let ordered = selectionTraversalOrder.filter { pickedItemIDs.contains($0.id) }
+        guard ordered.count >= 2 else { return [] }
+        let bundleID = UUID()
+        return ordered.map { item in
+            var bundled = item
+            bundled.bundleID = bundleID
+            bundled.updatedAt = Date()
+            AppActionDispatcher(store: store).perform(.replaceWorkItem(bundled))
+            return bundled
+        }
+    }
+
+    /// Clears `bundleID` on every member of the open bundle — the board
+    /// stops drawing them as one `BoardBundleCard` and closes the pane, but
+    /// each item otherwise keeps its status, category, and everything else.
+    private func unbundleOpenBundle() {
+        for item in openBundleItems {
+            var unbundled = item
+            unbundled.bundleID = nil
+            unbundled.updatedAt = Date()
+            AppActionDispatcher(store: store).perform(.replaceWorkItem(unbundled))
+        }
+        openBundleID = nil
+    }
+
+    /// Enters the move flow for a given set of items — shared by Cmd+M and
+    /// Cmd+B's bundle-then-move. Seeds the target one column over from
+    /// wherever the items currently sit, not on their own column (falling
+    /// back to the column before it if they're already in the last one).
+    private func startMoveFlow(for sourceItems: [OrchestratorWorkItem]) {
+        guard !sourceItems.isEmpty else { return }
+        movingItemIDs = sourceItems.map(\.id)
+        let sourceColumn = sourceItems.first?.status.boardColumn
+        let sourceIndex = sourceColumn.flatMap { columns.firstIndex(of: $0) }
+        if let sourceIndex, columns.indices.contains(sourceIndex + 1) {
+            dropTarget = columns[sourceIndex + 1]
+        } else if let sourceIndex, columns.indices.contains(sourceIndex - 1) {
+            dropTarget = columns[sourceIndex - 1]
+        } else {
+            dropTarget = columns.first
+        }
+    }
+
+    /// Left/right during the move flow — steers `dropTarget`, the same
+    /// state a real drag highlights, so the highlighted column looks
+    /// identical either way.
+    private func moveDropTarget(by delta: Int) {
+        let order = columns
+        guard !order.isEmpty else { return }
+        guard let current = dropTarget, let currentIndex = order.firstIndex(of: current) else {
+            dropTarget = delta > 0 ? order.first : order.last
+            return
+        }
+        // Wraps rather than stopping dead at either edge — DONE's right
+        // arrow lands back on BACKLOG, and vice versa.
+        let next = (currentIndex + delta + order.count) % order.count
+        dropTarget = order[next]
+    }
+
+    private func commitMove() {
+        guard let ids = movingItemIDs, let target = dropTarget else {
+            cancelMove()
+            return
+        }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            for id in ids {
+                AppActionDispatcher(store: store).perform(.moveWorkItem(id: id, status: target, category: nil))
+            }
+        }
+        if selectionModeActive { exitSelectionMode() }
+        movingItemIDs = nil
+        dropTarget = nil
+    }
+
+    private func cancelMove() {
+        movingItemIDs = nil
+        dropTarget = nil
+    }
+
+    /// Left/right arrows step the selected column — the one Cmd+T adds into
+    /// and the one drawn with the stronger border/fill in `BoardColumn`.
+    private func moveColumnSelection(by delta: Int) {
+        let order = columns
+        guard !order.isEmpty else { return }
+        guard let current = selectedColumn,
+              let currentIndex = order.firstIndex(of: current) else {
+            selectedColumn = delta > 0 ? order.first : order.last
+            return
+        }
+        // Wraps rather than stopping dead at either edge — DONE's right
+        // arrow lands back on BACKLOG, and vice versa.
+        let next = (currentIndex + delta + order.count) % order.count
+        selectedColumn = order[next]
+    }
+
+    private func moveSelectionCursor(by delta: Int) {
+        let order = selectionTraversalOrder
+        guard !order.isEmpty else { return }
+        guard let currentID = selectionCursorID,
+              let currentIndex = order.firstIndex(where: { $0.id == currentID }) else {
+            selectionCursorID = delta > 0 ? order.first?.id : order.last?.id
+            return
+        }
+        let next = currentIndex + delta
+        guard order.indices.contains(next) else { return }
+        selectionCursorID = order[next].id
+    }
+
+    /// Left/right while the cursor is active: jumps it to the adjacent
+    /// column instead of requiring Escape first. Skips columns with nothing
+    /// to land on, and keeps `selectedColumn` in step so the column's
+    /// highlighted border follows the cursor.
+    private func moveSelectionColumn(by delta: Int) {
+        let order = selectionTraversalOrder
+        guard !columns.isEmpty else { return }
+        guard let currentID = selectionCursorID,
+              let currentItem = order.first(where: { $0.id == currentID }),
+              let columnIndex = columns.firstIndex(of: currentItem.status.boardColumn) else {
+            selectionCursorID = order.first?.id
+            return
+        }
+        // Wraps rather than stopping dead at either edge, same as the plain
+        // column-selection arrows — capped at one full lap so an all-empty
+        // board (nothing left to land the cursor on) doesn't spin forever.
+        var nextIndex = (columnIndex + delta + columns.count) % columns.count
+        for _ in columns.indices {
+            let candidate = columns[nextIndex]
+            if let firstInColumn = order.first(where: { $0.status.boardColumn == candidate }) {
+                selectionCursorID = firstInColumn.id
+                selectedColumn = candidate
+                return
+            }
+            nextIndex = (nextIndex + delta + columns.count) % columns.count
+        }
+    }
+
+    /// First Enter on a card picks it. Enter again on an already-picked card
+    /// opens its detail pane to read/edit it — Escape (or Cmd+S) closes that
+    /// pane back to the picker, keeping every pick and the cursor put.
+    private func selectionEnter() {
+        guard let id = selectionCursorID else { return }
+        if pickedItemIDs.contains(id) {
+            guard let item = store.workItem(id) else { return }
+            select(item)
+        } else {
+            pickedItemIDs.append(id)
+        }
+    }
+
+    /// A card click while selection mode is active picks it instead of
+    /// opening the detail pane — mirrors keyboard Enter on the cursor.
+    private func handleCardSelect(_ item: OrchestratorWorkItem) {
+        guard selectionModeActive else {
+            select(item)
+            return
+        }
+        selectionCursorID = item.id
+        if pickedItemIDs.contains(item.id) {
+            pickedItemIDs.removeAll { $0 == item.id }
+        } else {
+            pickedItemIDs.append(item.id)
+        }
+    }
+
+    private func sendBundle() {
+        let ordered = selectionTraversalOrder.filter { pickedItemIDs.contains($0.id) }
+        let picked = ordered.count >= 2 ? ordered : items.filter { pickedItemIDs.contains($0.id) }
+        guard picked.count >= 2 else { return }
+        exitSelectionMode()
+        pendingDispatch = picked
     }
 
     private func removeKeyboardMonitor() {
@@ -438,6 +963,14 @@ struct BoardView: View {
         guard case .all = scope else { return nil }
         guard let id = item.projectID else { return nil }
         return store.project(id)?.name
+    }
+
+    private func toggleBundleCollapsed(_ id: UUID) {
+        if collapsedBundleIDs.contains(id) {
+            collapsedBundleIDs.remove(id)
+        } else {
+            collapsedBundleIDs.insert(id)
+        }
     }
 
     private func toggleGroup(_ key: BoardGroupKey) {
@@ -667,5 +1200,76 @@ private struct BoardDetailPane: View {
         fresh.projectID = projectID.isEmpty ? nil : projectID
         fresh.updatedAt = Date()
         AppActionDispatcher(store: store).perform(.replaceWorkItem(fresh))
+    }
+}
+
+/// A bundle card has no fields of its own — this is a read-only roster of
+/// its members (each row opens that item's own `BoardDetailPane`) plus the
+/// one action the card itself doesn't offer: unbundling.
+private struct BoardBundleDetailPane: View {
+    let items: [OrchestratorWorkItem]
+    let onClose: () -> Void
+    let onSelectItem: (OrchestratorWorkItem) -> Void
+    let onUnbundle: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("\(items.count) TASKS BUNDLED")
+                    .font(.system(size: 10, weight: .bold))
+                    .tracking(0.8)
+                    .foregroundStyle(DaddyTheme.textSecondary)
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(DaddyTheme.textMuted)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 15)
+            .overlay(alignment: .bottom) { GlassHairline() }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(items) { item in
+                        Button { onSelectItem(item) } label: {
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(item.category.tint)
+                                    .frame(width: 6, height: 6)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.title.isEmpty ? "Untitled" : item.title)
+                                        .font(.system(size: 12.5, weight: .semibold))
+                                        .foregroundStyle(DaddyTheme.textPrimary)
+                                        .lineLimit(2)
+                                    Text(item.status.boardColumn.title)
+                                        .font(.system(size: 9, design: .monospaced))
+                                        .foregroundStyle(DaddyTheme.textMuted)
+                                }
+                                Spacer(minLength: 0)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundStyle(DaddyTheme.textVeryDim)
+                            }
+                            .padding(10)
+                            .insetSurface(cornerRadius: 10)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    GlassHairline()
+
+                    Button("Unbundle", action: onUnbundle)
+                        .buttonStyle(.insetLarge(DaddyTheme.failure))
+                        .frame(maxWidth: .infinity)
+                }
+                .padding(16)
+            }
+        }
+        .glassPanel()
     }
 }

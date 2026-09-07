@@ -14,6 +14,8 @@ struct BoardColumn: View {
     /// header above every card in every column says nothing.
     let groupByCategory: Bool
     let collapsed: Set<BoardGroupKey>
+    /// Bundle cards folded shut — see `BoardBundleCard`.
+    let collapsedBundleIDs: Set<UUID>
     /// Non-nil only in the all-projects scope; see `BoardCard.projectName`.
     let projectName: (OrchestratorWorkItem) -> String?
 
@@ -21,6 +23,8 @@ struct BoardColumn: View {
     let onArchive: (OrchestratorWorkItem) -> Void
     let onDelete: (OrchestratorWorkItem) -> Void
     let onSendToOrchestrator: (OrchestratorWorkItem) -> Void
+    let onToggleBundleCollapsed: (UUID) -> Void
+    let onOpenBundle: (UUID) -> Void
     let draggingID: UUID?
     let isDropTarget: Bool
     let onDragChanged: (OrchestratorWorkItem, CGPoint) -> Void
@@ -31,12 +35,48 @@ struct BoardColumn: View {
     /// Whether this column is the one Cmd+T will add into.
     let isSelected: Bool
     let onSelectColumn: () -> Void
+    /// Whether this is the destination the Cmd+M move flow is currently
+    /// pointed at. Blurs its own cards (there's nothing to read mid-move)
+    /// and shows "Move to <column>" in their place.
+    var isMoveTarget: Bool = false
+    /// Cmd+B multi-select — see `BoardView`. `cursorID`/`pickedIDs` drive the
+    /// highlight on individual (never-bundled) cards only.
+    var selectionModeActive: Bool = false
+    var cursorID: UUID?
+    var pickedIDs: Set<UUID> = []
 
     static let width: CGFloat = 244
 
-    private var groups: [(category: OrchestratorWorkCategory, items: [OrchestratorWorkItem], count: Int)] {
+    /// One board card's worth of content: a lone item, or every item sharing
+    /// a `bundleID` collapsed into one `BoardBundleCard`. Bundled items are
+    /// grouped in the order they first appear so the card lands where its
+    /// first member would have.
+    private struct Unit: Identifiable {
+        let id: String
+        let bundleID: UUID?
+        let category: OrchestratorWorkCategory
+        let items: [OrchestratorWorkItem]
+    }
+
+    private var units: [Unit] {
+        var seenBundles: Set<UUID> = []
+        var result: [Unit] = []
+        for item in items {
+            if let bundleID = item.bundleID {
+                guard !seenBundles.contains(bundleID) else { continue }
+                seenBundles.insert(bundleID)
+                let members = items.filter { $0.bundleID == bundleID }
+                result.append(Unit(id: bundleID.uuidString, bundleID: bundleID, category: members[0].category, items: members))
+            } else {
+                result.append(Unit(id: item.id.uuidString, bundleID: nil, category: item.category, items: [item]))
+            }
+        }
+        return result
+    }
+
+    private var groups: [(category: OrchestratorWorkCategory, units: [Unit], count: Int)] {
         OrchestratorWorkCategory.allCases.compactMap { category in
-            let matching = items.filter { $0.category == category }
+            let matching = units.filter { $0.category == category }
             guard !matching.isEmpty else { return nil }
             let key = BoardGroupKey(status: status, category: category)
             let visible = collapsed.contains(key) ? [] : matching
@@ -48,19 +88,24 @@ struct BoardColumn: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             content
+                .overlay {
+                    if isMoveTarget {
+                        moveTargetOverlay
+                    }
+                }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelectColumn)
         .background {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(status.boardTint.opacity(isDropTarget ? 0.10 : 0.035))
+                .fill(status.boardTint.opacity(isDropTarget ? 0.10 : (isSelected ? 0.075 : 0.035)))
         }
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(
-                    status.boardTint.opacity(isDropTarget ? 0.75 : (isSelected ? 0.6 : 0.16)),
-                    lineWidth: isSelected && !isDropTarget ? 1.5 : 1
+                    status.boardTint.opacity(isDropTarget ? 0.75 : (isSelected ? 0.9 : 0.16)),
+                    lineWidth: isSelected && !isDropTarget ? 2 : 1
                 )
         }
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -103,7 +148,7 @@ struct BoardColumn: View {
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 9)
-        .background(status.boardTint.opacity(0.16))
+        .background(status.boardTint.opacity(isSelected ? 0.24 : 0.16))
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(status.boardTint.opacity(0.35))
@@ -114,31 +159,70 @@ struct BoardColumn: View {
     // MARK: - Body
 
     private var content: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 6) {
-                if groupByCategory {
-                    ForEach(groups, id: \.category) { group in
-                        LazyVStack(alignment: .leading, spacing: 6) {
-                            groupHeader(group.category, count: group.count)
-                            ForEach(group.items) { card($0, showsCategory: false) }
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    if groupByCategory {
+                        ForEach(groups, id: \.category) { group in
+                            LazyVStack(alignment: .leading, spacing: 6) {
+                                groupHeader(group.category, count: group.count)
+                                ForEach(group.units) { unit($0, showsCategory: false) }
+                            }
                         }
+                    } else {
+                        ForEach(units) { unit($0, showsCategory: true) }
                     }
-                } else {
-                    ForEach(items) { card($0, showsCategory: true) }
-                }
 
-                if items.isEmpty {
-                    Text("drop here")
-                        .font(.system(size: 9.5))
-                        .foregroundStyle(DaddyTheme.textVeryDim)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 26)
+                    if items.isEmpty {
+                        Text("drop here")
+                            .font(.system(size: 9.5))
+                            .foregroundStyle(DaddyTheme.textVeryDim)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 26)
+                    }
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: .infinity)
+            // Only worth blurring if there's something to blur — an empty
+            // column's "drop here" already reads fine under the overlay.
+            .blur(radius: isMoveTarget && !items.isEmpty ? 10 : 0)
+            // The selection cursor moves by keyboard, not scroll — nothing
+            // was carrying the viewport along, so arrowing past the fold
+            // left the cursor sitting off-screen, unseen. `scrollTo` is a
+            // no-op for a column that doesn't contain this id, so every
+            // column's reader can react to the same `cursorID` safely.
+            .onChange(of: cursorID) { _, newCursorID in
+                guard selectionModeActive, let newCursorID else { return }
+                withAnimation(.easeOut(duration: 0.15)) {
+                    proxy.scrollTo(newCursorID, anchor: .center)
                 }
             }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxHeight: .infinity)
+    }
+
+    /// "Move to <column>" — the only thing meant to be legible in this
+    /// column while it's the Cmd+M destination.
+    private var moveTargetOverlay: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "arrow.right.circle.fill")
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(status.boardTint)
+            Text("Move to \(status.title)")
+                .font(.system(size: 12, weight: .bold))
+                .tracking(0.4)
+                .foregroundStyle(DaddyTheme.textPrimary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(DaddyTheme.focusSurface.opacity(0.92))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(false)
     }
 
     private func groupHeader(
@@ -155,6 +239,26 @@ struct BoardColumn: View {
         )
     }
 
+    @ViewBuilder
+    private func unit(_ unit: Unit, showsCategory: Bool) -> some View {
+        if unit.items.count > 1, let bundleID = unit.bundleID {
+            BoardBundleCard(
+                bundleID: bundleID,
+                items: unit.items,
+                isCollapsed: collapsedBundleIDs.contains(bundleID),
+                selectedID: selectedID,
+                showsCategory: showsCategory,
+                projectName: projectName,
+                onToggleCollapsed: { onToggleBundleCollapsed(bundleID) },
+                onSelectItem: { onSelect($0) },
+                onOpenDetail: { onOpenBundle(bundleID) }
+            )
+        } else {
+            card(unit.items[0], showsCategory: showsCategory)
+                .id(unit.items[0].id)
+        }
+    }
+
     private func card(_ item: OrchestratorWorkItem, showsCategory: Bool) -> some View {
         BoardCard(
             item: item,
@@ -162,6 +266,8 @@ struct BoardColumn: View {
             isDragging: draggingID == item.id,
             showsCategory: showsCategory,
             projectName: projectName(item),
+            isSelectionCursor: selectionModeActive && cursorID == item.id,
+            isPicked: selectionModeActive && pickedIDs.contains(item.id),
             onSelect: { onSelect(item) },
             onDragChanged: { onDragChanged(item, $0) },
             onDragEnded: { onDragEnded(item, $0) },

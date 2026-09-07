@@ -101,20 +101,17 @@ struct RootView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.92)))
             }
 
-            // Clear of the titlebar, not under it.
+            // Bottom-aligned, clear of the voice capture pill above it.
             //
-            // The window is `.hiddenTitleBar`, so this ZStack starts at the top
-            // of the window and the titlebar — traffic lights on one side,
-            // `TitlebarAccessory` on the other — draws over it as AppKit chrome.
-            // At 14pt down the toast was behind that strip, which no `zIndex`
-            // can fix: it orders SwiftUI siblings, not NSViews above them.
-            // 54pt puts it below the chrome, on the content it is talking about.
+            // Slides in and back out along the bottom edge it lives on, rather
+            // than dropping from the top — it stays put while visible and
+            // leaves the way it arrived when dismissed or timed out.
             if let toast = store.voiceToast {
                 VoiceActionToast(toast: toast)
-                    .padding(.top, 54)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.bottom, 26)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .zIndex(4)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
             // In the titlebar, not over the content.

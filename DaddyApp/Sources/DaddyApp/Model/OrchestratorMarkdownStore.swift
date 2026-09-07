@@ -302,6 +302,9 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
         if let boardPosition = item.boardPosition {
             output += "board-position: \(boardPosition)\n"
         }
+        if let bundleID = item.bundleID {
+            output += "bundle-id: \(bundleID.uuidString)\n"
+        }
         output += "created: \(Self.formatDate(item.createdAt))\n"
         output += "updated: \(Self.formatDate(item.updatedAt))\n"
         output += "---\n\n"
@@ -350,6 +353,7 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
         let attachments = csv(values["attachments"] ?? "").compactMap(UUID.init(uuidString:))
         let sessions = csv(values["sessions"] ?? "")
         let boardPosition = values["board-position"].flatMap(Int.init)
+        let bundleID = values["bundle-id"].flatMap(UUID.init(uuidString:))
         let created = Self.parseDate(values["created"] ?? "") ?? Date()
         let updated = Self.parseDate(values["updated"] ?? "") ?? created
         let priority = OrchestratorPriority(rawValue: values["priority"] ?? "medium") ?? .medium
@@ -368,6 +372,7 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
             attachmentIDs: attachments,
             linkedSessionIDs: sessions,
             boardPosition: boardPosition,
+            bundleID: bundleID,
             createdAt: created,
             updatedAt: updated
         )

@@ -226,6 +226,11 @@ struct OrchestratorWorkItem: Identifiable, Codable, Hashable {
     /// Stable position within a board status/category stack. Older items
     /// without one retain their legacy ordering until they are moved.
     var boardPosition: Int?
+    /// Shared by every item sent together in one multi-task dispatch. Nil for
+    /// an item that has never been part of a bundle. The board collapses
+    /// items sharing an id into one card; the underlying items stay separate
+    /// and independently editable.
+    var bundleID: UUID?
     var createdAt: Date
     var updatedAt: Date
 
@@ -241,6 +246,7 @@ struct OrchestratorWorkItem: Identifiable, Codable, Hashable {
         attachmentIDs: [UUID] = [],
         linkedSessionIDs: [String] = [],
         boardPosition: Int? = nil,
+        bundleID: UUID? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -255,6 +261,7 @@ struct OrchestratorWorkItem: Identifiable, Codable, Hashable {
         self.attachmentIDs = attachmentIDs
         self.linkedSessionIDs = linkedSessionIDs
         self.boardPosition = boardPosition
+        self.bundleID = bundleID
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

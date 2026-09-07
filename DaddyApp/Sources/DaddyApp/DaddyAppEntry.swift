@@ -63,13 +63,20 @@ final class AppActivator: NSObject, NSApplicationDelegate {
     private func bringToFront() {
         let app = NSApplication.shared
 
-        // `NSRunningApplication`, not `NSApp.activate(ignoringOtherApps:)`.
+        // `NSRunningApplication.activate` — even with every option flag set —
+        // is a no-op for a process the terminal launched: macOS 14+ silently
+        // ignores `.activateIgnoringOtherApps` (confirmed: `app active=false`
+        // in the log after calling it), and there is no other flag that
+        // changes that. A background/terminal-spawned process is simply not
+        // allowed to steal key focus through this API any more.
         //
-        // macOS 14 deprecated the forceful form and the window server now
-        // mostly declines it — an app cannot simply steal focus any more, which
-        // is why raising this window from inside the app looked like it was
-        // doing nothing at all. `activateAllWindows` through the running-app
-        // API is the request the system still honours.
+        // System Events is not subject to that restriction — it drives focus
+        // through the Accessibility layer instead, which is why `tell
+        // application "System Events" to set frontmost ... true` still works
+        // where the native activation call is silently swallowed. Requires
+        // Terminal (or whatever launched this) to hold Automation permission
+        // for System Events, granted once via the macOS permission prompt.
+        forceActivateViaSystemEvents()
         NSRunningApplication.current.activate(options: [.activateAllWindows])
 
         // Activating the app and raising its window are separate things: a
@@ -88,6 +95,24 @@ final class AppActivator: NSObject, NSApplicationDelegate {
         FileHandle.standardError.write(
             Data("[activate] raised; app active=\(app.isActive) key=\(window.isKeyWindow)\n".utf8)
         )
+    }
+
+    /// Drives focus through System Events instead of `NSRunningApplication`,
+    /// since the latter is a no-op for a terminal-launched process on
+    /// macOS 14+ (see `bringToFront`).
+    private func forceActivateViaSystemEvents() {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let source = """
+        tell application "System Events"
+            set frontmost of (first process whose unix id is \(pid)) to true
+        end tell
+        """
+        guard let script = NSAppleScript(source: source) else { return }
+        var error: NSDictionary?
+        script.executeAndReturnError(&error)
+        if let error {
+            FileHandle.standardError.write(Data("[activate] System Events failed: \(error)\n".utf8))
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

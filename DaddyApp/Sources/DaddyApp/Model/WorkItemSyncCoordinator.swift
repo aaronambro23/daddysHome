@@ -225,8 +225,22 @@ final class WorkItemSyncCoordinator {
                     let content = try await driveClient.downloadContent(fileID: mdFile.id)
                     let items = OrchestratorMarkdownStore.parseItems(content: content)
                     for item in items {
-                        driveItems[item.id] = item
-                        localStore.save(item)
+                        // Drive isn't automatically authoritative — a local
+                        // change (a bundle dispatch stamping `bundleID`, an
+                        // agent editing its own item) can be newer than
+                        // whatever Drive last saw if it hasn't pushed yet.
+                        // Overwriting on `updatedAt` alone, rather than
+                        // whichever side happened to answer first, is what
+                        // silently stripped a freshly-set `bundleID` here
+                        // before: the older Drive copy clobbered the local
+                        // file outright.
+                        if let existingLocal = localItems.first(where: { $0.id == item.id }),
+                           existingLocal.updatedAt > item.updatedAt {
+                            driveItems[item.id] = existingLocal
+                        } else {
+                            driveItems[item.id] = item
+                            localStore.save(item)
+                        }
                     }
                     setEntry(DriveSyncEntry(localID: bucketKey(bucket), driveFileID: mdFile.id, lastSyncedAt: Date()))
                 }

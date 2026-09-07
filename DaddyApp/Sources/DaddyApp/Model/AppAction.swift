@@ -12,6 +12,8 @@ enum AppAction {
     case deleteWorkItem(id: UUID)
     case dispatchOntoAgent(workItemID: UUID, agentID: String)
     case dispatchLaunchingAgent(workItemID: UUID, kind: AgentKind)
+    case dispatchBundleOntoAgent(workItemIDs: [UUID], agentID: String)
+    case dispatchBundleLaunchingAgent(workItemIDs: [UUID], kind: AgentKind)
     case launchSession(kind: AgentKind, projectID: String)
 }
 
@@ -33,6 +35,7 @@ enum AppActionOutcome {
     case workItemReplaced(OrchestratorWorkItem)
     case workItemDeleted(id: UUID)
     case dispatched(item: OrchestratorWorkItem, agent: MockAgent)
+    case bundleDispatched(items: [OrchestratorWorkItem], agent: MockAgent)
     case sessionLaunched(MockAgent)
     case failed(String)
 }
@@ -90,6 +93,25 @@ struct AppActionDispatcher {
                 return .failed(store.launchError ?? "Could not launch a session for this work item")
             }
             return .dispatched(item: item, agent: agent)
+
+        case .dispatchBundleOntoAgent(let workItemIDs, let agentID):
+            guard let agent = store.agents.first(where: { $0.id == agentID }) else {
+                return .failed("That session is no longer running")
+            }
+            store.dispatchWorkItemBundle(workItemIDs, onto: agent)
+            let items = workItemIDs.compactMap { store.workItem($0) }
+            guard !items.isEmpty else { return .failed("Work items no longer exist") }
+            return .bundleDispatched(items: items, agent: agent)
+
+        case .dispatchBundleLaunchingAgent(let workItemIDs, let kind):
+            store.dispatchWorkItemBundle(workItemIDs, launching: kind)
+            let items = workItemIDs.compactMap { store.workItem($0) }
+            guard let first = items.first,
+                  let sessionID = first.linkedSessionIDs.last,
+                  let agent = store.agents.first(where: { $0.id == sessionID }) else {
+                return .failed(store.launchError ?? "Could not launch a session for this bundle")
+            }
+            return .bundleDispatched(items: items, agent: agent)
 
         case .launchSession(let kind, let projectID):
             guard let project = store.project(projectID) else {
