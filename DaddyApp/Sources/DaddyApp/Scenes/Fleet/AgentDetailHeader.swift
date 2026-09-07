@@ -102,19 +102,9 @@ struct AgentDetailHeader: View {
 
             Spacer(minLength: 10)
 
-            // One resource cluster: this conversation's window, then the
-            // account's quota. Both are "how much is left" at two scales, so
-            // they share a single inset rather than sitting as two competing
-            // widgets with a seam between them.
-            HStack(spacing: 10) {
-                ContextMeter(agent: agent)
-
-                ProviderUsageBattery(snapshot: store.providerUsage[agent.agent])
-                    .frame(width: 224, alignment: .leading)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .insetSurface(cornerRadius: 12)
+            // No wrapper: it sits in the header like everything else. Fixed
+            // width throughout, so it can never shove its neighbours around.
+            ProviderUsageBattery(snapshot: store.providerUsage[agent.agent])
 
             modeIconButton
 

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(AppKit)
+import AppKit
+#endif
 
 public struct HEXTranscription: Codable, Equatable, Sendable {
     public let id: String
@@ -25,7 +28,22 @@ public final class HEXWatcher: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.daddy.hex-watcher")
     private var onNewTranscription: (@MainActor @Sendable (String) -> Void)?
 
+    public static let hexBundleID = "com.kitlangton.Hex"
+
+    /// Whether Hex is installed, asked in a way that does not trip TCC.
+    ///
+    /// Reaching into `~/Library/Containers/com.kitlangton.Hex/…` is reading
+    /// another app's sandbox container, which makes macOS put up "Daddy's Home
+    /// would like to access data from other apps". Looking the app up in the
+    /// Launch Services database touches no protected path, so a machine
+    /// without Hex never sees that dialog at all.
+    public static var isHexInstalled: Bool {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: hexBundleID) != nil
+    }
+
     public convenience init?() {
+        guard Self.isHexInstalled else { return nil }
+
         let containerPath = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Containers/com.kitlangton.Hex/Data/Library/Application Support/com.kitlangton.Hex/transcription_history.json")
 

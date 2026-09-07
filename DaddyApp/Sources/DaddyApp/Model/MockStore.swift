@@ -215,6 +215,21 @@ final class MockStore {
     /// whichever SwiftUI control or embedded terminal currently owns focus.
     @ObservationIgnored private var hexWatcher: HEXWatcher?
 
+    /// Starts the Hex transcript bridge, if Hex is installed.
+    ///
+    /// Called once the window is on screen rather than from `init`. The first
+    /// read of Hex's sandbox container can raise a system permission dialog,
+    /// and a modal owned by another process during launch hands focus back to
+    /// whatever preceded Daddy when it closes. By the time this runs, Daddy is
+    /// the frontmost app, so dismissing the dialog returns focus here.
+    func startHexWatcher() {
+        guard hexWatcher == nil else { return }
+        hexWatcher = HEXWatcher()
+        hexWatcher?.start { [weak self] transcript in
+            self?.submitVoice(transcript)
+        }
+    }
+
     /// Daddy's own mic capture — double-tap Option, system-wide. See
     /// `VoiceCaptureController.swift`.
     @ObservationIgnored let voiceCaptureController = VoiceCaptureController()
@@ -267,10 +282,11 @@ final class MockStore {
         refreshInstalledAgents()
         refreshProviderUsage()
 
-        hexWatcher = HEXWatcher()
-        hexWatcher?.start { [weak self] transcript in
-            self?.submitVoice(transcript)
-        }
+        // Hex is started from `RootView.onAppear`, not here — see
+        // `startHexWatcher()`. Probing its container during init is what put a
+        // TCC dialog on screen mid-launch, and dismissing that returned focus
+        // to whatever was frontmost *before* Daddy, leaving this window behind
+        // the terminal you started it from.
 
         voiceCaptureController.onTranscript = { [weak self] transcript in
             self?.submitVoice(transcript)
