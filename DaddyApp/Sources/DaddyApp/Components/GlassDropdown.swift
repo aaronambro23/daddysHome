@@ -80,12 +80,20 @@ struct GlassDropdown<Label: View>: View {
     var selectedIndex: Int? = nil
     var onKeyboardMove: ((Int) -> Void)? = nil
     var onKeyboardActivate: (() -> Void)? = nil
+    /// Tab-chain hooks for form use. The trigger is focusable, so Tab reaches
+    /// it — these decide where Tab goes next instead of the key loop guessing.
+    var onTabForward: (() -> Void)? = nil
+    var onTabBackward: (() -> Void)? = nil
+    var triggerFocus: FocusState<Bool>.Binding? = nil
 
     @ViewBuilder let label: () -> Label
 
     @State private var internalIsOpen = false
     @State private var hoveringTrigger = false
     @FocusState private var menuFocused: Bool
+    /// Arrow/Enter navigation when the caller brings none of its own (the
+    /// work-item form). Callers passing `onKeyboardMove` keep owning the keys.
+    @State private var keyboardIndex: Int?
 
     private var openBinding: Binding<Bool> {
         Binding(
@@ -122,6 +130,25 @@ struct GlassDropdown<Label: View>: View {
             }
         }
         .buttonStyle(.plain)
+        .focusable()
+        .modifier(TriggerFocus(focus: triggerFocus))
+        // A focused button fires on Space but not Return — Return belongs to
+        // the window's default button. Open explicitly so Enter works too.
+        .onKeyPress(.return) {
+            openBinding.wrappedValue.toggle()
+            return .handled
+        }
+        .onKeyPress { press in
+            guard press.key == .tab else { return .ignored }
+            if press.modifiers.contains(.shift) {
+                guard let onTabBackward else { return .ignored }
+                onTabBackward()
+            } else {
+                guard let onTabForward else { return .ignored }
+                onTabForward()
+            }
+            return .handled
+        }
         .onHover { hoveringTrigger = $0 }
         .animation(.easeOut(duration: 0.15), value: hoveringTrigger)
         .popover(isPresented: openBinding, arrowEdge: .bottom) {
@@ -141,11 +168,10 @@ struct GlassDropdown<Label: View>: View {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     GlassDropdownRow(
                         item: item,
-                        isHighlighted: highlightedIndex == index,
+                        isHighlighted: effectiveHighlight == index,
                         isSelected: selectedIndex == index || item.isSelected
                     ) { selected in
-                        if !staysOpenOnPick { openBinding.wrappedValue = false }
-                        selected.action()
+                        activate(selected)
                     }
                 }
             }
@@ -157,18 +183,72 @@ struct GlassDropdown<Label: View>: View {
         .background(DaddyTheme.popoverBackground)
         .focusable()
         .focused($menuFocused)
-        .onAppear { menuFocused = true }
+        .onAppear {
+            menuFocused = true
+            if onKeyboardMove == nil {
+                keyboardIndex = selectedIndex ?? 0
+            }
+        }
         .onKeyPress(.upArrow) {
-            onKeyboardMove?(-1)
+            moveKeyboard(-1)
             return .handled
         }
         .onKeyPress(.downArrow) {
-            onKeyboardMove?(1)
+            moveKeyboard(1)
             return .handled
         }
         .onKeyPress(.return) {
-            onKeyboardActivate?()
+            activateKeyboardSelection()
             return .handled
+        }
+    }
+
+    private var effectiveHighlight: Int? {
+        highlightedIndex ?? keyboardIndex
+    }
+
+    private func activate(_ item: GlassDropdownItem) {
+        if !staysOpenOnPick { openBinding.wrappedValue = false }
+        item.action()
+    }
+
+    private func moveKeyboard(_ delta: Int) {
+        if let onKeyboardMove {
+            onKeyboardMove(delta)
+            return
+        }
+        guard !items.isEmpty else { return }
+        var index = keyboardIndex ?? selectedIndex ?? (delta > 0 ? -1 : items.count)
+        for _ in items.indices {
+            index += delta
+            guard items.indices.contains(index) else { return }
+            guard items[index].isEnabled else { continue }
+            keyboardIndex = index
+            return
+        }
+    }
+
+    private func activateKeyboardSelection() {
+        if let onKeyboardActivate {
+            onKeyboardActivate()
+            return
+        }
+        let index = keyboardIndex ?? selectedIndex ?? 0
+        guard items.indices.contains(index), items[index].isEnabled else { return }
+        activate(items[index])
+    }
+}
+
+/// Applies an optional focus binding. A conditional `.focused` modifier would
+/// change the trigger's identity when the binding appears, so this keeps the
+/// modifier tree stable whether or not a binding was passed.
+private struct TriggerFocus: ViewModifier {
+    var focus: FocusState<Bool>.Binding?
+    func body(content: Content) -> some View {
+        if let focus {
+            content.focused(focus)
+        } else {
+            content
         }
     }
 }

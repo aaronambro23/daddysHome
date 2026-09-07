@@ -70,6 +70,24 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        let targetBucket = CategoryBucket(
+            projectFolderName: projectFolderName(for: item.projectID),
+            categoryFolderName: item.category.folderName
+        )
+
+        // Fast path: the common case is editing in place. Only when the item
+        // is not already in its target file do we scan the whole store — a
+        // move across buckets, or a brand-new item. The full scan used to run
+        // on every save, re-reading and re-parsing every bucket on the main
+        // thread, growing slower with every card ever added.
+        let targetURL = url(for: targetBucket)
+        var targetItems = readItems(at: targetURL)
+        if let index = targetItems.firstIndex(where: { $0.id == item.id }) {
+            targetItems[index] = item
+            writeItems(targetItems, to: targetURL)
+            return [targetBucket]
+        }
+
         var touched: Set<CategoryBucket> = []
 
         if let files = try? allMarkdownFiles() {
@@ -82,14 +100,9 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
             }
         }
 
-        let targetBucket = CategoryBucket(
-            projectFolderName: projectFolderName(for: item.projectID),
-            categoryFolderName: item.category.folderName
-        )
-        var targetItems = readItems(at: url(for: targetBucket))
         targetItems.removeAll { $0.id == item.id }
         targetItems.append(item)
-        writeItems(targetItems, to: url(for: targetBucket))
+        writeItems(targetItems, to: targetURL)
         touched.insert(targetBucket)
 
         return touched
@@ -286,6 +299,9 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
         output += "project: \(frontMatter(item.projectID ?? ""))\n"
         output += "attachments: \(item.attachmentIDs.map(\.uuidString).joined(separator: ","))\n"
         output += "sessions: \(item.linkedSessionIDs.joined(separator: ","))\n"
+        if let boardPosition = item.boardPosition {
+            output += "board-position: \(boardPosition)\n"
+        }
         output += "created: \(Self.formatDate(item.createdAt))\n"
         output += "updated: \(Self.formatDate(item.updatedAt))\n"
         output += "---\n\n"
@@ -333,6 +349,7 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
         let capture = subsection("Original Capture", in: body) ?? ""
         let attachments = csv(values["attachments"] ?? "").compactMap(UUID.init(uuidString:))
         let sessions = csv(values["sessions"] ?? "")
+        let boardPosition = values["board-position"].flatMap(Int.init)
         let created = Self.parseDate(values["created"] ?? "") ?? Date()
         let updated = Self.parseDate(values["updated"] ?? "") ?? created
         let priority = OrchestratorPriority(rawValue: values["priority"] ?? "medium") ?? .medium
@@ -350,6 +367,7 @@ final class OrchestratorMarkdownStore: @unchecked Sendable {
             projectID: project,
             attachmentIDs: attachments,
             linkedSessionIDs: sessions,
+            boardPosition: boardPosition,
             createdAt: created,
             updatedAt: updated
         )

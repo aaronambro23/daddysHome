@@ -17,9 +17,6 @@ struct BoardColumn: View {
     /// Non-nil only in the all-projects scope; see `BoardCard.projectName`.
     let projectName: (OrchestratorWorkItem) -> String?
 
-    @Binding var composeText: String
-    let isComposing: Bool
-
     let onSelect: (OrchestratorWorkItem) -> Void
     let onArchive: (OrchestratorWorkItem) -> Void
     let onDelete: (OrchestratorWorkItem) -> Void
@@ -29,11 +26,7 @@ struct BoardColumn: View {
     let onDragChanged: (OrchestratorWorkItem, CGPoint) -> Void
     let onDragEnded: (OrchestratorWorkItem, CGPoint) -> Void
     let onToggleGroup: (BoardGroupKey) -> Void
-    let onStartCompose: () -> Void
-    let onCommitCompose: () -> Void
-    let onCancelCompose: () -> Void
-
-    @FocusState private var composeFocused: Bool
+    let onAdd: () -> Void
 
     static let width: CGFloat = 244
 
@@ -92,7 +85,7 @@ struct BoardColumn: View {
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
                 .foregroundStyle(status.boardTint.opacity(0.8))
 
-            Button(action: onStartCompose) {
+            Button(action: onAdd) {
                 Image(systemName: "plus")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(status.boardTint.opacity(0.9))
@@ -116,12 +109,10 @@ struct BoardColumn: View {
 
     private var content: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 6) {
-                if isComposing { composer }
-
+            LazyVStack(alignment: .leading, spacing: 6) {
                 if groupByCategory {
                     ForEach(groups, id: \.category) { group in
-                        VStack(alignment: .leading, spacing: 6) {
+                        LazyVStack(alignment: .leading, spacing: 6) {
                             groupHeader(group.category, count: group.count)
                             ForEach(group.items) { card($0, showsCategory: false) }
                         }
@@ -130,7 +121,7 @@ struct BoardColumn: View {
                     ForEach(items) { card($0, showsCategory: true) }
                 }
 
-                if items.isEmpty && !isComposing {
+                if items.isEmpty {
                     Text("drop here")
                         .font(.system(size: 9.5))
                         .foregroundStyle(DaddyTheme.textVeryDim)
@@ -173,17 +164,6 @@ struct BoardColumn: View {
         )
     }
 
-    private var composer: some View {
-        TextField("Title", text: $composeText)
-            .textFieldStyle(.plain)
-            .font(.system(size: 11.5))
-            .focused($composeFocused)
-            .onSubmit(onCommitCompose)
-            .onExitCommand(perform: onCancelCompose)
-            .padding(10)
-            .insetSurface(cornerRadius: 10, selected: true)
-            .onAppear { composeFocused = true }
-    }
 }
 
 /// The category divider inside a column. Its own drop target, so a card can be

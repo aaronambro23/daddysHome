@@ -31,6 +31,17 @@ struct WorkItemFields: View {
 
     @State private var copied = false
 
+    /// Tab order through the form: title → summary → category → status →
+    /// priority → project → save → back to title. Each field hands Tab to the
+    /// next explicitly (`.handled`) rather than trusting the key loop, because
+    /// the loop's order through popover triggers is not the visual order.
+    @FocusState private var summaryFocused: Bool
+    @FocusState private var categoryFocused: Bool
+    @FocusState private var statusFocused: Bool
+    @FocusState private var priorityFocused: Bool
+    @FocusState private var projectFocused: Bool
+    @FocusState private var saveFocused: Bool
+
     init(
         title: Binding<String>,
         summary: Binding<String>,
@@ -71,6 +82,16 @@ struct WorkItemFields: View {
                 .frame(minHeight: 100)
                 .padding(7)
                 .insetSurface(cornerRadius: 10)
+                .focused($summaryFocused)
+                .onKeyPress { press in
+                    guard press.key == .tab else { return .ignored }
+                    if press.modifiers.contains(.shift) {
+                        titleFocus?.wrappedValue = true
+                    } else {
+                        categoryFocused = true
+                    }
+                    return .handled
+                }
 
             FieldRow(
                 label: "CATEGORY",
@@ -87,7 +108,10 @@ struct WorkItemFields: View {
                         pick { category = option }
                     }
                 },
-                selectedIndex: OrchestratorWorkCategory.allCases.firstIndex(of: category)
+                selectedIndex: OrchestratorWorkCategory.allCases.firstIndex(of: category),
+                focus: $categoryFocused,
+                onTabForward: { statusFocused = true },
+                onTabBackward: { summaryFocused = true }
             ) {
                 fieldTrigger(
                     title: category.title,
@@ -113,7 +137,10 @@ struct WorkItemFields: View {
                         pick { status = option }
                     }
                 },
-                selectedIndex: OrchestratorWorkStatus.editableStatuses.firstIndex(of: status)
+                selectedIndex: OrchestratorWorkStatus.editableStatuses.firstIndex(of: status),
+                focus: $statusFocused,
+                onTabForward: { priorityFocused = true },
+                onTabBackward: { categoryFocused = true }
             ) {
                 fieldTrigger(
                     title: status.title,
@@ -139,7 +166,10 @@ struct WorkItemFields: View {
                         pick { priority = option }
                     }
                 },
-                selectedIndex: OrchestratorPriority.allCases.firstIndex(of: priority)
+                selectedIndex: OrchestratorPriority.allCases.firstIndex(of: priority),
+                focus: $priorityFocused,
+                onTabForward: { projectFocused = true },
+                onTabBackward: { statusFocused = true }
             ) {
                 fieldTrigger(
                     title: priority.title,
@@ -171,7 +201,10 @@ struct WorkItemFields: View {
                 },
                 selectedIndex: projectID.isEmpty
                     ? 0
-                    : projects.firstIndex(where: { $0.id == projectID }).map { $0 + 1 }
+                    : projects.firstIndex(where: { $0.id == projectID }).map { $0 + 1 },
+                focus: $projectFocused,
+                onTabForward: { saveFocused = true },
+                onTabBackward: { priorityFocused = true }
             ) {
                 fieldTrigger(
                     title: projects.first { $0.id == projectID }?.name ?? "No project",
@@ -181,6 +214,16 @@ struct WorkItemFields: View {
 
             Button("save work item", action: onSave)
                 .buttonStyle(.inset)
+                .focused($saveFocused)
+                .onKeyPress { press in
+                    guard press.key == .tab else { return .ignored }
+                    if press.modifiers.contains(.shift) {
+                        projectFocused = true
+                    } else {
+                        titleFocus?.wrappedValue = true
+                    }
+                    return .handled
+                }
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -194,6 +237,9 @@ struct WorkItemFields: View {
         let label: String
         let items: [GlassDropdownItem]
         var selectedIndex: Int?
+        var focus: FocusState<Bool>.Binding
+        var onTabForward: () -> Void
+        var onTabBackward: () -> Void
         @ViewBuilder let trigger: () -> Trigger
 
         var body: some View {
@@ -205,6 +251,9 @@ struct WorkItemFields: View {
                     width: 268,
                     chromelessLabel: true,
                     selectedIndex: selectedIndex,
+                    onTabForward: onTabForward,
+                    onTabBackward: onTabBackward,
+                    triggerFocus: focus,
                     label: trigger
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -249,6 +298,19 @@ struct WorkItemFields: View {
         TextField("Title", text: $title)
             .textFieldStyle(.plain)
             .onSubmit(onSave)
+            .onKeyPress { press in
+                guard press.key == .tab else { return .ignored }
+                // The external focus binding is level-triggered: leaving it
+                // true while focus moves on means setting it again later is a
+                // no-op, so clear it on the way out.
+                titleFocus?.wrappedValue = false
+                if press.modifiers.contains(.shift) {
+                    saveFocused = true
+                } else {
+                    summaryFocused = true
+                }
+                return .handled
+            }
             .padding(9)
             .insetSurface(cornerRadius: 10)
     }

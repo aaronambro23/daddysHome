@@ -28,11 +28,3 @@ struct BoardColumnFrameKey: PreferenceKey {
         value.merge(nextValue()) { _, new in new }
     }
 }
-
-/// The card currently in hand.
-struct BoardDragState {
-    let id: UUID
-    let title: String
-    let tint: Color
-    var location: CGPoint
-}

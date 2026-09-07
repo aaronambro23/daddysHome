@@ -425,14 +425,20 @@ extension MockStore {
     /// longer pending — called after a flush (manual or tick-driven), since
     /// those don't go through `noteSyncOutcome` per item.
     func refreshPendingSyncState() {
-        pendingSyncBuckets = syncCoordinator.pendingBuckets
-        recentlyDirtyItemIDs = recentlyDirtyItemIDs.filter { id in
+        let pending = syncCoordinator.pendingBuckets
+        if pendingSyncBuckets != pending {
+            pendingSyncBuckets = pending
+        }
+        let dirty = recentlyDirtyItemIDs.filter { id in
             guard let item = workItem(id) else { return false }
             let bucket = CategoryBucket(
                 projectFolderName: orchestratorMarkdownStore.projectFolderName(for: item.projectID),
                 categoryFolderName: item.category.folderName
             )
-            return pendingSyncBuckets.contains(bucket)
+            return pending.contains(bucket)
+        }
+        if recentlyDirtyItemIDs != dirty {
+            recentlyDirtyItemIDs = dirty
         }
     }
 
@@ -479,9 +485,29 @@ extension MockStore {
         // same-named copy sitting in another folder before writing.
         item.status = status
         item.category = newCategory
+        item.boardPosition = orchestratorWorkItems
+            .filter { $0.id != id && $0.status == status && $0.category == newCategory }
+            .compactMap(\.boardPosition)
+            .max()
+            .map { $0 + 1 } ?? 1
         item.updatedAt = Date()
         replaceWorkItem(item)
         return true
+    }
+
+    /// Board-appear refresh. Local disk only — no Drive walk, no Touch ID.
+    /// `reloadWorkItems()` reconciles against Drive, which hangs the open on
+    /// network; the board opens constantly, while Drive merges at launch, on
+    /// manual sync and on the auto flush.
+    func reloadLocalWorkItems() {
+        let onDisk = orchestratorMarkdownStore.loadWorkItems()
+        guard onDisk != orchestratorWorkItems else { return }
+        orchestratorWorkItems = onDisk
+        if let selected = selectedOrchestratorWorkItemID,
+           !onDisk.contains(where: { $0.id == selected }) {
+            selectedOrchestratorWorkItemID = nil
+        }
+        syncGitPushWatchers()
     }
 
     /// Work items are Markdown on disk, and the Orchestrator's tools are not
@@ -521,10 +547,15 @@ extension MockStore {
         .sorted(by: Self.boardOrder)
     }
 
-    /// Urgent first, then most recently touched. There is no manual ordering
-    /// within a column — that would need a persisted index in the front
-    /// matter, and the board is deliberately minimal for now.
+    /// Existing cards retain their legacy priority/recency order. Once moved,
+    /// a card gets an explicit position after the current destination stack.
     private static func boardOrder(_ a: OrchestratorWorkItem, _ b: OrchestratorWorkItem) -> Bool {
+        switch (a.boardPosition, b.boardPosition) {
+        case let (a?, b?) where a != b: return a < b
+        case (nil, .some): return true
+        case (.some, nil): return false
+        default: break
+        }
         let ra = priorityRank(a.priority)
         let rb = priorityRank(b.priority)
         if ra != rb { return ra < rb }

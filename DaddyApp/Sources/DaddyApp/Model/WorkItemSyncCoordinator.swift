@@ -54,6 +54,7 @@ final class WorkItemSyncCoordinator {
     private static let rootFolderName = "Daddy Kanban"
 
     private let localStore: OrchestratorMarkdownStore
+    private let localQueue = DispatchQueue(label: "daddy.work-items.local", qos: .utility)
     private let oauthClient: GoogleOAuthClient
     private let credentialStore = GoogleDriveCredentialStore()
     private let index = DriveSyncIndex()
@@ -62,7 +63,6 @@ final class WorkItemSyncCoordinator {
     private(set) var driveClient: GoogleDriveClient?
     private var entries: [String: DriveSyncEntry]
     private var pending: Set<CategoryBucket>
-    private var ticksSinceLastFlush = 0
 
     /// A token is on disk, whether or not it has been unlocked this session.
     private var hasStoredCredential: Bool
@@ -256,37 +256,32 @@ final class WorkItemSyncCoordinator {
     // MARK: - Writes
 
     func save(_ item: OrchestratorWorkItem) async {
-        let buckets = localStore.save(item)
-        await syncBuckets(buckets)
+        let localStore = localStore
+        let buckets = await withCheckedContinuation { continuation in
+            localQueue.async {
+                continuation.resume(returning: localStore.save(item))
+            }
+        }
+        enqueueBuckets(buckets)
     }
 
     func delete(_ item: OrchestratorWorkItem) async {
-        guard let bucket = localStore.delete(item) else { return }
-        await syncBuckets([bucket])
-    }
-
-    private func syncBuckets(_ buckets: some Sequence<CategoryBucket>) async {
-        await unlockIfNeeded()
-        guard let driveClient else {
-            for bucket in buckets { enqueuePending(bucket) }
-            return
-        }
-        for bucket in buckets {
-            do {
-                try await syncCategoryBucket(bucket, driveClient: driveClient)
-            } catch {
-                enqueuePending(bucket)
+        let localStore = localStore
+        let bucket = await withCheckedContinuation { continuation in
+            localQueue.async {
+                continuation.resume(returning: localStore.delete(item))
             }
         }
+        guard let bucket else { return }
+        enqueueBuckets([bucket])
     }
 
-    /// Called from `MockStore.tick()` (already running once/sec); throttles
-    /// itself so this only actually attempts a flush every ~30s.
-    func tick() {
-        ticksSinceLastFlush += 1
-        guard ticksSinceLastFlush >= 30 else { return }
-        ticksSinceLastFlush = 0
-        Task { await flushPendingSync() }
+    /// Writes never touch Drive. They used to attempt an immediate Drive
+    /// rewrite on the main actor — Touch ID prompt included — so every card
+    /// create, move and edit stalled the board on network. Buckets queue here
+    /// and go up on the manual "sync now" button or the 2-hour auto flush.
+    private func enqueueBuckets(_ buckets: some Sequence<CategoryBucket>) {
+        for bucket in buckets { enqueuePending(bucket) }
     }
 
     func flushPendingSync() async {
@@ -377,7 +372,7 @@ final class WorkItemSyncCoordinator {
     }
 
     private func enqueuePending(_ bucket: CategoryBucket) {
-        pending.insert(bucket)
+        guard pending.insert(bucket).inserted else { return }
         persistIndex()
     }
 

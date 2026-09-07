@@ -270,11 +270,9 @@ final class MockStore {
         loadDefaults()
 
         seed()
-        // Local first, so the board has something to show instantly; if
-        // Drive is connected, `reloadWorkItems()` reconciles against it a
-        // moment later.
+        // Local Markdown is the runtime source. Drive reconciliation is
+        // explicit through the board's cloud button, never startup work.
         orchestratorWorkItems = orchestratorMarkdownStore.loadWorkItems()
-        reloadWorkItems()
         restoreOrchestratorConversations()
         restoreSessions()
         selectedProjectID = Self.defaultProjectID(in: projects)
@@ -1186,8 +1184,6 @@ final class MockStore {
 
     func tick() {
         tickCount += 1
-        syncCoordinator.tick()
-        refreshPendingSyncState()
 
         if let projectID = selectedProjectID {
             refreshPastChats(for: projectID)

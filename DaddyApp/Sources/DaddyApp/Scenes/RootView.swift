@@ -26,7 +26,9 @@ struct RootView: View {
             // the terminal no longer forces a full-window repaint per chunk,
             // and it is opaque, so its repaints do not drag the aurora and the
             // glass through a recomposite.
-            AuroraBackground()
+            if store.workspace == .fleet {
+                AuroraBackground()
+            }
 
             VStack(spacing: 0) {
                 ZStack(alignment: .trailing) {
@@ -42,11 +44,18 @@ struct RootView: View {
                         FleetView()
 
                         if store.workspace == .board {
-                            workspaceCover { BoardView() }
+                            workspaceCover(showsAurora: false) { BoardView() }
+                                .allowsHitTesting(store.workspace == .board)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
+                                .zIndex(1)
                         } else if store.workspace == .orchestrator {
-                            workspaceCover { OrchestratorView() }
+                            workspaceCover(showsAurora: true) { OrchestratorView() }
+                                .allowsHitTesting(store.workspace == .orchestrator)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
+                                .zIndex(1)
                         }
                     }
+                        .animation(.smooth(duration: 0.3), value: store.workspace)
                         .padding(.horizontal, 18)
                         .padding(.vertical, 18)
 
@@ -209,15 +218,19 @@ struct RootView: View {
     /// Opaque cover so the live terminals stay laid out underneath at a real
     /// size. Instant, no transition — a fading `if` left an invisible view
     /// eating clicks after you came back.
-    private func workspaceCover<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+    private func workspaceCover<Content: View>(
+        showsAurora: Bool,
+        @ViewBuilder _ content: () -> Content
+    ) -> some View {
         ZStack {
             DaddyTheme.focusSurface
-            AuroraBackground()
+            if showsAurora {
+                AuroraBackground()
+            }
             content()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
-        .transaction { $0.animation = nil }
     }
 
     /// ⌘K has to live here, not on the titlebar button and not in `FleetView`.

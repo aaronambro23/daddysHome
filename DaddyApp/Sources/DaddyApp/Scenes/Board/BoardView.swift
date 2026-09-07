@@ -15,22 +15,22 @@ struct BoardView: View {
     @State private var categoryFilter: OrchestratorWorkCategory?
     @State private var showArchived = false
 
-    @State private var composingColumn: OrchestratorWorkStatus?
     /// The card dropped into DISPATCHED, waiting on an agent. The move is not
     /// committed until one is picked — see `BoardDispatchPicker`.
     @State private var pendingDispatch: OrchestratorWorkItem?
-    @State private var composeText = ""
     @State private var collapsedGroups: Set<BoardGroupKey> = []
-    @State private var dragState: BoardDragState?
+    @State private var draggingID: UUID?
+    /// The column under the pointer, updated only when it actually changes.
+    /// The cursor location moves every few pixels and the columns must not
+    /// rebuild for each one — only the floating card follows the pointer.
+    @State private var dropTarget: OrchestratorWorkStatus?
     @State private var columnFrames: [OrchestratorWorkStatus: CGRect] = [:]
     @State private var keyboardMonitor: Any?
 
-    @State private var editorTitle = ""
-    @State private var editorSummary = ""
-    @State private var editorCategory: OrchestratorWorkCategory = .other
-    @State private var editorStatus: OrchestratorWorkStatus = .inbox
-    @State private var editorPriority: OrchestratorPriority = .medium
-    @State private var editorProjectID = ""
+    @FocusState private var editorTitleFocused: Bool
+    /// The item the last plus-button press created. Closed with an empty title
+    /// means the add was abandoned, so it is deleted rather than left behind.
+    @State private var justCreatedID: UUID?
 
     private var selectedItem: OrchestratorWorkItem? {
         guard let id = store.selectedOrchestratorWorkItemID else { return nil }
@@ -54,15 +54,10 @@ struct BoardView: View {
             .overlay { dispatchOverlay }
             .padding(18)
         .onAppear {
-            // Cheap, and the alternative is a board that quietly lies about
-            // what is on disk after an agent edited a work item.
-            store.reloadWorkItems()
             syncScopeFromProject()
-            syncEditor()
             installKeyboardMonitor()
         }
         .onDisappear { removeKeyboardMonitor() }
-        .onChange(of: store.selectedOrchestratorWorkItemID) { _, _ in syncEditor() }
         .onChange(of: store.selectedProjectID) { _, _ in syncScopeFromProject() }
     }
 
@@ -73,7 +68,6 @@ struct BoardView: View {
             header
             columnsRow
         }
-        .glassPanel()
     }
 
     // No horizontal `ScrollView` around the columns. A vertical scroll view
@@ -82,28 +76,27 @@ struct BoardView: View {
     private var columnsRow: some View {
         HStack(alignment: .top, spacing: 12) {
                 let target = dropTarget
+                let selectedID = store.selectedOrchestratorWorkItemID
+                let visibleItems = items
                 ForEach(columns, id: \.self) { status in
+                    let columnItems = visibleItems.filter { $0.status.boardColumn == status }
                     BoardColumn(
                         status: status,
-                        items: items.filter { $0.status.boardColumn == status },
-                        selectedID: store.selectedOrchestratorWorkItemID,
+                        items: columnItems,
+                        selectedID: columnItems.contains { $0.id == selectedID } ? selectedID : nil,
                         groupByCategory: categoryFilter == nil,
                         collapsed: collapsedGroups,
                         projectName: projectName(for:),
-                        composeText: $composeText,
-                        isComposing: composingColumn == status,
                         onSelect: { select($0) },
                         onArchive: { archive($0) },
                         onDelete: { AppActionDispatcher(store: store).perform(.deleteWorkItem(id: $0.id)) },
                         onSendToOrchestrator: { sendToOrchestrator($0) },
-                        draggingID: dragState?.id,
+                        draggingID: draggingID,
                         isDropTarget: target == status,
                         onDragChanged: dragChanged,
                         onDragEnded: dragEnded,
                         onToggleGroup: toggleGroup,
-                        onStartCompose: { startCompose(in: status) },
-                        onCommitCompose: { commitCompose(in: status) },
-                        onCancelCompose: cancelCompose
+                        onAdd: { addItem(in: status) }
                     )
                 }
         }
@@ -115,41 +108,6 @@ struct BoardView: View {
             // the board, and the board is glass over aurora — skip no-ops.
             if new != columnFrames { columnFrames = new }
         }
-        .overlay(alignment: .topLeading) { floatingCard }
-    }
-
-    /// The card that follows the cursor. Drawn over the columns rather than
-    /// moving the real one, so the column it came from keeps its layout and
-    /// nothing reflows underneath the pointer mid-drag.
-    @ViewBuilder
-    private var floatingCard: some View {
-        if let dragState {
-            Text(dragState.title)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(DaddyTheme.textPrimary)
-                .lineLimit(2)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .frame(width: 190, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.black.opacity(0.82))
-                )
-                .overlay(alignment: .leading) {
-                    Rectangle().fill(dragState.tint).frame(width: 3)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
-                .position(dragState.location)
-                .transaction { $0.animation = nil }
-                .allowsHitTesting(false)
-        }
-    }
-
-    /// The column under the pointer right now, if any.
-    private var dropTarget: OrchestratorWorkStatus? {
-        guard let dragState else { return nil }
-        return columnFrames.first { $0.value.contains(dragState.location) }?.key
     }
 
     private func dragChanged(_ item: OrchestratorWorkItem, to point: CGPoint) {
@@ -158,21 +116,11 @@ struct BoardView: View {
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            if dragState?.id == item.id {
-                // Every location change repaints the board, and the board is glass
-                // over an animated backdrop — the most expensive thing to repaint
-                // in the app. A pixel of pointer travel does not deserve one.
-                guard let current = dragState?.location,
-                      hypot(point.x - current.x, point.y - current.y) > 3 else { return }
-                dragState?.location = point
-            } else {
-                dragState = BoardDragState(
-                    id: item.id,
-                    title: item.title,
-                    tint: item.category.tint,
-                    location: point
-                )
+            if draggingID != item.id {
+                draggingID = item.id
             }
+            let target = columnFrames.first { $0.value.contains(point) }?.key
+            if target != dropTarget { dropTarget = target }
         }
     }
 
@@ -183,7 +131,8 @@ struct BoardView: View {
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            dragState = nil
+            draggingID = nil
+            dropTarget = nil
             guard let target = columnFrames.first(where: { $0.value.contains(point) })?.key,
                   target != item.status.boardColumn else { return }
 
@@ -365,80 +314,21 @@ struct BoardView: View {
     @ViewBuilder
     private var detailOverlay: some View {
         ZStack(alignment: .trailing) {
-            if store.selectedOrchestratorWorkItemID != nil {
-                detailPane
-                    .frame(width: 340)
-                    .frame(maxHeight: .infinity)
-                    .padding(.vertical, 10)
-                    .padding(.trailing, 10)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            if let item = selectedItem {
+                BoardDetailPane(
+                    item: item,
+                    titleFocus: $editorTitleFocused,
+                    onClose: closeDetail
+                )
+                .frame(width: 340)
+                .frame(maxHeight: .infinity)
+                .padding(.vertical, 10)
+                .padding(.trailing, 10)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
         .frame(maxHeight: .infinity)
         .animation(.easeOut(duration: 0.2), value: store.selectedOrchestratorWorkItemID != nil)
-    }
-
-    private var detailPane: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("WORK ITEM")
-                    .font(.system(size: 10, weight: .bold))
-                    .tracking(0.8)
-                    .foregroundStyle(DaddyTheme.textSecondary)
-                Spacer()
-                Button(action: closeDetail) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(DaddyTheme.textMuted)
-                        .frame(width: 20, height: 20)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 15)
-            .overlay(alignment: .bottom) { GlassHairline() }
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    WorkItemFields(
-                        title: $editorTitle,
-                        summary: $editorSummary,
-                        category: $editorCategory,
-                        status: $editorStatus,
-                        priority: $editorPriority,
-                        projectID: $editorProjectID,
-                        projects: store.rootProjects,
-                        onSave: saveEditor
-                    )
-
-                    GlassHairline()
-
-                    HStack(spacing: 7) {
-                        if let item = selectedItem {
-                            WorkItemDispatchMenu(item: item, onWillDispatch: saveEditor)
-                        }
-
-                        Button("delete") {
-                            guard let id = store.selectedOrchestratorWorkItemID else { return }
-                            AppActionDispatcher(store: store).perform(.deleteWorkItem(id: id))
-                        }
-                        .buttonStyle(.inset(DaddyTheme.failure))
-                    }
-
-                    if let item = selectedItem, !item.rawCapture.isEmpty, item.rawCapture != item.summary {
-                        Text("ORIGINAL CAPTURE")
-                            .workItemFieldLabel()
-                        Text(item.rawCapture)
-                            .font(.system(size: 10))
-                            .foregroundStyle(DaddyTheme.textMuted)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .padding(16)
-            }
-        }
-        .glassPanel()
     }
 
     // MARK: - Actions
@@ -463,12 +353,6 @@ struct BoardView: View {
                 return nil
             }
 
-            // Typing a new card's title owns Escape first — it cancels the
-            // compose rather than closing the whole board out from under you.
-            if composingColumn != nil {
-                cancelCompose()
-                return nil
-            }
             if store.selectedOrchestratorWorkItemID != nil {
                 closeDetail()
                 return nil
@@ -486,10 +370,19 @@ struct BoardView: View {
     }
 
     private func select(_ item: OrchestratorWorkItem) {
+        justCreatedID = nil
         store.selectedOrchestratorWorkItemID = item.id
     }
 
     private func closeDetail() {
+        // An add abandoned before anything was typed leaves no card behind.
+        if let id = justCreatedID,
+           let item = store.workItem(id),
+           item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            AppActionDispatcher(store: store).perform(.deleteWorkItem(id: id))
+        }
+        justCreatedID = nil
+        editorTitleFocused = false
         store.selectedOrchestratorWorkItemID = nil
     }
 
@@ -533,39 +426,27 @@ struct BoardView: View {
         }
     }
 
-    private func startCompose(in status: OrchestratorWorkStatus) {
-        composeText = ""
-        composingColumn = status
-    }
-
-    private func cancelCompose() {
-        composingColumn = nil
-        composeText = ""
-    }
-
-    private func commitCompose(in status: OrchestratorWorkStatus) {
-        let title = composeText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty else { return cancelCompose() }
-
-        AppActionDispatcher(store: store).perform(
-            .createWorkItem(
-                OrchestratorWorkItem(
-                    title: title,
-                    summary: "",
-                    rawCapture: title,
-                    category: categoryFilter ?? .other,
-                    status: status,
-                    projectID: composeProjectID
-                )
-            )
+    /// The plus button creates the item straight away and opens it in the
+    /// detail pane with the title focused, so naming it is one keystroke. The
+    /// title starts empty — closing before typing anything deletes the item.
+    private func addItem(in status: OrchestratorWorkStatus) {
+        let item = OrchestratorWorkItem(
+            title: "",
+            summary: "",
+            rawCapture: "",
+            category: categoryFilter ?? .other,
+            status: status,
+            projectID: addProjectID
         )
-        cancelCompose()
+        AppActionDispatcher(store: store).perform(.createWorkItem(item))
+        justCreatedID = item.id
+        store.selectedOrchestratorWorkItemID = item.id
+        // The pane animates in; focusing on the next runloop lands once it
+        // exists rather than racing its appearance.
+        DispatchQueue.main.async { editorTitleFocused = true }
     }
 
-    /// A card typed into a scoped board belongs to that project. Typed into
-    /// the all-projects board it inherits whatever Fleet has selected, and
-    /// typed into Unassigned it deliberately stays unassigned.
-    private var composeProjectID: String? {
+    private var addProjectID: String? {
         switch scope {
         case .all: return store.selectedProjectID
         case .unassigned: return nil
@@ -584,26 +465,124 @@ struct BoardView: View {
         store.selectedOrchestratorWorkItemID = item.id
         store.workspace = .orchestrator
     }
+}
 
-    private func syncEditor() {
-        guard let item = selectedItem else { return }
-        editorTitle = item.title
-        editorSummary = item.summary
-        editorCategory = item.category
-        editorStatus = item.status.boardColumn
-        editorPriority = item.priority
-        editorProjectID = item.projectID ?? ""
+/// The detail pane as its own view, so typing in it does not rebuild the
+/// board. The editor state used to live in `BoardView`, which meant every
+/// keystroke re-evaluated the columns, the cards and the header — and
+/// repainted the glass over the animating aurora. Now keystrokes invalidate
+/// only this pane. Selection switches re-seed via `item.id`; saves keep the
+/// state (seeded from the saved values, which is what is on screen).
+private struct BoardDetailPane: View {
+    @Environment(MockStore.self) private var store
+
+    let item: OrchestratorWorkItem
+    let titleFocus: FocusState<Bool>.Binding?
+    let onClose: () -> Void
+
+    @State private var title: String
+    @State private var summary: String
+    @State private var category: OrchestratorWorkCategory
+    @State private var status: OrchestratorWorkStatus
+    @State private var priority: OrchestratorPriority
+    @State private var projectID: String
+
+    init(
+        item: OrchestratorWorkItem,
+        titleFocus: FocusState<Bool>.Binding? = nil,
+        onClose: @escaping () -> Void
+    ) {
+        self.item = item
+        self.titleFocus = titleFocus
+        self.onClose = onClose
+        _title = State(initialValue: item.title)
+        _summary = State(initialValue: item.summary)
+        _category = State(initialValue: item.category)
+        _status = State(initialValue: item.status.boardColumn)
+        _priority = State(initialValue: item.priority)
+        _projectID = State(initialValue: item.projectID ?? "")
     }
 
-    private func saveEditor() {
-        guard var item = selectedItem else { return }
-        item.title = editorTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        item.summary = editorSummary
-        item.category = editorCategory
-        item.status = editorStatus
-        item.priority = editorPriority
-        item.projectID = editorProjectID.isEmpty ? nil : editorProjectID
-        item.updatedAt = Date()
-        AppActionDispatcher(store: store).perform(.replaceWorkItem(item))
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("WORK ITEM")
+                    .font(.system(size: 10, weight: .bold))
+                    .tracking(0.8)
+                    .foregroundStyle(DaddyTheme.textSecondary)
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(DaddyTheme.textMuted)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 15)
+            .overlay(alignment: .bottom) { GlassHairline() }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    WorkItemFields(
+                        title: $title,
+                        summary: $summary,
+                        category: $category,
+                        status: $status,
+                        priority: $priority,
+                        projectID: $projectID,
+                        projects: store.rootProjects,
+                        titleFocus: titleFocus,
+                        onSave: save
+                    )
+
+                    GlassHairline()
+
+                    HStack(spacing: 7) {
+                        WorkItemDispatchMenu(item: item, onWillDispatch: save)
+
+                        Button("delete") {
+                            AppActionDispatcher(store: store).perform(.deleteWorkItem(id: item.id))
+                        }
+                        .buttonStyle(.inset(DaddyTheme.failure))
+                    }
+
+                    if !item.rawCapture.isEmpty, item.rawCapture != item.summary {
+                        Text("ORIGINAL CAPTURE")
+                            .workItemFieldLabel()
+                        Text(item.rawCapture)
+                            .font(.system(size: 10))
+                            .foregroundStyle(DaddyTheme.textMuted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(16)
+            }
+        }
+        .glassPanel()
+        .onChange(of: item.id) { _, _ in seed(from: item) }
+    }
+
+    private func seed(from item: OrchestratorWorkItem) {
+        title = item.title
+        summary = item.summary
+        category = item.category
+        status = item.status.boardColumn
+        priority = item.priority
+        projectID = item.projectID ?? ""
+    }
+
+    private func save() {
+        guard var fresh = store.workItem(item.id) else { return }
+        fresh.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        fresh.summary = summary
+        fresh.category = category
+        fresh.status = status
+        fresh.priority = priority
+        fresh.projectID = projectID.isEmpty ? nil : projectID
+        fresh.updatedAt = Date()
+        AppActionDispatcher(store: store).perform(.replaceWorkItem(fresh))
     }
 }

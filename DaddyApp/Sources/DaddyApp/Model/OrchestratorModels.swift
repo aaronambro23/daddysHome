@@ -223,6 +223,9 @@ struct OrchestratorWorkItem: Identifiable, Codable, Hashable {
     var projectID: String?
     var attachmentIDs: [UUID]
     var linkedSessionIDs: [String]
+    /// Stable position within a board status/category stack. Older items
+    /// without one retain their legacy ordering until they are moved.
+    var boardPosition: Int?
     var createdAt: Date
     var updatedAt: Date
 
@@ -237,6 +240,7 @@ struct OrchestratorWorkItem: Identifiable, Codable, Hashable {
         projectID: String? = nil,
         attachmentIDs: [UUID] = [],
         linkedSessionIDs: [String] = [],
+        boardPosition: Int? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -250,6 +254,7 @@ struct OrchestratorWorkItem: Identifiable, Codable, Hashable {
         self.projectID = projectID
         self.attachmentIDs = attachmentIDs
         self.linkedSessionIDs = linkedSessionIDs
+        self.boardPosition = boardPosition
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
